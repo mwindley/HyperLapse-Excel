@@ -1,1 +1,56 @@
-secrets.h
+# ============================================================
+# HyperLapse-Excel .gitignore
+# ============================================================
+
+# --- Excel / Office temp & lock files ----------------------------------
+# Excel creates "owner files" (~$Foo.xlsm) while a workbook is open;
+# Git will see them as untracked. Ignore them everywhere.
+~$*.xlsm
+~$*.xlsx
+~$*.xls
+~$*.docx
+~$*.doc
+
+# Excel autorecover / backup files
+*.xlk
+*.xlb
+
+# Office automation / cache scratch
+*.tmp
+*.~tmp
+
+# --- OS junk -----------------------------------------------------------
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# macOS (in case the repo is ever opened there via OneDrive)
+.DS_Store
+._*
+
+# --- Editor / IDE noise -----------------------------------------------
+# VS Code
+.vscode/
+
+# JetBrains
+.idea/
+
+# Notepad++ backups
+*.bak
+
+# Vim / emacs swap files
+*.swp
+*.swo
+*~
+
+# --- Python (luminance.py is in this project's orbit) ------------------
+__pycache__/
+*.pyc
+*.pyo
+
+# --- Local-only stuff that shouldn't be shared ------------------------
+# Anything you keep next to the workbook for your own use only.
+# Drop files into a /local folder and they'll stay off GitHub.
+/local/
