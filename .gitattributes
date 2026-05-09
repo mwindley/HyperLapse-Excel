@@ -1,14 +1,22 @@
-# HyperLapse-Excel — Git line ending configuration
-# Prevents LF/CRLF warnings on Windows
+# Git attributes for HyperLapse-Excel
+#
+# VBA exports from Excel use CRLF line endings natively. Force Git to
+# preserve them on commit and checkout, regardless of the user's
+# autocrlf setting. This silences the "LF will be replaced by CRLF"
+# warnings on commit and removes any round-trip risk.
+*.bas    text eol=crlf
+*.cls    text eol=crlf
+*.frm    text eol=crlf
 
-# Default — auto detect
-* text=auto
+# Treat the Excel workbook as binary so Git doesn't try to diff or
+# line-end-convert it (it would corrupt the file otherwise).
+*.xlsm   binary
+*.xlsx   binary
+*.xls    binary
 
-# VBA modules — Windows CRLF
-*.bas text eol=crlf
+# Python utility scripts — standard LF, the cross-platform default.
+*.py     text eol=lf
 
-# Python scripts — LF
-*.py text eol=lf
-
-# Markdown — auto
-*.md text eol=crlf
+# Markdown / docs — LF.
+*.md     text eol=lf
+*.txt    text eol=lf
