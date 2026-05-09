@@ -19,8 +19,6 @@ Public Const ISO_STEPS As String = "100,125,160,200,250,320,400,500,640,800,1000
 Private Const HTTP_OK          As Integer = 200
 Private Const HTTP_BAD_REQUEST As Integer = 400
 Private Const HTTP_DEVICE_BUSY As Integer = 503
-
-
 Public Function CAMERA_IP() As String
     CAMERA_IP = Sheets("Settings").Range("dataCameraIP").value
 End Function
@@ -28,8 +26,6 @@ End Function
 Public Function ARDUINO_IP() As String
     ARDUINO_IP = Sheets("Settings").Range("dataArduinoIP").value
 End Function
-
-
 
 
 

@@ -95,7 +95,7 @@ Public Function GetSunGimbalAngles(ByVal atTime As Date, _
     Dim az As Double, alt As Double
     GetSunPosition atTime, az, alt
     
-    gimbalYaw   = AzimuthToGimbalYaw(az, cartHeading)
+    gimbalYaw = AzimuthToGimbalYaw(az, cartHeading)
     gimbalPitch = alt   ' pitch = altitude above horizon
     
     GetSunGimbalAngles = (alt > -5)  ' True if sun within 5° of horizon
@@ -117,7 +117,7 @@ Public Function GetGCGimbalAngles(ByVal atTime As Date, _
     Dim az As Double, alt As Double
     GetGCPosition atTime, az, alt
     
-    gimbalYaw   = AzimuthToGimbalYaw(az, cartHeading)
+    gimbalYaw = AzimuthToGimbalYaw(az, cartHeading)
     gimbalPitch = alt
     
     GetGCGimbalAngles = (alt > 0)  ' True if above horizon
@@ -142,15 +142,15 @@ Public Sub GenerateGCTable()
     On Error GoTo 0
     
     ws.Cells.Clear
-    ws.Cells(1, 1).Value = "Time"
-    ws.Cells(1, 2).Value = "GC Az (°)"
-    ws.Cells(1, 3).Value = "GC Alt (°)"
-    ws.Cells(1, 4).Value = "Sun Az (°)"
-    ws.Cells(1, 5).Value = "Sun Alt (°)"
-    ws.Cells(1, 6).Value = "GC above horizon"
+    ws.Cells(1, 1).value = "Time"
+    ws.Cells(1, 2).value = "GC Az (°)"
+    ws.Cells(1, 3).value = "GC Alt (°)"
+    ws.Cells(1, 4).value = "Sun Az (°)"
+    ws.Cells(1, 5).value = "Sun Alt (°)"
+    ws.Cells(1, 6).value = "GC above horizon"
     
     Dim cartHeading As Double
-    cartHeading = Sheets("Settings").Range("dataCartHeading").Value
+    cartHeading = Sheets("Settings").Range("dataCartHeading").value
     
     ' Table from 4pm today to 8am tomorrow, every 15 minutes
     Dim startTime As Date
@@ -167,17 +167,17 @@ Public Sub GenerateGCTable()
         GetGCPosition t, gcAz, gcAlt
         GetSunPosition t, sunAz, sunAlt
         
-        ws.Cells(row, 1).Value = Format(t, "HH:nn")
-        ws.Cells(row, 2).Value = Round(gcAz, 1)
-        ws.Cells(row, 3).Value = Round(gcAlt, 1)
-        ws.Cells(row, 4).Value = Round(sunAz, 1)
-        ws.Cells(row, 5).Value = Round(sunAlt, 1)
-        ws.Cells(row, 6).Value = IIf(gcAlt > 0, "YES", "no")
+        ws.Cells(row, 1).value = Format(t, "HH:nn")
+        ws.Cells(row, 2).value = Round(gcAz, 1)
+        ws.Cells(row, 3).value = Round(gcAlt, 1)
+        ws.Cells(row, 4).value = Round(sunAz, 1)
+        ws.Cells(row, 5).value = Round(sunAlt, 1)
+        ws.Cells(row, 6).value = IIf(gcAlt > 0, "YES", "no")
         row = row + 1
     Next t
     
     ' Format
-    ws.Columns(1).NumberFormat = "HH:nn"
+    ws.Columns(1).NumberFormat = "hh:mm"
     ws.Columns("A:F").AutoFit
     
     LogEvent "ASTRO", "GC table generated — " & (row - 2) & " rows"
@@ -197,9 +197,9 @@ Private Sub GetSunPosition(ByVal atTime As Date, _
     Dim lat As Double
     Dim lng As Double
     Dim utcOffset As Double
-    lat       = Sheets("Settings").Range("dataLatitude").Value
-    lng       = Sheets("Settings").Range("dataLongitude").Value
-    utcOffset = Sheets("Settings").Range("dataUTCOffset").Value
+    lat = Sheets("Settings").Range("dataLatitude").value
+    lng = Sheets("Settings").Range("dataLongitude").value
+    utcOffset = Sheets("Settings").Range("dataUTCOffset").value
     
     ' Convert local time to UTC
     Dim utcTime As Date
@@ -215,31 +215,31 @@ Private Sub GetSunPosition(ByVal atTime As Date, _
     
     ' Mean longitude (degrees)
     Dim L As Double
-    L = NormalizeDeg(280.46# + 0.9856474# * n)
+    L = NormalizeDeg(280.46 + 0.9856474 * n)
     
     ' Mean anomaly (degrees)
     Dim g As Double
-    g = NormalizeDeg(357.528# + 0.9856003# * n)
+    g = NormalizeDeg(357.528 + 0.9856003 * n)
     
     ' Ecliptic longitude (degrees)
     Dim lambda As Double
-    lambda = NormalizeDeg(L + 1.915# * Sin(g * DEG2RAD) + 0.02# * Sin(2 * g * DEG2RAD))
+    lambda = NormalizeDeg(L + 1.915 * Sin(g * DEG2RAD) + 0.02 * Sin(2 * g * DEG2RAD))
     
     ' Obliquity of ecliptic
     Dim epsilon As Double
-    epsilon = 23.439# - 0.0000004# * n
+    epsilon = 23.439 - 0.0000004 * n
     
     ' Right ascension and declination
     Dim ra As Double     ' degrees
     Dim dec As Double    ' degrees
-    ra  = RAD2DEG * Atn2(Cos(epsilon * DEG2RAD) * Sin(lambda * DEG2RAD), _
+    ra = RAD2DEG * Atn2(Cos(epsilon * DEG2RAD) * Sin(lambda * DEG2RAD), _
                          Cos(lambda * DEG2RAD))
-    ra  = NormalizeDeg(ra)
+    ra = NormalizeDeg(ra)
     dec = RAD2DEG * Asin(Sin(epsilon * DEG2RAD) * Sin(lambda * DEG2RAD))
     
     ' Greenwich Mean Sidereal Time (degrees)
     Dim gmst As Double
-    gmst = NormalizeDeg(280.46061837# + 360.98564736629# * n)
+    gmst = NormalizeDeg(280.46061837 + 360.98564736629 * n)
     
     ' Local Sidereal Time
     Dim lst As Double
@@ -266,9 +266,9 @@ Private Sub GetGCPosition(ByVal atTime As Date, _
     Dim lat As Double
     Dim lng As Double
     Dim utcOffset As Double
-    lat       = Sheets("Settings").Range("dataLatitude").Value
-    lng       = Sheets("Settings").Range("dataLongitude").Value
-    utcOffset = Sheets("Settings").Range("dataUTCOffset").Value
+    lat = Sheets("Settings").Range("dataLatitude").value
+    lng = Sheets("Settings").Range("dataLongitude").value
+    utcOffset = Sheets("Settings").Range("dataUTCOffset").value
     
     ' Convert local time to UTC
     Dim utcTime As Date
@@ -284,7 +284,7 @@ Private Sub GetGCPosition(ByVal atTime As Date, _
     
     ' Greenwich Mean Sidereal Time (degrees)
     Dim gmst As Double
-    gmst = NormalizeDeg(280.46061837# + 360.98564736629# * n)
+    gmst = NormalizeDeg(280.46061837 + 360.98564736629 * n)
     
     ' Local Sidereal Time
     Dim lst As Double
@@ -312,7 +312,7 @@ Private Sub RADecToAltAz(ByVal ha As Double, _
     Dim haRad  As Double
     Dim decRad As Double
     Dim latRad As Double
-    haRad  = ha  * DEG2RAD
+    haRad = ha * DEG2RAD
     decRad = dec * DEG2RAD
     latRad = lat * DEG2RAD
     
@@ -336,27 +336,27 @@ End Sub
 
 ' Convert Excel date/time to Julian Day Number
 Private Function DateToJulian(ByVal dt As Date) As Double
-    Dim Y As Integer, M As Integer, D As Integer
+    Dim y As Integer, M As Integer, D As Integer
     Dim hr As Double, mn As Double, sc As Double
-    Y  = Year(dt)
-    M  = Month(dt)
-    D  = Day(dt)
+    y = Year(dt)
+    M = Month(dt)
+    D = Day(dt)
     hr = Hour(dt)
     mn = Minute(dt)
     sc = Second(dt)
     
     If M <= 2 Then
-        Y = Y - 1
+        y = y - 1
         M = M + 12
     End If
     
     Dim A As Long, B As Long
-    A = Int(Y / 100)
+    A = Int(y / 100)
     B = 2 - A + Int(A / 4)
     
-    DateToJulian = Int(365.25# * (Y + 4716)) + _
-                   Int(30.6001# * (M + 1)) + _
-                   D + B - 1524.5# + _
+    DateToJulian = Int(365.25 * (y + 4716)) + _
+                   Int(30.6001 * (M + 1)) + _
+                   D + B - 1524.5 + _
                    (hr + mn / 60# + sc / 3600#) / 24#
 End Function
 

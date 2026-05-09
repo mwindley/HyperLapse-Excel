@@ -8,15 +8,15 @@ Attribute VB_Name = "Gimbal"
 Option Explicit
 
 ' ── Gimbal limits (RS4 Pro confirmed) ────────────────────────
-Public Const GIMBAL_YAW_MIN     As Double = -180.0
-Public Const GIMBAL_YAW_MAX     As Double = 180.0
-Public Const GIMBAL_PITCH_MIN   As Double = -56.0
-Public Const GIMBAL_PITCH_MAX   As Double = 146.0
-Public Const GIMBAL_ROLL_MIN    As Double = -30.0
-Public Const GIMBAL_ROLL_MAX    As Double = 30.0
+Public Const GIMBAL_YAW_MIN     As Double = -180#
+Public Const GIMBAL_YAW_MAX     As Double = 180#
+Public Const GIMBAL_PITCH_MIN   As Double = -56#
+Public Const GIMBAL_PITCH_MAX   As Double = 146#
+Public Const GIMBAL_ROLL_MIN    As Double = -30#
+Public Const GIMBAL_ROLL_MAX    As Double = 30#
 
 ' Default move time in seconds
-Public Const GIMBAL_DEFAULT_TIME As Double = 2.0
+Public Const GIMBAL_DEFAULT_TIME As Double = 2#
 
 ' ============================================================
 ' Core gimbal movement
@@ -33,8 +33,8 @@ Public Function GimbalPosition(ByVal myYaw As Double, _
     On Error GoTo ErrHandler
     
     ' Clamp to RS4 Pro limits
-    myYaw   = ClampDouble(myYaw,   GIMBAL_YAW_MIN,   GIMBAL_YAW_MAX)
-    myRoll  = ClampDouble(myRoll,  GIMBAL_ROLL_MIN,  GIMBAL_ROLL_MAX)
+    myYaw = ClampDouble(myYaw, GIMBAL_YAW_MIN, GIMBAL_YAW_MAX)
+    myRoll = ClampDouble(myRoll, GIMBAL_ROLL_MIN, GIMBAL_ROLL_MAX)
     myPitch = ClampDouble(myPitch, GIMBAL_PITCH_MIN, GIMBAL_PITCH_MAX)
     
     Dim url As String
@@ -52,9 +52,9 @@ Public Function GimbalPosition(ByVal myYaw As Double, _
     
     If GimbalPosition Then
         ' Update named ranges
-        Range("dataGimbalTargetYaw").Value   = myYaw
-        Range("dataGimbalTargetPitch").Value = myPitch
-        Range("dataGimbalTargetRoll").Value  = myRoll
+        Range("dataGimbalTargetYaw").value = myYaw
+        Range("dataGimbalTargetPitch").value = myPitch
+        Range("dataGimbalTargetRoll").value = myRoll
         LogEvent "GIMBAL", "Move to Yaw=" & myYaw & " Pitch=" & myPitch & _
                            " Roll=" & myRoll & " Time=" & myTime & "s"
     Else
@@ -77,9 +77,9 @@ Public Function GimbalHome() As Boolean
     http.Send
     GimbalHome = (http.Status = 200)
     If GimbalHome Then
-        Range("dataGimbalTargetYaw").Value   = 0
-        Range("dataGimbalTargetPitch").Value = 0
-        Range("dataGimbalTargetRoll").Value  = 0
+        Range("dataGimbalTargetYaw").value = 0
+        Range("dataGimbalTargetPitch").value = 0
+        Range("dataGimbalTargetRoll").value = 0
         LogEvent "GIMBAL", "Home (0,0,0)"
     End If
     Set http = Nothing
@@ -121,16 +121,16 @@ Public Function GetGimbalStatus() As Boolean
         Dim fields() As String
         fields = Split(http.ResponseText, ",")
         If UBound(fields) >= 2 Then
-            Range("dataGimbalYaw").Value   = CDbl(Trim(fields(0)))
-            Range("dataGimbalRoll").Value  = CDbl(Trim(fields(1)))
-            Range("dataGimbalPitch").Value = CDbl(Trim(fields(2)))
+            Range("dataGimbalYaw").value = CDbl(Trim(fields(0)))
+            Range("dataGimbalRoll").value = CDbl(Trim(fields(1)))
+            Range("dataGimbalPitch").value = CDbl(Trim(fields(2)))
         End If
         ' Update cart status fields if present
         If UBound(fields) >= 7 Then
-            Range("dataCartSteering").Value  = CDbl(Trim(fields(4)))
-            Range("dataCartVoltage").Value   = CDbl(Trim(fields(5)))
-            Range("dataCartSpeed").Value     = CDbl(Trim(fields(6)))
-            Range("dataCartOverdrive").Value = CDbl(Trim(fields(7)))
+            Range("dataCartSteering").value = CDbl(Trim(fields(4)))
+            Range("dataCartVoltage").value = CDbl(Trim(fields(5)))
+            Range("dataCartSpeed").value = CDbl(Trim(fields(6)))
+            Range("dataCartOverdrive").value = CDbl(Trim(fields(7)))
         End If
         GetGimbalStatus = True
     Else
@@ -176,7 +176,7 @@ Public Sub GetGimbalLog()
     Dim ws As Worksheet
     Set ws = Sheets("GimbalLog")
     Dim nextRow As Long
-    nextRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row + 1
+    nextRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).row + 1
     
     Dim lines() As String
     lines = Split(response, Chr(10))
@@ -188,9 +188,9 @@ Public Sub GetGimbalLog()
             Dim fields() As String
             fields = Split(line, ",")
             If UBound(fields) >= 2 Then
-                ws.Cells(nextRow, 1).Value = fields(0)  ' HH:MM:SS
-                ws.Cells(nextRow, 2).Value = CDbl(fields(1))  ' Yaw
-                ws.Cells(nextRow, 3).Value = CDbl(fields(2))  ' Pitch
+                ws.Cells(nextRow, 1).value = fields(0)  ' HH:MM:SS
+                ws.Cells(nextRow, 2).value = CDbl(fields(1))  ' Yaw
+                ws.Cells(nextRow, 3).value = CDbl(fields(2))  ' Pitch
                 nextRow = nextRow + 1
             End If
         End If
@@ -211,7 +211,7 @@ End Sub
 Public Sub GimbalMoveAndWait(ByVal myYaw As Double, _
                               ByVal myPitch As Double, _
                               Optional ByVal myTime As Double = GIMBAL_DEFAULT_TIME)
-    GimbalPosition myYaw, 0.0, myPitch, myTime
+    GimbalPosition myYaw, 0#, myPitch, myTime
     ' Wait for move to complete plus small buffer
     Application.Wait Now + (myTime + 0.5) / 86400#
 End Sub
@@ -222,8 +222,8 @@ End Sub
 Public Sub UpdateGimbalDisplay()
     On Error Resume Next
     Dim msg As String
-    msg = "M|" & Range("dataCurrentAv").Value & "|" & _
-          Range("dataCurrentTv").Value & "|ISO" & Range("dataCurrentISO").Value
+    msg = "M|" & Range("dataCurrentAv").value & "|" & _
+          Range("dataCurrentTv").value & "|ISO" & Range("dataCurrentISO").value
     msg = Replace(msg, "|", "%7C")
     Dim http As Object
     Set http = CreateObject("WinHttp.WinHttpRequest.5.1")

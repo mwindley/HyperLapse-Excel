@@ -71,11 +71,11 @@ Public Sub InitShoot()
     UpdateMonitor
     
     LogEvent "SEQ", "InitShoot complete. Sunset: " & _
-             Format(Sheets("Settings").Range("dataSunsetTime").Value, "HH:nn:ss")
+             Format(Sheets("Settings").Range("dataSunsetTime").value, "HH:nn:ss")
     
     MsgBox "Shoot initialised." & Chr(10) & _
-           "Sunset: " & Format(Sheets("Settings").Range("dataSunsetTime").Value, "HH:nn:ss") & Chr(10) & _
-           "Sunrise: " & Format(Sheets("Settings").Range("dataSunriseTime").Value, "HH:nn:ss") & Chr(10) & Chr(10) & _
+           "Sunset: " & Format(Sheets("Settings").Range("dataSunsetTime").value, "HH:nn:ss") & Chr(10) & _
+           "Sunrise: " & Format(Sheets("Settings").Range("dataSunriseTime").value, "HH:nn:ss") & Chr(10) & Chr(10) & _
            "Run StartSequence at 4:00pm.", vbInformation
 End Sub
 
@@ -85,15 +85,15 @@ End Sub
 Private Sub BuildPhase2aSteps()
     g_phase2a_steps = Array( _
         "1/5000", "1/4000", "1/3200", "1/2500", "1/2000", _
-        "1/1600", "1/1250", "1/1000", "1/800",  "1/640", _
-        "1/500",  "1/400",  "1/320",  "1/250",  "1/200", _
-        "1/160",  "1/125",  "1/100",  "1/80",   "1/60", _
-        "1/50",   "1/40",   "1/30",   "1/25",   "1/20", _
-        "1/15",   "1/13",   "1/10",   "1/8",    "1/6", _
-        "1/5",    "1/4",    "0.3",    "0.5",    "0.8", _
-        "1",      "1.3",    "1.6",    "2",      "2.5", _
-        "3",      "4",      "5",      "6",      "8", _
-        "10",     "13",     "15",     "20")
+        "1/1600", "1/1250", "1/1000", "1/800", "1/640", _
+        "1/500", "1/400", "1/320", "1/250", "1/200", _
+        "1/160", "1/125", "1/100", "1/80", "1/60", _
+        "1/50", "1/40", "1/30", "1/25", "1/20", _
+        "1/15", "1/13", "1/10", "1/8", "1/6", _
+        "1/5", "1/4", "0.3", "0.5", "0.8", _
+        "1", "1.3", "1.6", "2", "2.5", _
+        "3", "4", "5", "6", "8", _
+        "10", "13", "15", "20")
     
     ' Reverse for phase 4b
     Dim n As Integer
@@ -117,11 +117,11 @@ Public Sub StartSequence()
     
     If Not IsArray(g_phase2a_steps) Then BuildPhase2aSteps
     
-    g_running      = True
+    g_running = True
     g_lastShotTime = Now()
     g_nextShotTime = Now()
     
-    Sheets("Settings").Range("dataSequenceRunning").Value = "RUNNING"
+    Sheets("Settings").Range("dataSequenceRunning").value = "RUNNING"
     LogEvent "SEQ", "=== Sequence STARTED ==="
     
     ' Kick off the loop
@@ -130,7 +130,7 @@ End Sub
 
 Public Sub StopSequence()
     g_running = False
-    Sheets("Settings").Range("dataSequenceRunning").Value = "STOPPED"
+    Sheets("Settings").Range("dataSequenceRunning").value = "STOPPED"
     LogEvent "SEQ", "=== Sequence STOPPED ==="
     
     ' Cancel any pending OnTime call
@@ -177,8 +177,8 @@ End Sub
 ' Phase 1 — Daytime: 1/5000, ISO 100, 2s interval, cart moving
 Private Sub RunPhase1()
     ' Ensure correct camera settings (in case of restart)
-    If Range("dataCurrentTv").Value <> "1/5000" Then SetShutterSpeed "1/5000"
-    If Range("dataCurrentISO").Value <> "100" Then SetISO "100"
+    If Range("dataCurrentTv").value <> "1/5000" Then SetShutterSpeed "1/5000"
+    If Range("dataCurrentISO").value <> "100" Then SetISO "100"
     
     ' Take photo
     TakePhoto
@@ -187,7 +187,7 @@ Private Sub RunPhase1()
     ' Next shot in 2 seconds
     g_nextShotTime = Now() + (2# / 86400#)
     
-    LogEvent "SEQ", "Ph1 shot " & Range("dataShotCount").Value
+    LogEvent "SEQ", "Ph1 shot " & Range("dataShotCount").value
 End Sub
 
 ' Phase 2a — Shutter transition: 1/5000 → 20s, ISO stays 100
@@ -195,14 +195,14 @@ End Sub
 Private Sub RunPhase2a()
     Dim phase2aStart As Date
     Dim phase2bStart As Date
-    phase2aStart = Sheets("Settings").Range("dataPhase2aStart").Value
-    phase2bStart = Sheets("Settings").Range("dataPhase2bStart").Value
+    phase2aStart = Sheets("Settings").Range("dataPhase2aStart").value
+    phase2bStart = Sheets("Settings").Range("dataPhase2bStart").value
     
     ' How far through Phase 2a are we? (0.0 to 1.0)
     Dim elapsed As Double
     Dim total   As Double
     elapsed = (Now() - phase2aStart) * 86400#   ' seconds
-    total   = (phase2bStart - phase2aStart) * 86400#
+    total = (phase2bStart - phase2aStart) * 86400#
     Dim progress As Double
     progress = elapsed / total
     If progress > 1 Then progress = 1
@@ -217,12 +217,12 @@ Private Sub RunPhase2a()
     targetTv = CStr(g_phase2a_steps(targetIdx))
     
     ' Set shutter if changed
-    If Range("dataCurrentTv").Value <> targetTv Then
+    If Range("dataCurrentTv").value <> targetTv Then
         SetShutterSpeed targetTv
     End If
     
     ' ISO stays 100 throughout 2a
-    If Range("dataCurrentISO").Value <> "100" Then SetISO "100"
+    If Range("dataCurrentISO").value <> "100" Then SetISO "100"
     
     ' Take photo
     ' Wait until camera is safe to query (exposure + write buffer)
@@ -239,13 +239,13 @@ Private Sub RunPhase2a()
     g_nextShotTime = g_lastShotTime + (interval / 86400#)
     
     LogEvent "SEQ", "Ph2a Tv=" & targetTv & " interval=" & Format(interval, "0.0") & _
-             "s shot=" & Range("dataShotCount").Value
+             "s shot=" & Range("dataShotCount").value
 End Sub
 
 ' Phase 2b — ISO ramp: shutter fixed at 20s, ISO 100→1600 via luminance
 Private Sub RunPhase2b()
     ' Ensure shutter is at 20s
-    If Range("dataCurrentTv").Value <> "20" Then SetShutterSpeed "20"
+    If Range("dataCurrentTv").value <> "20" Then SetShutterSpeed "20"
     
     ' Wait for camera to finish exposure before any CCAPI queries
     WaitForCamera 20#
@@ -260,23 +260,23 @@ Private Sub RunPhase2b()
     ' Fixed 22s interval
     g_nextShotTime = g_lastShotTime + (22# / 86400#)
     
-    LogEvent "SEQ", "Ph2b ISO=" & Range("dataCurrentISO").Value & _
-             " Lum=" & Range("dataLuminance").Value & _
-             " shot=" & Range("dataShotCount").Value
+    LogEvent "SEQ", "Ph2b ISO=" & Range("dataCurrentISO").value & _
+             " Lum=" & Range("dataLuminance").value & _
+             " shot=" & Range("dataShotCount").value
 End Sub
 
 ' Phase 3 — Full night: 20s ISO1600, gimbal tracks Milky Way
 Private Sub RunPhase3()
     ' Ensure max night settings
-    If Range("dataCurrentTv").Value <> "20"   Then SetShutterSpeed "20"
-    If Range("dataCurrentISO").Value <> "1600" Then SetISO "1600"
+    If Range("dataCurrentTv").value <> "20" Then SetShutterSpeed "20"
+    If Range("dataCurrentISO").value <> "1600" Then SetISO "1600"
     
     ' Wait for camera
     WaitForCamera 20#
     
     ' Update gimbal to track galactic centre
     Dim cartHeading As Double
-    cartHeading = Sheets("Settings").Range("dataCartHeading").Value
+    cartHeading = Sheets("Settings").Range("dataCartHeading").value
     
     Dim gcYaw As Double, gcPitch As Double
     If GetGCGimbalAngles(Now(), cartHeading, gcYaw, gcPitch) Then
@@ -284,8 +284,8 @@ Private Sub RunPhase3()
         ' Move slowly — only if more than 0.1° change needed
         Dim currentYaw   As Double
         Dim currentPitch As Double
-        currentYaw   = Sheets("Settings").Range("dataGimbalYaw").Value
-        currentPitch = Sheets("Settings").Range("dataGimbalPitch").Value
+        currentYaw = Sheets("Settings").Range("dataGimbalYaw").value
+        currentPitch = Sheets("Settings").Range("dataGimbalPitch").value
         
         If Abs(gcYaw - currentYaw) > 0.1 Or Abs(gcPitch - currentPitch) > 0.1 Then
             ' Move over the interval period so camera doesn't catch movement
@@ -300,15 +300,15 @@ Private Sub RunPhase3()
     
     LogEvent "SEQ", "Ph3 GC yaw=" & Format(gcYaw, "0.1") & _
              " pitch=" & Format(gcPitch, "0.1") & _
-             " shot=" & Range("dataShotCount").Value
+             " shot=" & Range("dataShotCount").value
 End Sub
 
 ' Phase 4 — Pre-sunrise: ISO reverse then shutter reverse
 Private Sub RunPhase4()
     Dim phase4aStart As Date
     Dim phase4bStart As Date
-    phase4aStart = Sheets("Settings").Range("dataPhase4aStart").Value
-    phase4bStart = Sheets("Settings").Range("dataPhase4bStart").Value
+    phase4aStart = Sheets("Settings").Range("dataPhase4aStart").value
+    phase4bStart = Sheets("Settings").Range("dataPhase4bStart").value
     
     If Now() < phase4bStart Then
         ' Phase 4a — ISO reverse: 1600 → 100, shutter stays 20s
@@ -321,7 +321,7 @@ End Sub
 
 Private Sub RunPhase4a()
     ' Shutter fixed at 20s
-    If Range("dataCurrentTv").Value <> "20" Then SetShutterSpeed "20"
+    If Range("dataCurrentTv").value <> "20" Then SetShutterSpeed "20"
     
     WaitForCamera 20#
     
@@ -333,25 +333,25 @@ Private Sub RunPhase4a()
     g_lastShotTime = Now()
     g_nextShotTime = g_lastShotTime + (22# / 86400#)
     
-    LogEvent "SEQ", "Ph4a ISO=" & Range("dataCurrentISO").Value & _
-             " Lum=" & Range("dataLuminance").Value & _
-             " shot=" & Range("dataShotCount").Value
+    LogEvent "SEQ", "Ph4a ISO=" & Range("dataCurrentISO").value & _
+             " Lum=" & Range("dataLuminance").value & _
+             " shot=" & Range("dataShotCount").value
 End Sub
 
 Private Sub RunPhase4b()
     ' ISO should be at 100 by now
-    If Range("dataCurrentISO").Value <> "100" Then SetISO "100"
+    If Range("dataCurrentISO").value <> "100" Then SetISO "100"
     
     ' Mirror of Phase 2a — shutter speeds back up using reverse step table
     Dim phase4bStart As Date
     Dim phase5Start  As Date
-    phase4bStart = Sheets("Settings").Range("dataPhase4bStart").Value
-    phase5Start  = Sheets("Settings").Range("dataPhase5Start").Value
+    phase4bStart = Sheets("Settings").Range("dataPhase4bStart").value
+    phase5Start = Sheets("Settings").Range("dataPhase5Start").value
     
     Dim elapsed  As Double
     Dim total    As Double
-    elapsed  = (Now() - phase4bStart) * 86400#
-    total    = (phase5Start - phase4bStart) * 86400#
+    elapsed = (Now() - phase4bStart) * 86400#
+    total = (phase5Start - phase4bStart) * 86400#
     Dim progress As Double
     progress = elapsed / total
     If progress > 1 Then progress = 1
@@ -364,7 +364,7 @@ Private Sub RunPhase4b()
     Dim targetTv As String
     targetTv = CStr(g_phase4b_steps(targetIdx))
     
-    If Range("dataCurrentTv").Value <> targetTv Then
+    If Range("dataCurrentTv").value <> targetTv Then
         SetShutterSpeed targetTv
     End If
     
@@ -380,19 +380,19 @@ Private Sub RunPhase4b()
     g_nextShotTime = g_lastShotTime + (interval / 86400#)
     
     LogEvent "SEQ", "Ph4b Tv=" & targetTv & " interval=" & Format(interval, "0.0") & _
-             "s shot=" & Range("dataShotCount").Value
+             "s shot=" & Range("dataShotCount").value
 End Sub
 
 ' Phase 5 — Daytime again: back to 1/5000 ISO100
 Private Sub RunPhase5()
-    If Range("dataCurrentTv").Value <> "1/5000" Then SetShutterSpeed "1/5000"
-    If Range("dataCurrentISO").Value <> "100"   Then SetISO "100"
+    If Range("dataCurrentTv").value <> "1/5000" Then SetShutterSpeed "1/5000"
+    If Range("dataCurrentISO").value <> "100" Then SetISO "100"
     
     TakePhoto
     g_lastShotTime = Now()
     g_nextShotTime = g_lastShotTime + (2# / 86400#)
     
-    LogEvent "SEQ", "Ph5 shot " & Range("dataShotCount").Value
+    LogEvent "SEQ", "Ph5 shot " & Range("dataShotCount").value
 End Sub
 
 ' ============================================================
@@ -425,7 +425,7 @@ End Sub
 ' Move gimbal to sunset direction at start of Phase 2a
 Public Sub GimbalToSunset()
     Dim cartHeading As Double
-    cartHeading = Sheets("Settings").Range("dataCartHeading").Value
+    cartHeading = Sheets("Settings").Range("dataCartHeading").value
     
     Dim yaw As Double, pitch As Double
     GetSunGimbalAngles Now(), cartHeading, yaw, pitch
@@ -439,7 +439,7 @@ End Sub
 ' Move gimbal to Milky Way galactic centre at start of Phase 3
 Public Sub GimbalToMilkyWay()
     Dim cartHeading As Double
-    cartHeading = Sheets("Settings").Range("dataCartHeading").Value
+    cartHeading = Sheets("Settings").Range("dataCartHeading").value
     
     Dim yaw As Double, pitch As Double
     If GetGCGimbalAngles(Now(), cartHeading, yaw, pitch) Then
@@ -456,11 +456,11 @@ End Sub
 ' Move gimbal to sunrise direction at start of Phase 4
 Public Sub GimbalToSunrise()
     Dim cartHeading As Double
-    cartHeading = Sheets("Settings").Range("dataCartHeading").Value
+    cartHeading = Sheets("Settings").Range("dataCartHeading").value
     
     ' Get tomorrow's sunrise position
     Dim sunriseTime As Date
-    sunriseTime = Sheets("Settings").Range("dataSunriseTime").Value
+    sunriseTime = Sheets("Settings").Range("dataSunriseTime").value
     
     Dim yaw As Double, pitch As Double
     GetSunGimbalAngles sunriseTime, cartHeading, yaw, pitch
@@ -481,7 +481,7 @@ Public Sub RunCartReplay()
     Set ws = Sheets("Sequence")
     
     Dim lastRow As Long
-    lastRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row
+    lastRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).row
     
     LogEvent "CART", "=== Cart replay started ==="
     
@@ -491,9 +491,9 @@ Public Sub RunCartReplay()
         Dim action     As String
         Dim value      As Double
         
-        replayTime = ws.Cells(i, 1).Value
-        action     = Trim(ws.Cells(i, 2).Value)
-        value      = ws.Cells(i, 3).Value
+        replayTime = ws.Cells(i, 1).value
+        action = Trim(ws.Cells(i, 2).value)
+        value = ws.Cells(i, 3).value
         
         ' Wait until replay time
         Do While Now() < replayTime And g_running
@@ -518,7 +518,7 @@ Public Sub RunCartReplay()
             Case "GIMBAL"
                 ' Format: "yaw,pitch" in value column
                 Dim parts() As String
-                parts = Split(CStr(ws.Cells(i, 3).Value), ",")
+                parts = Split(CStr(ws.Cells(i, 3).value), ",")
                 If UBound(parts) >= 1 Then
                     GimbalPosition CDbl(parts(0)), 0#, CDbl(parts(1)), 5#
                 End If
@@ -583,7 +583,7 @@ Public Sub SystemCheck()
     End If
     
     Dim sunsetTime As Date
-    sunsetTime = Sheets("Settings").Range("dataSunsetTime").Value
+    sunsetTime = Sheets("Settings").Range("dataSunsetTime").value
     If sunsetTime <> 0 Then
         msg = msg & "✓ Sunset time: " & Format(sunsetTime, "HH:nn:ss") & Chr(10)
     Else

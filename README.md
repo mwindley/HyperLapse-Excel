@@ -30,12 +30,12 @@ Excel Workbook (laptop in van)
 ```
 HyperLapse-Excel/
   Modules/
-    Module_Camera.bas     Canon CCAPI — ISO, Tv, Av, shutter, luminance
-    Module_Gimbal.bas     Arduino gimbal control — GimbalPosition, Heartbeat
-    Module_Sequence.bas   Phase control loop — sunset timing, transitions
-    Module_Cart.bas       Cart log retrieval and replay plan generation
-    Module_Astro.bas      Sun position, Milky Way galactic centre angles
-    Module_Utils.bas      Shared helpers — CameraGet, logging, sunrise API
+    Camera.bas     Canon CCAPI — ISO, Tv, Av, shutter, luminance
+    Gimbal.bas     Arduino gimbal control — GimbalPosition, Heartbeat
+    Sequence.bas   Phase control loop — sunset timing, transitions
+    Cart.bas       Cart log retrieval and replay plan generation
+    Astro.bas      Sun position, Milky Way galactic centre angles
+    Utils.bas      Shared helpers — CameraGet, logging, sunrise API
   Python/
     luminance.py          Thumbnail luminance calculator (called by VBA)
   README.md

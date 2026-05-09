@@ -60,15 +60,15 @@ Public Sub GetCartLog()
     Set ws = Sheets("CartLog")
     
     ' Add header if sheet is empty
-    If ws.Cells(1, 1).Value = "" Then
-        ws.Cells(1, 1).Value = "Timestamp"
-        ws.Cells(1, 2).Value = "Type"
-        ws.Cells(1, 3).Value = "Value"
-        ws.Cells(1, 4).Value = "Description"
+    If ws.Cells(1, 1).value = "" Then
+        ws.Cells(1, 1).value = "Timestamp"
+        ws.Cells(1, 2).value = "Type"
+        ws.Cells(1, 3).value = "Value"
+        ws.Cells(1, 4).value = "Description"
     End If
     
     Dim nextRow As Long
-    nextRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row + 1
+    nextRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).row + 1
     
     Dim lines() As String
     lines = Split(response, Chr(10))
@@ -83,11 +83,11 @@ Public Sub GetCartLog()
             Dim fields() As String
             fields = Split(line, ",")
             If UBound(fields) >= 2 Then
-                ws.Cells(nextRow, 1).Value = fields(0)   ' HH:MM:SS
-                ws.Cells(nextRow, 2).Value = fields(1)   ' S/T/X
-                ws.Cells(nextRow, 3).Value = CDbl(fields(2))  ' value
+                ws.Cells(nextRow, 1).value = fields(0)   ' HH:MM:SS
+                ws.Cells(nextRow, 2).value = fields(1)   ' S/T/X
+                ws.Cells(nextRow, 3).value = CDbl(fields(2))  ' value
                 ' Add human-readable description
-                ws.Cells(nextRow, 4).Value = EventDescription(fields(1), CDbl(fields(2)))
+                ws.Cells(nextRow, 4).value = EventDescription(fields(1), CDbl(fields(2)))
                 nextRow = nextRow + 1
                 newRows = newRows + 1
             End If
@@ -140,7 +140,7 @@ Public Sub ProcessCartLog()
     Set ws = Sheets("CartLog")
     
     Dim lastRow As Long
-    lastRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row
+    lastRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).row
     
     If lastRow < 2 Then
         MsgBox "CartLog sheet is empty — retrieve log first.", vbExclamation
@@ -151,13 +151,13 @@ Public Sub ProcessCartLog()
     ws.Range("E1:K" & lastRow).Clear
     
     ' Add segment headers
-    ws.Cells(1, 5).Value  = "Duration (s)"
-    ws.Cells(1, 6).Value  = "Scout speed"
-    ws.Cells(1, 7).Value  = "Distance (m)"
-    ws.Cells(1, 8).Value  = "Replay speed"
-    ws.Cells(1, 9).Value  = "Replay time (s)"
-    ws.Cells(1, 10).Value = "Replay start"
-    ws.Cells(1, 11).Value = "Replay end"
+    ws.Cells(1, 5).value = "Duration (s)"
+    ws.Cells(1, 6).value = "Scout speed"
+    ws.Cells(1, 7).value = "Distance (m)"
+    ws.Cells(1, 8).value = "Replay speed"
+    ws.Cells(1, 9).value = "Replay time (s)"
+    ws.Cells(1, 10).value = "Replay start"
+    ws.Cells(1, 11).value = "Replay end"
     
     ' Parse events and calculate segments
     Dim currentSpeed As Double
@@ -173,14 +173,14 @@ Public Sub ProcessCartLog()
         Dim evtTime   As String
         Dim evtType   As String
         Dim evtValue  As Double
-        evtTime  = CStr(ws.Cells(i, 1).Value)
-        evtType  = CStr(ws.Cells(i, 2).Value)
-        evtValue = CDbl(ws.Cells(i, 3).Value)
+        evtTime = CStr(ws.Cells(i, 1).value)
+        evtType = CStr(ws.Cells(i, 2).value)
+        evtValue = CDbl(ws.Cells(i, 3).value)
         
         ' Calculate duration since last event
         If segmentStart <> "" And i > 2 Then
             Dim prevTime As String
-            prevTime = CStr(ws.Cells(i - 1, 1).Value)
+            prevTime = CStr(ws.Cells(i - 1, 1).value)
             Dim durationSecs As Double
             durationSecs = TimestampDiff(prevTime, evtTime)
             
@@ -188,9 +188,9 @@ Public Sub ProcessCartLog()
             Dim distanceM As Double
             distanceM = currentSpeed * (durationSecs / 3600)
             
-            ws.Cells(i - 1, 5).Value = Round(durationSecs, 1)
-            ws.Cells(i - 1, 6).Value = currentSpeed
-            ws.Cells(i - 1, 7).Value = Round(distanceM, 2)
+            ws.Cells(i - 1, 5).value = Round(durationSecs, 1)
+            ws.Cells(i - 1, 6).value = currentSpeed
+            ws.Cells(i - 1, 7).value = Round(distanceM, 2)
         End If
         
         ' Update current state
@@ -235,7 +235,7 @@ Public Sub GenerateReplayPlan()
     Set wsDst = Sheets("Sequence")
     
     Dim lastRow As Long
-    lastRow = wsSrc.Cells(wsSrc.Rows.Count, 1).End(xlUp).Row
+    lastRow = wsSrc.Cells(wsSrc.Rows.Count, 1).End(xlUp).row
     
     If lastRow < 2 Then
         MsgBox "CartLog is empty.", vbExclamation
@@ -244,7 +244,7 @@ Public Sub GenerateReplayPlan()
     
     ' Get replay start time
     Dim replayStart As Date
-    replayStart = Sheets("Settings").Range("dataReplayStart").Value
+    replayStart = Sheets("Settings").Range("dataReplayStart").value
     If replayStart = 0 Then
         replayStart = CDate(Int(Now()) + TimeValue("16:00:00"))
     End If
@@ -253,14 +253,14 @@ Public Sub GenerateReplayPlan()
     wsDst.Range("A2:G1000").Clear
     
     ' Write headers if needed
-    If wsDst.Cells(1, 1).Value = "" Then
-        wsDst.Cells(1, 1).Value = "Replay Time"
-        wsDst.Cells(1, 2).Value = "Action"
-        wsDst.Cells(1, 3).Value = "Value"
-        wsDst.Cells(1, 4).Value = "Notes"
-        wsDst.Cells(1, 5).Value = "Duration (s)"
-        wsDst.Cells(1, 6).Value = "Distance (m)"
-        wsDst.Cells(1, 7).Value = "Segment end time"
+    If wsDst.Cells(1, 1).value = "" Then
+        wsDst.Cells(1, 1).value = "Replay Time"
+        wsDst.Cells(1, 2).value = "Action"
+        wsDst.Cells(1, 3).value = "Value"
+        wsDst.Cells(1, 4).value = "Notes"
+        wsDst.Cells(1, 5).value = "Duration (s)"
+        wsDst.Cells(1, 6).value = "Distance (m)"
+        wsDst.Cells(1, 7).value = "Segment end time"
     End If
     
     Dim currentTime As Date
@@ -269,10 +269,10 @@ Public Sub GenerateReplayPlan()
     dstRow = 2
     
     ' Initial energise and speed=0
-    wsDst.Cells(dstRow, 1).Value = currentTime
-    wsDst.Cells(dstRow, 2).Value = "ENERGISE"
-    wsDst.Cells(dstRow, 3).Value = 0
-    wsDst.Cells(dstRow, 4).Value = "Energise motors"
+    wsDst.Cells(dstRow, 1).value = currentTime
+    wsDst.Cells(dstRow, 2).value = "ENERGISE"
+    wsDst.Cells(dstRow, 3).value = 0
+    wsDst.Cells(dstRow, 4).value = "Energise motors"
     dstRow = dstRow + 1
     
     Dim totalDistance As Double
@@ -286,13 +286,13 @@ Public Sub GenerateReplayPlan()
         Dim replaySpd  As Double
         Dim duration   As Double
         
-        evtType   = CStr(wsSrc.Cells(i, 2).Value)
-        evtValue  = CDbl(wsSrc.Cells(i, 3).Value)
-        distance  = 0
+        evtType = CStr(wsSrc.Cells(i, 2).value)
+        evtValue = CDbl(wsSrc.Cells(i, 3).value)
+        distance = 0
         
         ' Get distance and replay speed for speed segments
-        If wsSrc.Cells(i, 7).Value <> "" Then distance = CDbl(wsSrc.Cells(i, 7).Value)
-        If wsSrc.Cells(i, 8).Value <> "" Then replaySpd = CDbl(wsSrc.Cells(i, 8).Value)
+        If wsSrc.Cells(i, 7).value <> "" Then distance = CDbl(wsSrc.Cells(i, 7).value)
+        If wsSrc.Cells(i, 8).value <> "" Then replaySpd = CDbl(wsSrc.Cells(i, 8).value)
         
         Select Case UCase(Trim(evtType))
             Case "S"
@@ -306,17 +306,17 @@ Public Sub GenerateReplayPlan()
                     End If
                     
                     ' Write speed command
-                    wsDst.Cells(dstRow, 1).Value = currentTime
-                    wsDst.Cells(dstRow, 2).Value = "SPEED"
-                    wsDst.Cells(dstRow, 3).Value = IIf(replaySpd > 0, replaySpd, evtValue)
-                    wsDst.Cells(dstRow, 4).Value = "Segment " & (i - 1) & _
+                    wsDst.Cells(dstRow, 1).value = currentTime
+                    wsDst.Cells(dstRow, 2).value = "SPEED"
+                    wsDst.Cells(dstRow, 3).value = IIf(replaySpd > 0, replaySpd, evtValue)
+                    wsDst.Cells(dstRow, 4).value = "Segment " & (i - 1) & _
                                                    " — " & Round(distance, 1) & "m"
-                    wsDst.Cells(dstRow, 5).Value = Round(duration, 0)
-                    wsDst.Cells(dstRow, 6).Value = Round(distance, 2)
+                    wsDst.Cells(dstRow, 5).value = Round(duration, 0)
+                    wsDst.Cells(dstRow, 6).value = Round(distance, 2)
                     
                     ' Advance time by segment duration
                     currentTime = currentTime + (duration / 86400#)
-                    wsDst.Cells(dstRow, 7).Value = currentTime
+                    wsDst.Cells(dstRow, 7).value = currentTime
                     
                     totalDistance = totalDistance + distance
                     dstRow = dstRow + 1
@@ -326,18 +326,18 @@ Public Sub GenerateReplayPlan()
                 ' Steering change — insert at current time
                 Dim steerOffset As Integer
                 steerOffset = CInt(evtValue) - 98
-                wsDst.Cells(dstRow, 1).Value = currentTime
-                wsDst.Cells(dstRow, 2).Value = "STEER"
-                wsDst.Cells(dstRow, 3).Value = steerOffset
-                wsDst.Cells(dstRow, 4).Value = "Steer " & IIf(steerOffset >= 0, "+" & steerOffset, steerOffset) & Chr(176)
+                wsDst.Cells(dstRow, 1).value = currentTime
+                wsDst.Cells(dstRow, 2).value = "STEER"
+                wsDst.Cells(dstRow, 3).value = steerOffset
+                wsDst.Cells(dstRow, 4).value = "Steer " & IIf(steerOffset >= 0, "+" & steerOffset, steerOffset) & Chr(176)
                 dstRow = dstRow + 1
                 
             Case "X"
                 ' Stop
-                wsDst.Cells(dstRow, 1).Value = currentTime
-                wsDst.Cells(dstRow, 2).Value = "STOP"
-                wsDst.Cells(dstRow, 3).Value = 0
-                wsDst.Cells(dstRow, 4).Value = "Cart stop"
+                wsDst.Cells(dstRow, 1).value = currentTime
+                wsDst.Cells(dstRow, 2).value = "STOP"
+                wsDst.Cells(dstRow, 3).value = 0
+                wsDst.Cells(dstRow, 4).value = "Cart stop"
                 dstRow = dstRow + 1
         End Select
     Next i
@@ -390,15 +390,15 @@ Public Sub GetGimbalLogToSheet()
     Set ws = Sheets("GimbalLog")
     
     ' Add headers if empty
-    If ws.Cells(1, 1).Value = "" Then
-        ws.Cells(1, 1).Value = "Timestamp"
-        ws.Cells(1, 2).Value = "Yaw (°)"
-        ws.Cells(1, 3).Value = "Pitch (°)"
-        ws.Cells(1, 4).Value = "Notes"
+    If ws.Cells(1, 1).value = "" Then
+        ws.Cells(1, 1).value = "Timestamp"
+        ws.Cells(1, 2).value = "Yaw (°)"
+        ws.Cells(1, 3).value = "Pitch (°)"
+        ws.Cells(1, 4).value = "Notes"
     End If
     
     Dim nextRow As Long
-    nextRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row + 1
+    nextRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).row + 1
     
     Dim lines() As String
     lines = Split(response, Chr(10))
@@ -413,9 +413,9 @@ Public Sub GetGimbalLogToSheet()
             Dim fields() As String
             fields = Split(line, ",")
             If UBound(fields) >= 2 Then
-                ws.Cells(nextRow, 1).Value = fields(0)         ' HH:MM:SS
-                ws.Cells(nextRow, 2).Value = CDbl(fields(1))   ' Yaw
-                ws.Cells(nextRow, 3).Value = CDbl(fields(2))   ' Pitch
+                ws.Cells(nextRow, 1).value = fields(0)         ' HH:MM:SS
+                ws.Cells(nextRow, 2).value = CDbl(fields(1))   ' Yaw
+                ws.Cells(nextRow, 3).value = CDbl(fields(2))   ' Pitch
                 nextRow = nextRow + 1
                 newRows = newRows + 1
             End If
@@ -472,7 +472,7 @@ Public Sub CartLogSummary()
     Set ws = Sheets("CartLog")
     
     Dim lastRow As Long
-    lastRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row
+    lastRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).row
     
     If lastRow < 2 Then
         MsgBox "CartLog is empty.", vbInformation
@@ -486,13 +486,13 @@ Public Sub CartLogSummary()
     
     Dim i As Long
     For i = 2 To lastRow
-        Select Case UCase(Trim(CStr(ws.Cells(i, 2).Value)))
+        Select Case UCase(Trim(CStr(ws.Cells(i, 2).value)))
             Case "S": speedCount = speedCount + 1
             Case "T": steerCount = steerCount + 1
-            Case "X": stopCount  = stopCount + 1
+            Case "X": stopCount = stopCount + 1
         End Select
-        If ws.Cells(i, 7).Value <> "" Then
-            totalDist = totalDist + CDbl(ws.Cells(i, 7).Value)
+        If ws.Cells(i, 7).value <> "" Then
+            totalDist = totalDist + CDbl(ws.Cells(i, 7).value)
         End If
     Next i
     
