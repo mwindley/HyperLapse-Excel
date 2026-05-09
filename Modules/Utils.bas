@@ -297,7 +297,10 @@ Public Sub UpdateMonitor()
     ws.Range("monPhase").value = PhaseLabel(GetCurrentPhase())
     
     ' Camera settings
-    ws.Range("monTv").value = Sheets("Settings").Range("dataCurrentTv").value
+    'ws.Range("monTv").value = Sheets("Settings").Range("dataCurrentTv").value
+    ws.Range("monTv").NumberFormat = "@"
+    ws.Range("monTv").value = "'" & Sheets("Settings").Range("dataCurrentTv").value
+    
     ws.Range("monISO").value = Sheets("Settings").Range("dataCurrentISO").value
     ws.Range("monAv").value = Sheets("Settings").Range("dataCurrentAv").value
     ws.Range("monLuminance").value = Sheets("Settings").Range("dataLuminance").value

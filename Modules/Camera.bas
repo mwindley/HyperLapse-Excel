@@ -130,6 +130,8 @@ Public Function SetAperture(ByVal myAv As String) As Boolean
     SetAperture = CameraPut("/ccapi/" & CCAPI_VER & "/shooting/settings/av", _
                             "{""value"":""" & myAv & """}")
     If SetAperture Then
+        Range("dataCurrentAv").NumberFormat = "@"
+
         Range("dataCurrentAv").value = myAv
         LogEvent "CAMERA", "Av set to " & myAv
         UpdateArduinoDisplay
@@ -140,6 +142,7 @@ Public Function SetShutterSpeed(ByVal myTv As String) As Boolean
     SetShutterSpeed = CameraPut("/ccapi/" & CCAPI_VER & "/shooting/settings/tv", _
                                 "{""value"":""" & myTv & """}")
     If SetShutterSpeed Then
+        Range("dataCurrentTv").NumberFormat = "@"
         Range("dataCurrentTv").value = myTv
         LogEvent "CAMERA", "Tv set to " & myTv
         UpdateArduinoDisplay
