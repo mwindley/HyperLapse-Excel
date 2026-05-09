@@ -461,7 +461,7 @@ Public Sub PollCartLog()
     Dim ws As Worksheet
     Set ws = Sheets("CartLog")
     Dim nextRow As Long
-    nextRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).row + 1
+    nextRow = ws.Cells(ws.Rows.count, 1).End(xlUp).row + 1
     
     Dim lines() As String
     lines = Split(response, Chr(10))
@@ -547,7 +547,7 @@ Public Sub LogEvent(ByVal category As String, ByVal message As String)
     Dim ws As Worksheet
     Set ws = Sheets("Log")
     Dim nextRow As Long
-    nextRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).row + 1
+    nextRow = ws.Cells(ws.Rows.count, 1).End(xlUp).row + 1
     ws.Cells(nextRow, 1).value = Format(Now(), "YYYY-MM-DD HH:nn:ss")
     ws.Cells(nextRow, 2).value = category
     ws.Cells(nextRow, 3).value = message

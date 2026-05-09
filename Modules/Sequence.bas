@@ -481,7 +481,7 @@ Public Sub RunCartReplay()
     Set ws = Sheets("Sequence")
     
     Dim lastRow As Long
-    lastRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).row
+    lastRow = ws.Cells(ws.Rows.count, 1).End(xlUp).row
     
     LogEvent "CART", "=== Cart replay started ==="
     

@@ -68,7 +68,7 @@ Public Sub GetCartLog()
     End If
     
     Dim nextRow As Long
-    nextRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).row + 1
+    nextRow = ws.Cells(ws.Rows.count, 1).End(xlUp).row + 1
     
     Dim lines() As String
     lines = Split(response, Chr(10))
@@ -140,7 +140,7 @@ Public Sub ProcessCartLog()
     Set ws = Sheets("CartLog")
     
     Dim lastRow As Long
-    lastRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).row
+    lastRow = ws.Cells(ws.Rows.count, 1).End(xlUp).row
     
     If lastRow < 2 Then
         MsgBox "CartLog sheet is empty — retrieve log first.", vbExclamation
@@ -235,7 +235,7 @@ Public Sub GenerateReplayPlan()
     Set wsDst = Sheets("Sequence")
     
     Dim lastRow As Long
-    lastRow = wsSrc.Cells(wsSrc.Rows.Count, 1).End(xlUp).row
+    lastRow = wsSrc.Cells(wsSrc.Rows.count, 1).End(xlUp).row
     
     If lastRow < 2 Then
         MsgBox "CartLog is empty.", vbExclamation
@@ -398,7 +398,7 @@ Public Sub GetGimbalLogToSheet()
     End If
     
     Dim nextRow As Long
-    nextRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).row + 1
+    nextRow = ws.Cells(ws.Rows.count, 1).End(xlUp).row + 1
     
     Dim lines() As String
     lines = Split(response, Chr(10))
@@ -472,7 +472,7 @@ Public Sub CartLogSummary()
     Set ws = Sheets("CartLog")
     
     Dim lastRow As Long
-    lastRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).row
+    lastRow = ws.Cells(ws.Rows.count, 1).End(xlUp).row
     
     If lastRow < 2 Then
         MsgBox "CartLog is empty.", vbInformation
