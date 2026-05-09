@@ -27,19 +27,26 @@ Public Function GetSunsetTime() As Date
     Dim lat       As Double
     Dim lng       As Double
     Dim utcOffset As Double
-    lat       = Sheets("Settings").Range("dataLatitude").Value
-    lng       = Sheets("Settings").Range("dataLongitude").Value
-    utcOffset = Sheets("Settings").Range("dataUTCOffset").Value
+    lat = Sheets("Settings").Range("dataLatitude").value
+    lng = Sheets("Settings").Range("dataLongitude").value
+    utcOffset = Sheets("Settings").Range("dataUTCOffset").value
     
     Dim url As String
+    Dim dateStr As String
+    dateStr = Year(Now()) & "-" & Right("0" & Month(Now()), 2) & "-" & Right("0" & Day(Now()), 2)
     url = "https://api.sunrise-sunset.org/json?lat=" & lat & _
-          "&lng=" & lng & "&date=" & Format(Now(), "YYYY-MM-DD") & "&formatted=0"
+          "&lng=" & lng & "&date=" & dateStr & "&formatted=0"
     
     Dim http As Object
+    'Set http = CreateObject("WinHttp.WinHttpRequest.5.1")
+    'http.Open "GET", url, False
+    'http.Send
+    
     Set http = CreateObject("WinHttp.WinHttpRequest.5.1")
+    'http.SetAutoProxySetting 1   ' use IE/system proxy settings
     http.Open "GET", url, False
     http.Send
-    
+
     If http.Status <> 200 Then
         LogEvent "UTILS", "GetSunsetTime HTTP " & http.Status
         GetSunsetTime = 0
@@ -63,14 +70,15 @@ Public Function GetSunsetTime() As Date
     ' Parse ISO 8601 UTC time and convert to local
     ' Format: "2026-05-09T08:23:00+00:00"
     Dim utcTime As Date
-    utcTime = CDate(Left(sunsetStr, 19))  ' "2026-05-09 08:23:00"
+    'utcTime = CDate(Left(sunsetStr, 19))  ' "2026-05-09 08:23:00"
+    utcTime = CDate(Replace(Left(sunsetStr, 19), "T", " "))
     
     ' Convert UTC to local time
     Dim localTime As Date
     localTime = utcTime + (utcOffset / 24)
     
     ' Store sunset
-    Sheets("Settings").Range("dataSunsetTime").Value = localTime
+    Sheets("Settings").Range("dataSunsetTime").value = localTime
     
     ' Parse and store all twilight phases from same response
     Dim ws As Worksheet
@@ -95,20 +103,22 @@ Public Function GetSunsetTime() As Date
         fStr = ParseJsonField(response, fields(k))
         If fStr <> "" Then
             Dim fUTC As Date
-            fUTC = CDate(Left(fStr, 19))
+            fUTC = CDate(Replace(Left(fStr, 19), "T", " "))
             Dim fLocal As Date
             fLocal = fUTC + (utcOffset / 24)
-            ws.Range(names(k)).Value = fLocal
+            ws.Range(names(k)).value = fLocal
         End If
     Next k
     
     LogEvent "UTILS", "Sunset: " & Format(localTime, "HH:nn:ss") & _
-             " Civil dusk: " & Format(ws.Range("dataCivilDusk").Value, "HH:nn:ss") & _
-             " Astro dark: " & Format(ws.Range("dataAstroDusk").Value, "HH:nn:ss")
+             " Civil dusk: " & Format(ws.Range("dataCivilDusk").value, "HH:nn:ss") & _
+             " Astro dark: " & Format(ws.Range("dataAstroDusk").value, "HH:nn:ss")
     GetSunsetTime = localTime
     Exit Function
 ErrHandler:
+    MsgBox "GetSunsetTime error: " & Err.Description
     LogEvent "UTILS", "GetSunsetTime error: " & Err.Description
+    
     GetSunsetTime = 0
 End Function
 
@@ -117,11 +127,11 @@ Public Function GetSunriseTime() As Date
     ' Sunrise is now populated by GetSunsetTime() from the same API call
     ' Just read from named range
     Dim t As Date
-    t = Sheets("Settings").Range("dataSunriseTime").Value
+    t = Sheets("Settings").Range("dataSunriseTime").value
     If t = 0 Then
         ' Not set yet - call GetSunsetTime which populates all times
         GetSunsetTime
-        t = Sheets("Settings").Range("dataSunriseTime").Value
+        t = Sheets("Settings").Range("dataSunriseTime").value
     End If
     GetSunriseTime = t
 End Function
@@ -157,15 +167,15 @@ Public Function SecondsToTv(ByVal secs As Double) As String
     Dim tvValues As Variant
     tvValues = Array("1/8000", "1/6400", "1/5000", "1/4000", "1/3200", _
                      "1/2500", "1/2000", "1/1600", "1/1250", "1/1000", _
-                     "1/800",  "1/640",  "1/500",  "1/400",  "1/320", _
-                     "1/250",  "1/200",  "1/160",  "1/125",  "1/100", _
-                     "1/80",   "1/60",   "1/50",   "1/40",   "1/30", _
-                     "1/25",   "1/20",   "1/15",   "1/13",   "1/10", _
-                     "1/8",    "1/6",    "1/5",    "1/4",    "0.3", _
-                     "0.4",    "0.5",    "0.6",    "0.8",    "1", _
-                     "1.3",    "1.6",    "2",      "2.5",    "3", _
-                     "4",      "5",      "6",      "8",      "10", _
-                     "13",     "15",     "20",     "25",     "30")
+                     "1/800", "1/640", "1/500", "1/400", "1/320", _
+                     "1/250", "1/200", "1/160", "1/125", "1/100", _
+                     "1/80", "1/60", "1/50", "1/40", "1/30", _
+                     "1/25", "1/20", "1/15", "1/13", "1/10", _
+                     "1/8", "1/6", "1/5", "1/4", "0.3", _
+                     "0.4", "0.5", "0.6", "0.8", "1", _
+                     "1.3", "1.6", "2", "2.5", "3", _
+                     "4", "5", "6", "8", "10", _
+                     "13", "15", "20", "25", "30")
     
     ' Find closest match
     Dim bestMatch  As String
@@ -198,9 +208,9 @@ Public Function CalcInterval(ByVal tvStr As String) As Double
     Dim shutterSecs As Double
     shutterSecs = TvToSeconds(tvStr)
     If shutterSecs <= 0.5 Then
-        CalcInterval = 2.0
+        CalcInterval = 2#
     Else
-        CalcInterval = shutterSecs + 2.0
+        CalcInterval = shutterSecs + 2#
     End If
 End Function
 
@@ -212,7 +222,7 @@ End Function
 ' Offsets in minutes relative to sunset (negative = before sunset)
 Public Sub CalculatePhaseTimes()
     Dim sunsetTime As Date
-    sunsetTime = Sheets("Settings").Range("dataSunsetTime").Value
+    sunsetTime = Sheets("Settings").Range("dataSunsetTime").value
     
     If sunsetTime = 0 Then
         MsgBox "Sunset time not set — run GetSunsetTime() first", vbExclamation
@@ -223,27 +233,27 @@ Public Sub CalculatePhaseTimes()
     Set ws = Sheets("Settings")
     
     ' Phase 1 start — fixed at 16:00
-    ws.Range("dataPhase1Start").Value = CDate(Int(Now()) + TimeValue("16:00:00"))
+    ws.Range("dataPhase1Start").value = CDate(Int(Now()) + TimeValue("16:00:00"))
     
     ' Phase 2a — sunset minus 45 minutes (shutter starts slowing)
-    ws.Range("dataPhase2aStart").Value = sunsetTime - (45 / 1440)
+    ws.Range("dataPhase2aStart").value = sunsetTime - (45 / 1440)
     
     ' Phase 2b — sunset plus 20 minutes (ISO starts climbing)
-    ws.Range("dataPhase2bStart").Value = sunsetTime + (20 / 1440)
+    ws.Range("dataPhase2bStart").value = sunsetTime + (20 / 1440)
     
     ' Phase 3 — sunset plus 60 minutes (full night settings)
-    ws.Range("dataPhase3Start").Value = sunsetTime + (60 / 1440)
+    ws.Range("dataPhase3Start").value = sunsetTime + (60 / 1440)
     
     ' Phase 4a — get tomorrow's sunrise minus 90 minutes
     Dim sunriseTime As Date
-    sunriseTime = Sheets("Settings").Range("dataSunriseTime").Value
-    ws.Range("dataPhase4aStart").Value = sunriseTime - (90 / 1440)
+    sunriseTime = Sheets("Settings").Range("dataSunriseTime").value
+    ws.Range("dataPhase4aStart").value = sunriseTime - (90 / 1440)
     
     ' Phase 4b — sunrise minus 45 minutes
-    ws.Range("dataPhase4bStart").Value = sunriseTime - (45 / 1440)
+    ws.Range("dataPhase4bStart").value = sunriseTime - (45 / 1440)
     
     ' Phase 5 — sunrise time
-    ws.Range("dataPhase5Start").Value = sunriseTime
+    ws.Range("dataPhase5Start").value = sunriseTime
     
     LogEvent "UTILS", "Phase times calculated from sunset " & Format(sunsetTime, "HH:nn:ss")
 End Sub
@@ -255,17 +265,17 @@ Public Function GetCurrentPhase() As Integer
     Dim t As Date
     t = Now()
     
-    If t >= ws.Range("dataPhase5Start").Value Then
+    If t >= ws.Range("dataPhase5Start").value Then
         GetCurrentPhase = 5
-    ElseIf t >= ws.Range("dataPhase4bStart").Value Then
+    ElseIf t >= ws.Range("dataPhase4bStart").value Then
         GetCurrentPhase = 4   ' 4b
-    ElseIf t >= ws.Range("dataPhase4aStart").Value Then
+    ElseIf t >= ws.Range("dataPhase4aStart").value Then
         GetCurrentPhase = 4   ' 4a
-    ElseIf t >= ws.Range("dataPhase3Start").Value Then
+    ElseIf t >= ws.Range("dataPhase3Start").value Then
         GetCurrentPhase = 3
-    ElseIf t >= ws.Range("dataPhase2bStart").Value Then
+    ElseIf t >= ws.Range("dataPhase2bStart").value Then
         GetCurrentPhase = 23  ' 2b (23 = phase 2, sub b)
-    ElseIf t >= ws.Range("dataPhase2aStart").Value Then
+    ElseIf t >= ws.Range("dataPhase2aStart").value Then
         GetCurrentPhase = 22  ' 2a (22 = phase 2, sub a)
     Else
         GetCurrentPhase = 1
@@ -283,29 +293,29 @@ Public Sub UpdateMonitor()
     Set ws = Sheets("Monitor")
     
     ' Current time and phase
-    ws.Range("monTime").Value     = Format(Now(), "HH:nn:ss")
-    ws.Range("monPhase").Value    = PhaseLabel(GetCurrentPhase())
+    ws.Range("monTime").value = Format(Now(), "HH:nn:ss")
+    ws.Range("monPhase").value = PhaseLabel(GetCurrentPhase())
     
     ' Camera settings
-    ws.Range("monTv").Value       = Sheets("Settings").Range("dataCurrentTv").Value
-    ws.Range("monISO").Value      = Sheets("Settings").Range("dataCurrentISO").Value
-    ws.Range("monAv").Value       = Sheets("Settings").Range("dataCurrentAv").Value
-    ws.Range("monLuminance").Value = Sheets("Settings").Range("dataLuminance").Value
-    ws.Range("monShotCount").Value = Sheets("Settings").Range("dataShotCount").Value
+    ws.Range("monTv").value = Sheets("Settings").Range("dataCurrentTv").value
+    ws.Range("monISO").value = Sheets("Settings").Range("dataCurrentISO").value
+    ws.Range("monAv").value = Sheets("Settings").Range("dataCurrentAv").value
+    ws.Range("monLuminance").value = Sheets("Settings").Range("dataLuminance").value
+    ws.Range("monShotCount").value = Sheets("Settings").Range("dataShotCount").value
     
     ' Gimbal
-    ws.Range("monGimbalYaw").Value   = Sheets("Settings").Range("dataGimbalYaw").Value
-    ws.Range("monGimbalPitch").Value = Sheets("Settings").Range("dataGimbalPitch").Value
+    ws.Range("monGimbalYaw").value = Sheets("Settings").Range("dataGimbalYaw").value
+    ws.Range("monGimbalPitch").value = Sheets("Settings").Range("dataGimbalPitch").value
     
     ' Cart
-    ws.Range("monCartSpeed").Value    = Sheets("Settings").Range("dataCartSpeed").Value
-    ws.Range("monCartSteering").Value = Sheets("Settings").Range("dataCartSteering").Value
-    ws.Range("monCartVoltage").Value  = Sheets("Settings").Range("dataCartVoltage").Value
+    ws.Range("monCartSpeed").value = Sheets("Settings").Range("dataCartSpeed").value
+    ws.Range("monCartSteering").value = Sheets("Settings").Range("dataCartSteering").value
+    ws.Range("monCartVoltage").value = Sheets("Settings").Range("dataCartVoltage").value
     
     ' Interval
     Dim tvStr As String
-    tvStr = Sheets("Settings").Range("dataCurrentTv").Value
-    ws.Range("monInterval").Value = Format(CalcInterval(tvStr), "0.0") & "s"
+    tvStr = Sheets("Settings").Range("dataCurrentTv").value
+    ws.Range("monInterval").value = Format(CalcInterval(tvStr), "0.0") & "s"
 End Sub
 
 ' Return human-readable phase label
@@ -344,7 +354,7 @@ End Function
 ' Adjusts from current speed to target speed in steps
 Public Sub CartSetSpeed(ByVal targetSpeed As Double)
     Dim currentSpeed As Double
-    currentSpeed = Sheets("Settings").Range("dataCartSpeed").Value
+    currentSpeed = Sheets("Settings").Range("dataCartSpeed").value
     
     Dim delta As Double
     delta = targetSpeed - currentSpeed
@@ -379,7 +389,7 @@ End Sub
 ' steeringOffset: degrees from centre (-ve = left, +ve = right)
 Public Sub CartSetSteering(ByVal targetOffset As Integer)
     Dim currentOffset As Integer
-    currentOffset = CInt(Sheets("Settings").Range("dataCartSteering").Value)
+    currentOffset = CInt(Sheets("Settings").Range("dataCartSteering").value)
     
     Dim delta As Integer
     delta = targetOffset - currentOffset
@@ -448,7 +458,7 @@ Public Sub PollCartLog()
     Dim ws As Worksheet
     Set ws = Sheets("CartLog")
     Dim nextRow As Long
-    nextRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row + 1
+    nextRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).row + 1
     
     Dim lines() As String
     lines = Split(response, Chr(10))
@@ -460,9 +470,9 @@ Public Sub PollCartLog()
             Dim fields() As String
             fields = Split(line, ",")
             If UBound(fields) >= 2 Then
-                ws.Cells(nextRow, 1).Value = fields(0)  ' HH:MM:SS
-                ws.Cells(nextRow, 2).Value = fields(1)  ' S/T/X
-                ws.Cells(nextRow, 3).Value = fields(2)  ' value
+                ws.Cells(nextRow, 1).value = fields(0)  ' HH:MM:SS
+                ws.Cells(nextRow, 2).value = fields(1)  ' S/T/X
+                ws.Cells(nextRow, 3).value = fields(2)  ' value
                 nextRow = nextRow + 1
             End If
         End If
@@ -534,8 +544,8 @@ Public Sub LogEvent(ByVal category As String, ByVal message As String)
     Dim ws As Worksheet
     Set ws = Sheets("Log")
     Dim nextRow As Long
-    nextRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row + 1
-    ws.Cells(nextRow, 1).Value = Format(Now(), "YYYY-MM-DD HH:nn:ss")
-    ws.Cells(nextRow, 2).Value = category
-    ws.Cells(nextRow, 3).Value = message
+    nextRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).row + 1
+    ws.Cells(nextRow, 1).value = Format(Now(), "YYYY-MM-DD HH:nn:ss")
+    ws.Cells(nextRow, 2).value = category
+    ws.Cells(nextRow, 3).value = message
 End Sub
