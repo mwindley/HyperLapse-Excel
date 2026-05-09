@@ -1,0 +1,14 @@
+# HyperLapse-Excel — Git line ending configuration
+# Prevents LF/CRLF warnings on Windows
+
+# Default — auto detect
+* text=auto
+
+# VBA modules — Windows CRLF
+*.bas text eol=crlf
+
+# Python scripts — LF
+*.py text eol=lf
+
+# Markdown — auto
+*.md text eol=crlf
