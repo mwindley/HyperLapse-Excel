@@ -1,8 +1,41 @@
 Attribute VB_Name = "Gimbal"
 ' ============================================================
-' DJI Ronin RS4 Pro — Gimbal Control Module
-' Arduino IP: read from Settings sheet named range dataArduinoIP
-' All commands sent via Arduino HTTP endpoints
+' HyperLapse Cart — Gimbal Control Module
+'
+' PURPOSE
+'   All DJI Ronin RS4 Pro gimbal control. The gimbal is driven by an
+'   Arduino Uno R4 (sketch: DJI_Ronin_UnoR4_v2 v13) via the RS4''s SBUS
+'   port; this module talks HTTP to that Arduino — it never speaks to
+'   the gimbal directly.
+'
+'   Provides:
+'     - GimbalPosition / GimbalHome — absolute moves with timed easing
+'     - GimbalMoveAndWait — synchronous variant for setup/teardown
+'     - GetGimbalStatus — polls Arduino /status and updates named ranges
+'                         (yaw, roll, pitch, plus cart steering / voltage
+'                         / speed / overdrive — all on one HTTP call)
+'     - GimbalHeartbeat — keepalive ping during the shoot
+'     - GetGimbalLog — fetches the high-speed waypoint log recorded by
+'                      the Arduino during a recce or rehearsal pass
+'
+' COORDINATE CONVENTIONS
+'   Yaw   — relative to cart heading, ±180° (RS4 Pro range)
+'   Pitch — relative to earth horizon (the RS4 Pro stabilises gravity),
+'           +146° / −56° per RS4 Pro spec
+'   Roll  — always 0 for timelapse work (±30° available if ever needed)
+'
+' FUTURE WORK — Gimbal log replay
+'   The intent of GetGimbalLog is to capture high-speed gimbal motion
+'   during a fast recce pass and then replay it in slow time during the
+'   real overnight shoot. The pipeline (not yet built) is:
+'     1. Recce pass: cart moves quickly, GimbalLog records waypoints.
+'     2. Post-process: convert waypoints into a slow-time plan on a
+'        sheet with rows of (Time, Yaw, Pitch).
+'     3. Playback: an OnTime-driven loop (mirroring the Bug 5 cart
+'        replay pattern in Sequence.bas) issues GimbalPosition calls
+'        at the planned times alongside the photo loop.
+'   UpdateGimbalDisplay_FUTURE is the parked seed of step 3''s display
+'   refresh — see comment on that sub.
 ' ============================================================
 
 Option Explicit
@@ -176,7 +209,7 @@ Public Sub GetGimbalLog()
     Dim ws As Worksheet
     Set ws = Sheets("GimbalLog")
     Dim nextRow As Long
-    nextRow = ws.Cells(ws.Rows.count, 1).End(xlUp).row + 1
+    nextRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).row + 1
     
     Dim lines() As String
     lines = Split(response, Chr(10))
@@ -216,10 +249,26 @@ Public Sub GimbalMoveAndWait(ByVal myYaw As Double, _
     Application.Wait Now + (myTime + 0.5) / 86400#
 End Sub
 
-' Send current camera settings to Arduino web UI camera bar
-' Called after any camera setting change
-' (Wrapper here so Gimbal module can call it without circular reference)
-Public Sub UpdateGimbalDisplay()
+' Send current camera settings to the Arduino's gimbal-mounted display.
+'
+' NOTE — currently a near-duplicate of Camera.UpdateArduinoDisplay and not
+' wired into the live shoot. It is preserved here as the seed of a future
+' gimbal-log-replay capability:
+'
+'   - Arduino's GimbalLog records actual yaw/pitch waypoints at high speed
+'     during a recce or rehearsal pass.
+'   - A post-processing step (TBD) converts that log into a slow-time
+'     replay plan on the "Sequence" sheet (or a new "GimbalPlan" sheet).
+'   - During the real shoot, this routine will be the per-frame display
+'     update that runs from inside the gimbal-replay step, alongside the
+'     existing camera-settings display update — letting the on-cart screen
+'     show "where the gimbal is heading next" as well as exposure data.
+'
+' Until that pipeline lands, this is parked and unused. Do NOT delete:
+' it documents the contract for the future replay step. See also the
+' "Replay plan execution" section in Sequence.bas (Bug 5 fix) which now
+' uses the same pattern for cart actions.
+Public Sub UpdateGimbalDisplay_FUTURE()
     On Error Resume Next
     Dim msg As String
     msg = "M|" & Range("dataCurrentAv").value & "|" & _

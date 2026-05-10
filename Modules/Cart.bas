@@ -21,7 +21,9 @@ Attribute VB_Name = "Cart"
 '     - Run GenerateReplayPlan to build timed plan on Sequence sheet
 '
 '   Replay (4pm onwards):
-'     - Sequence module calls RunCartReplay which reads Sequence sheet
+'     - Sequence module calls StartCartReplay which reads Sequence sheet
+'       and steps through it via OnTime-driven RunCartReplayStep calls
+'       (see "Replay plan execution" section in Sequence.bas).
 ' ============================================================
 
 Option Explicit
@@ -68,7 +70,7 @@ Public Sub GetCartLog()
     End If
     
     Dim nextRow As Long
-    nextRow = ws.Cells(ws.Rows.count, 1).End(xlUp).row + 1
+    nextRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).row + 1
     
     Dim lines() As String
     lines = Split(response, Chr(10))
@@ -140,7 +142,7 @@ Public Sub ProcessCartLog()
     Set ws = Sheets("CartLog")
     
     Dim lastRow As Long
-    lastRow = ws.Cells(ws.Rows.count, 1).End(xlUp).row
+    lastRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).row
     
     If lastRow < 2 Then
         MsgBox "CartLog sheet is empty — retrieve log first.", vbExclamation
@@ -235,7 +237,7 @@ Public Sub GenerateReplayPlan()
     Set wsDst = Sheets("Sequence")
     
     Dim lastRow As Long
-    lastRow = wsSrc.Cells(wsSrc.Rows.count, 1).End(xlUp).row
+    lastRow = wsSrc.Cells(wsSrc.Rows.Count, 1).End(xlUp).row
     
     If lastRow < 2 Then
         MsgBox "CartLog is empty.", vbExclamation
@@ -398,7 +400,7 @@ Public Sub GetGimbalLogToSheet()
     End If
     
     Dim nextRow As Long
-    nextRow = ws.Cells(ws.Rows.count, 1).End(xlUp).row + 1
+    nextRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).row + 1
     
     Dim lines() As String
     lines = Split(response, Chr(10))
@@ -472,7 +474,7 @@ Public Sub CartLogSummary()
     Set ws = Sheets("CartLog")
     
     Dim lastRow As Long
-    lastRow = ws.Cells(ws.Rows.count, 1).End(xlUp).row
+    lastRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).row
     
     If lastRow < 2 Then
         MsgBox "CartLog is empty.", vbInformation

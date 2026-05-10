@@ -2,23 +2,53 @@ Attribute VB_Name = "Sequence"
 ' ============================================================
 ' HyperLapse Cart — Sequence Control Module
 '
-' Main shoot control loop. Manages all phases of the shoot:
+' PURPOSE
+'   Orchestrates the unattended overnight shoot. From 4pm one afternoon
+'   through to the following morning, this module drives the camera and
+'   gimbal through 5 phases that span daytime → sunset → astronomical
+'   night → sunrise → daytime, automatically adjusting shutter speed,
+'   ISO, and gimbal pointing as conditions change.
+'
+'   This module owns the master timing loop (SequenceLoop) and decides
+'   "what should happen now"; it delegates the "how" to:
+'     - Camera.bas — CCAPI calls to the Canon R3
+'     - Gimbal.bas — HTTP calls to the Arduino driving the DJI RS4 Pro
+'     - Astro.bas  — sun and Milky Way angle calculations
+'     - Utils.bas  — shared timing, JSON, and Arduino cart helpers
+'
+' PHASES
 '   Phase 1  — Daytime (cart moving, 1/5000 ISO100)
-'   Phase 2a — Sunset transition (shutter slows 1/5000→20s)
-'   Phase 2b — ISO ramp (ISO 100→1600, luminance controlled)
+'   Phase 2a — Sunset transition (shutter slows 1/5000 → 20s)
+'   Phase 2b — ISO ramp (ISO 100 → 1600, luminance controlled)
 '   Phase 3  — Full night (20s ISO1600, gimbal tracks Milky Way)
-'   Phase 4a — Pre-sunrise ISO reverse (ISO 1600→100)
-'   Phase 4b — Shutter reverse (20s→1/5000)
+'   Phase 4a — Pre-sunrise ISO reverse (ISO 1600 → 100)
+'   Phase 4b — Shutter reverse (20s → 1/5000)
 '   Phase 5  — Daytime again
 '
-' USAGE:
+' USAGE
 '   1. Set location, IPs and cart heading on Settings sheet
 '   2. Run InitShoot to fetch sunset/sunrise times and init camera
 '   3. Run StartSequence at 4pm — runs unattended until morning
 '   4. Run StopSequence to halt at any time
 '
-' The loop fires on Application.OnTime at each interval.
-' All camera and gimbal commands are non-blocking.
+' ARCHITECTURE
+'   The loop is non-blocking. SequenceLoop is invoked via Application.OnTime
+'   at each desired shot interval. Inside one invocation we:
+'     - update Monitor sheet and Arduino heartbeat
+'     - detect phase transitions (OnPhaseEnter — Bug 3 fix, May 2026)
+'     - check the camera is safe to talk to (WaitForCamera — Bug 1 fix)
+'     - run the active phase handler, which sets g_nextShotTime
+'     - reschedule ourselves for g_nextShotTime
+'   Excel never blocks; the workbook stays interactive between shots.
+'
+' RECENT FIXES (May 2026)
+'   Bug 1 — WaitForCamera is now a function; callers gate on its return.
+'   Bug 2 — StopSequence cancels using g_scheduledTime (the exact value
+'           given to OnTime), not g_nextShotTime which can drift.
+'   Bug 3 — Phase-entry hook OnPhaseEnter wires the GimbalTo* transitions
+'           into the loop (they were previously orphaned).
+'   Bug 5 — RunCartReplay split into StartCartReplay + RunCartReplayStep
+'           with OnTime-driven scheduling (no longer blocks Excel).
 ' ============================================================
 
 Option Explicit
@@ -26,7 +56,11 @@ Option Explicit
 ' ── Sequence state ───────────────────────────────────────────
 Private g_running       As Boolean
 Private g_lastShotTime  As Date
-Private g_nextShotTime  As Date
+Private g_nextShotTime  As Date     ' the time the NEXT loop wants to fire
+Private g_scheduledTime As Date     ' the time actually passed to OnTime (must match
+                                    ' exactly when cancelling — see StopSequence)
+Private g_lastPhase     As Integer  ' previous phase, for phase-change detection
+Private g_replayRow     As Long     ' next row to execute in cart replay (Bug 5 fix)
 
 ' Phase 2a shutter transition table
 ' Each entry: [shutter_string, seconds_value]
@@ -120,6 +154,7 @@ Public Sub StartSequence()
     g_running = True
     g_lastShotTime = Now()
     g_nextShotTime = Now()
+    g_lastPhase = 0          ' 0 ≠ any real phase, so first loop fires OnPhaseEnter
     
     Sheets("Settings").Range("dataSequenceRunning").value = "RUNNING"
     LogEvent "SEQ", "=== Sequence STARTED ==="
@@ -128,21 +163,39 @@ Public Sub StartSequence()
     SequenceLoop
 End Sub
 
+' Stop the running sequence.
+' BUG 2 FIX: Application.OnTime cancellation requires the EXACT same time value
+' that was passed when the call was scheduled. We must therefore track that
+' value in g_scheduledTime — g_nextShotTime can be mutated by phase handlers
+' or WaitForCamera between schedule and cancel, breaking the cancel.
 Public Sub StopSequence()
     g_running = False
     Sheets("Settings").Range("dataSequenceRunning").value = "STOPPED"
     LogEvent "SEQ", "=== Sequence STOPPED ==="
     
-    ' Cancel any pending OnTime call
-    On Error Resume Next
-    Application.OnTime g_nextShotTime, "SequenceLoop", , False
-    On Error GoTo 0
+    ' Cancel the pending OnTime using the exact scheduled time.
+    ' If no call is pending or the time has passed, this throws — swallow it.
+    If g_scheduledTime <> 0 Then
+        On Error Resume Next
+        Application.OnTime g_scheduledTime, "SequenceLoop", , False
+        On Error GoTo 0
+    End If
 End Sub
 
 ' ============================================================
 ' Main loop — fires at each shot interval
 ' ============================================================
 
+' Main loop — fires once per shot interval via Application.OnTime.
+'
+' Each iteration:
+'   1. Polls Arduino status, updates Monitor sheet, sends gimbal heartbeat.
+'   2. Detects phase transitions and runs OnPhaseEnter once per change
+'      (BUG 3 FIX — previously the GimbalToSunset/MilkyWay/Sunrise transitions
+'      were defined but never called from anywhere).
+'   3. Dispatches to the active phase handler.
+'   4. Reschedules itself for g_nextShotTime — which the phase handler
+'      (or WaitForCamera, Bug 1) has set to the desired next firing time.
 Public Sub SequenceLoop()
     If Not g_running Then Exit Sub
     
@@ -154,6 +207,14 @@ Public Sub SequenceLoop()
     UpdateMonitor
     GimbalHeartbeat
     
+    ' BUG 3 FIX: detect phase transitions and run entry hook once per change.
+    ' g_lastPhase is reset to 0 in StartSequence so the first loop always fires
+    ' the entry hook for whatever phase we're starting in.
+    If phase <> g_lastPhase Then
+        OnPhaseEnter phase
+        g_lastPhase = phase
+    End If
+    
     ' Execute current phase logic
     Select Case phase
         Case 1:  RunPhase1
@@ -164,10 +225,28 @@ Public Sub SequenceLoop()
         Case 5:  RunPhase5
     End Select
     
-    ' Schedule next loop at next shot time
+    ' Schedule next loop. Capture g_scheduledTime so StopSequence can cancel it.
     If g_running Then
-        Application.OnTime g_nextShotTime, "SequenceLoop"
+        g_scheduledTime = g_nextShotTime
+        Application.OnTime g_scheduledTime, "SequenceLoop"
     End If
+End Sub
+
+' Phase-entry hook — fires once when the active phase number changes.
+' Position the gimbal for the upcoming phase and log the transition.
+' BUG 3 FIX — wires the previously-orphaned GimbalTo* subs into the loop.
+Private Sub OnPhaseEnter(ByVal newPhase As Integer)
+    LogEvent "SEQ", "=== Entering " & PhaseLabel(newPhase) & " ==="
+    Select Case newPhase
+        Case 22                       ' Phase 2a — point at the setting sun
+            GimbalToSunset
+        Case 3                        ' Phase 3 — track the Milky Way galactic centre
+            GimbalToMilkyWay
+        Case 4                        ' Phase 4 — point at where the sun will rise
+            GimbalToSunrise
+        ' Phases 1, 23, and 5 don't need a gimbal repoint — they inherit
+        ' the position set by the preceding entry.
+    End Select
 End Sub
 
 ' ============================================================
@@ -225,10 +304,12 @@ Private Sub RunPhase2a()
     If Range("dataCurrentISO").value <> "100" Then SetISO "100"
     
     ' Take photo
-    ' Wait until camera is safe to query (exposure + write buffer)
+    ' Wait until camera is safe to query (exposure + write buffer).
+    ' If not safe, WaitForCamera has already pushed g_nextShotTime out;
+    ' bail out and let SequenceLoop reschedule us.
     Dim shutterSecs As Double
     shutterSecs = TvToSeconds(targetTv)
-    WaitForCamera shutterSecs
+    If Not WaitForCamera(shutterSecs) Then Exit Sub
     
     TakePhoto
     g_lastShotTime = Now()
@@ -247,8 +328,9 @@ Private Sub RunPhase2b()
     ' Ensure shutter is at 20s
     If Range("dataCurrentTv").value <> "20" Then SetShutterSpeed "20"
     
-    ' Wait for camera to finish exposure before any CCAPI queries
-    WaitForCamera 20#
+    ' Wait for camera to finish exposure before any CCAPI queries.
+    ' If not safe, bail and let SequenceLoop reschedule.
+    If Not WaitForCamera(20#) Then Exit Sub
     
     ' Get luminance of last shot and adjust ISO if needed
     AdjustExposureByLuminance
@@ -271,8 +353,8 @@ Private Sub RunPhase3()
     If Range("dataCurrentTv").value <> "20" Then SetShutterSpeed "20"
     If Range("dataCurrentISO").value <> "1600" Then SetISO "1600"
     
-    ' Wait for camera
-    WaitForCamera 20#
+    ' Wait for camera. Bail if previous 20s exposure isn't done yet.
+    If Not WaitForCamera(20#) Then Exit Sub
     
     ' Update gimbal to track galactic centre
     Dim cartHeading As Double
@@ -323,7 +405,7 @@ Private Sub RunPhase4a()
     ' Shutter fixed at 20s
     If Range("dataCurrentTv").value <> "20" Then SetShutterSpeed "20"
     
-    WaitForCamera 20#
+    If Not WaitForCamera(20#) Then Exit Sub
     
     ' Use luminance to step ISO down (same as 2b but in reverse)
     ' Luminance will be higher as dawn approaches — ISO will step down naturally
@@ -370,7 +452,7 @@ Private Sub RunPhase4b()
     
     Dim shutterSecs As Double
     shutterSecs = TvToSeconds(targetTv)
-    WaitForCamera shutterSecs
+    If Not WaitForCamera(shutterSecs) Then Exit Sub
     
     TakePhoto
     g_lastShotTime = Now()
@@ -399,24 +481,35 @@ End Sub
 ' Camera timing safety
 ' ============================================================
 
-' Wait until it is safe to send CCAPI commands to camera
-' Safe = after exposure has finished + write buffer
-' Does NOT use Application.Wait (would block Excel)
-' Instead returns immediately and reschedules if not ready
-Private Sub WaitForCamera(ByVal exposureSecs As Double)
-    Dim writeBuffer As Double
-    writeBuffer = 2#   ' seconds for card write
+' Returns True when it is safe to send CCAPI commands to the camera, i.e.
+'   now() >= last_shot_time + exposure_seconds + write_buffer
+' Returns False if not yet safe — and as a side effect pushes g_nextShotTime
+' out to the safe time so SequenceLoop's tail will reschedule us correctly.
+'
+' BUG 1 FIX: this used to be a Sub that mutated g_nextShotTime but had no way
+' to tell the caller the camera wasn't ready. Callers ran TakePhoto regardless,
+' triggering the shutter mid-write and producing 503 Device Busy errors and
+' lost frames during long exposures. Now phase handlers MUST gate on the
+' return value:
+'
+'     If Not WaitForCamera(20#) Then Exit Sub
+'
+' SequenceLoop's reschedule tail then fires us again at the safe time.
+Private Function WaitForCamera(ByVal exposureSecs As Double) As Boolean
+    Const WRITE_BUFFER As Double = 2#   ' seconds for SD card write to finish
     
     Dim safeTime As Date
-    safeTime = g_lastShotTime + ((exposureSecs + writeBuffer) / 86400#)
+    safeTime = g_lastShotTime + ((exposureSecs + WRITE_BUFFER) / 86400#)
     
     If Now() < safeTime Then
-        ' Not safe yet — reschedule loop for safe time
+        ' Not safe — push next loop out to the safe time and tell the caller
+        ' to bail out of this iteration.
         g_nextShotTime = safeTime
-        ' Yield and let OnTime handle it
-        DoEvents
+        WaitForCamera = False
+    Else
+        WaitForCamera = True
     End If
-End Sub
+End Function
 
 ' ============================================================
 ' Gimbal transition helpers
@@ -472,63 +565,101 @@ End Sub
 
 ' ============================================================
 ' Replay plan execution (from CartLog post-processing)
+'
+' Plans live on the "Sequence" sheet, columns:
+'   A: Time (when to execute)
+'   B: Action (SPEED / STEER / STOP / DECAY / HOME / GIMBAL)
+'   C: Value (m/hr, degrees, "yaw,pitch", etc.)
+'   D: Duration (currently unused)
+'
+' These plans are produced by post-processing the high-speed Arduino
+' CartLog and GimbalLog into a slow-time replay schedule that the cart
+' will execute during the actual shoot. See the "future work" note in
+' Gimbal.bas for the planned playback pipeline.
 ' ============================================================
 
-' Execute the cart replay plan from the Sequence sheet
-' Each row: Time | Action | Value | Duration
-Public Sub RunCartReplay()
+' Start a cart replay. Schedules itself row-by-row via Application.OnTime
+' so Excel stays responsive and SequenceLoop can interleave with photos.
+'
+' BUG 5 FIX: this used to be a single Sub with Do/While/Application.Wait that
+' blocked Excel for the entire duration of the plan. SequenceLoop's OnTime
+' calls would queue but couldn't fire, so photos were late. Now each row is
+' an independent OnTime-driven step; the plan runs concurrently with the
+' photo loop without blocking either one.
+Public Sub StartCartReplay()
+    g_replayRow = 2  ' row 1 = headers
+    LogEvent "CART", "=== Cart replay started ==="
+    RunCartReplayStep
+End Sub
+
+' Stop a running cart replay. Cancels any pending OnTime step.
+Public Sub StopCartReplay()
+    g_replayRow = 0
+    On Error Resume Next
+    Application.OnTime Now() + (1# / 86400#), "RunCartReplayStep", , False
+    On Error GoTo 0
+    LogEvent "CART", "=== Cart replay stopped ==="
+End Sub
+
+' Execute the current replay row, then schedule the next one.
+' Public so Application.OnTime can find it.
+Public Sub RunCartReplayStep()
+    If g_replayRow < 2 Then Exit Sub      ' replay was stopped
+    
     Dim ws As Worksheet
     Set ws = Sheets("Sequence")
     
     Dim lastRow As Long
-    lastRow = ws.Cells(ws.Rows.count, 1).End(xlUp).row
+    lastRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).row
+    If g_replayRow > lastRow Then
+        g_replayRow = 0
+        LogEvent "CART", "=== Cart replay complete ==="
+        Exit Sub
+    End If
     
-    LogEvent "CART", "=== Cart replay started ==="
+    Dim replayTime As Date
+    Dim action     As String
+    Dim value      As Double
     
-    Dim i As Long
-    For i = 2 To lastRow  ' Row 1 = headers
-        Dim replayTime As Date
-        Dim action     As String
-        Dim value      As Double
-        
-        replayTime = ws.Cells(i, 1).value
-        action = Trim(ws.Cells(i, 2).value)
-        value = ws.Cells(i, 3).value
-        
-        ' Wait until replay time
-        Do While Now() < replayTime And g_running
-            DoEvents
-            Application.Wait Now() + (1# / 86400#)
-        Loop
-        
-        If Not g_running Then Exit For
-        
-        ' Execute action
-        Select Case UCase(action)
-            Case "SPEED"
-                CartSetSpeed value
-            Case "STEER"
-                CartSetSteering CInt(value)
-            Case "STOP"
-                CartStop
-            Case "DECAY"
-                CartDecay
-            Case "HOME"
-                GimbalHome
-            Case "GIMBAL"
-                ' Format: "yaw,pitch" in value column
-                Dim parts() As String
-                parts = Split(CStr(ws.Cells(i, 3).value), ",")
-                If UBound(parts) >= 1 Then
-                    GimbalPosition CDbl(parts(0)), 0#, CDbl(parts(1)), 5#
-                End If
-        End Select
-        
-        LogEvent "CART", "Replay: " & Format(replayTime, "HH:nn:ss") & _
-                 " " & action & "=" & value
-    Next i
+    replayTime = ws.Cells(g_replayRow, 1).value
+    action = Trim(ws.Cells(g_replayRow, 2).value)
+    value = ws.Cells(g_replayRow, 3).value
     
-    LogEvent "CART", "=== Cart replay complete ==="
+    ' If the row's time hasn't arrived yet, reschedule ourselves for that
+    ' time and bail. SequenceLoop is free to fire in the gap.
+    If Now() < replayTime Then
+        Application.OnTime replayTime, "RunCartReplayStep"
+        Exit Sub
+    End If
+    
+    ' Time is reached — execute the action.
+    Select Case UCase(action)
+        Case "SPEED"
+            CartSetSpeed value
+        Case "STEER"
+            CartSetSteering CInt(value)
+        Case "STOP"
+            CartStop
+        Case "DECAY"
+            CartDecay
+        Case "HOME"
+            GimbalHome
+        Case "GIMBAL"
+            ' Format: "yaw,pitch" in value column
+            Dim parts() As String
+            parts = Split(CStr(ws.Cells(g_replayRow, 3).value), ",")
+            If UBound(parts) >= 1 Then
+                GimbalPosition CDbl(parts(0)), 0#, CDbl(parts(1)), 5#
+            End If
+    End Select
+    
+    LogEvent "CART", "Replay: " & Format(replayTime, "HH:nn:ss") & _
+             " " & action & "=" & value
+    
+    ' Advance and schedule the next step immediately — RunCartReplayStep
+    ' will defer itself if that row's time hasn't arrived.
+    g_replayRow = g_replayRow + 1
+    Application.OnTime Now() + (1# / 86400#), "RunCartReplayStep"
 End Sub
 
 ' ============================================================

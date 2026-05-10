@@ -1,10 +1,36 @@
 Attribute VB_Name = "Camera"
 ' ============================================================
-' Canon R3 CCAPI — Camera Control Module
-' Camera IP:   set in Settings sheet named range dataCameraIP
-' Arduino IP:  set in Settings sheet named range dataArduinoIP
-' All endpoints confirmed from CCAPI Reference v1.4.0
-' ParseJsonField and LogEvent are in Module_Utils
+' HyperLapse Cart — Camera Control Module
+'
+' PURPOSE
+'   All Canon R3 camera control over Wi-Fi via the CCAPI. Provides:
+'     - Core HTTP helpers (CameraGet / CameraPut / CameraPost) with
+'       error handling and retry-on-busy (see Bug 7 below)
+'     - Setting wrappers (mode, aperture, shutter, ISO) that update
+'       both the camera and the matching named ranges on Settings
+'     - TakePhoto — the only call that should ever fire the shutter
+'     - Phase 2b/4a luminance feedback loop:
+'         GetLastThumbnailLuminance reads the most recent JPG thumbnail
+'         from the camera and pipes it through luminance.py to compute
+'         a 0–255 brightness value; AdjustExposureByLuminance steps ISO
+'         up or down to keep the frame within a target band.
+'     - Arduino display helpers (UpdateArduinoDisplay, SendHeartbeat)
+'   Camera IP and Arduino IP are read from named ranges on Settings.
+'
+' PROTOCOL NOTES
+'   All endpoints confirmed against Canon CCAPI Reference v1.4.0.
+'   The R3 returns 503 Device Busy any time the shutter is open or the
+'   SD card is still being written. Phase 3 fires 20s exposures all
+'   night, so retry-on-503 is essential — see Bug 7 fix in CameraPut.
+'
+' DEPENDENCIES
+'   ParseJsonField and LogEvent are in Utils.bas
+'   luminance.py is expected at %USERPROFILE%\Documents\luminance.py
+'
+' RECENT FIXES (May 2026)
+'   Bug 7 — CameraPut now retries up to 5 times with growing backoff
+'           on 503, instead of a single 3s retry that couldn''t cover
+'           a 20s Phase 3 exposure.
 ' ============================================================
 
 Option Explicit
@@ -57,31 +83,65 @@ ErrHandler:
     CameraGet = ""
 End Function
 
+' Send a JSON PUT to the camera CCAPI.
+'
+' BUG 7 FIX: 503 Device Busy is common during long exposures (Phase 3 fires
+' 20 second exposures all night). The camera will reject any setting change
+' that lands while the shutter is open or the SD card is still being written.
+' We now retry up to MAX_BUSY_RETRIES times with growing backoff, instead of
+' giving up after a single 3-second retry — which was never enough to cover
+' a 20s Phase 3 exposure.
 Public Function CameraPut(ByVal endpoint As String, ByVal jsonBody As String) As Boolean
+    Const MAX_BUSY_RETRIES As Integer = 5
+    Const INITIAL_BACKOFF_SECS As Double = 3#
+    
     On Error GoTo ErrHandler
     Dim http As Object
     Set http = CreateObject("WinHttp.WinHttpRequest.5.1")
-    http.Open "PUT", CAMERA_IP() & endpoint, False
-    http.SetRequestHeader "Content-Type", "application/json"
-    http.Send jsonBody
-    Select Case http.Status
-        Case HTTP_OK
-            CameraPut = True
-        Case HTTP_DEVICE_BUSY
-            LogEvent "CAMERA", "PUT " & endpoint & " - Device busy, retrying"
-            Application.Wait Now + TimeValue("00:00:03")
-            http.Open "PUT", CAMERA_IP() & endpoint, False
-            http.SetRequestHeader "Content-Type", "application/json"
-            http.Send jsonBody
-            CameraPut = (http.Status = HTTP_OK)
-            If Not CameraPut Then LogEvent "CAMERA", "PUT retry failed: " & http.Status
-        Case HTTP_BAD_REQUEST
-            LogEvent "CAMERA", "PUT " & endpoint & " - Invalid param. Body: " & jsonBody
-            CameraPut = False
-        Case Else
-            LogEvent "CAMERA", "PUT " & endpoint & " - HTTP " & http.Status
-            CameraPut = False
-    End Select
+    
+    Dim attempt   As Integer
+    Dim backoff   As Double
+    backoff = INITIAL_BACKOFF_SECS
+    
+    For attempt = 0 To MAX_BUSY_RETRIES
+        http.Open "PUT", CAMERA_IP() & endpoint, False
+        http.SetRequestHeader "Content-Type", "application/json"
+        http.Send jsonBody
+        
+        Select Case http.Status
+            Case HTTP_OK
+                CameraPut = True
+                Set http = Nothing
+                Exit Function
+            Case HTTP_DEVICE_BUSY
+                If attempt < MAX_BUSY_RETRIES Then
+                    LogEvent "CAMERA", "PUT " & endpoint & " - 503 busy, retry " & _
+                             (attempt + 1) & "/" & MAX_BUSY_RETRIES & _
+                             " in " & backoff & "s"
+                    Application.Wait Now + (backoff / 86400#)
+                    backoff = backoff * 1.5   ' gentle exponential backoff
+                Else
+                    LogEvent "CAMERA", "PUT " & endpoint & " - 503 after " & _
+                             MAX_BUSY_RETRIES & " retries, giving up"
+                    CameraPut = False
+                    Set http = Nothing
+                    Exit Function
+                End If
+            Case HTTP_BAD_REQUEST
+                LogEvent "CAMERA", "PUT " & endpoint & " - Invalid param. Body: " & jsonBody
+                CameraPut = False
+                Set http = Nothing
+                Exit Function
+            Case Else
+                LogEvent "CAMERA", "PUT " & endpoint & " - HTTP " & http.Status
+                CameraPut = False
+                Set http = Nothing
+                Exit Function
+        End Select
+    Next attempt
+    
+    ' Should be unreachable, but be safe
+    CameraPut = False
     Set http = Nothing
     Exit Function
 ErrHandler:

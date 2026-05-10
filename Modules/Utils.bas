@@ -1,14 +1,33 @@
 Attribute VB_Name = "Utils"
 ' ============================================================
 ' HyperLapse Cart — Utility Module
-' Shared helpers used by all other modules:
-'   - Sunrise/sunset time lookup (sunrise-sunset.org API)
-'   - Phase timing calculations
-'   - Interval calculation from shutter speed
-'   - Shutter speed string to seconds conversion
-'   - Seconds to shutter speed string conversion
-'   - Monitor sheet update
-'   - Arduino cart control helpers
+'
+' PURPOSE
+'   Shared helpers used by every other module. Roughly grouped:
+'
+'   ASTRONOMICAL TIMING
+'     GetSunsetTime / GetSunriseTime — fetch from sunrise-sunset.org
+'       and populate Settings named ranges (sunset, sunrise, civil dusk,
+'       nautical dusk, astronomical dusk). One API call populates all.
+'     CalculatePhaseTimes — convert sunset/sunrise into the 7 phase
+'       boundary timestamps used by SequenceLoop.
+'     GetCurrentPhase / PhaseLabel — runtime "what phase are we in?"
+'
+'   SHUTTER MATH
+'     TvToSeconds / SecondsToTv — convert between CCAPI shutter strings
+'       ("1/5000", "0.3", "20") and floating-point seconds.
+'     CalcInterval — minimum safe interval between shots given a shutter.
+'
+'   CART ACTION HELPERS (called from Sequence.RunCartReplayStep)
+'     CartButton, CartSetSpeed, CartSetSteering, CartStop, CartDecay
+'     PollCartLog / StartCartLogPolling / StopCartLogPolling — pull the
+'       Arduino''s high-speed cart event log into the CartLog sheet for
+'       later post-processing into a replay plan.
+'
+'   SHARED PLUMBING
+'     UpdateMonitor — refreshes the Monitor sheet from named ranges.
+'     ParseJsonField — minimal JSON value extractor (used by Camera too).
+'     LogEvent — append to the Log sheet. Called by every module.
 ' ============================================================
 
 Option Explicit
@@ -461,7 +480,7 @@ Public Sub PollCartLog()
     Dim ws As Worksheet
     Set ws = Sheets("CartLog")
     Dim nextRow As Long
-    nextRow = ws.Cells(ws.Rows.count, 1).End(xlUp).row + 1
+    nextRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).row + 1
     
     Dim lines() As String
     lines = Split(response, Chr(10))
@@ -547,7 +566,7 @@ Public Sub LogEvent(ByVal category As String, ByVal message As String)
     Dim ws As Worksheet
     Set ws = Sheets("Log")
     Dim nextRow As Long
-    nextRow = ws.Cells(ws.Rows.count, 1).End(xlUp).row + 1
+    nextRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).row + 1
     ws.Cells(nextRow, 1).value = Format(Now(), "YYYY-MM-DD HH:nn:ss")
     ws.Cells(nextRow, 2).value = category
     ws.Cells(nextRow, 3).value = message
