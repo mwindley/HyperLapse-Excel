@@ -157,64 +157,221 @@ End Function
 
 ' ============================================================
 ' Shutter speed conversions
+'
+' BUG FIX (May 2026, session 2):
+'   The R3's CCAPI uses Canon's display-format strings for shutter
+'   values, not plain decimals. Sub-second exposures use "1/N" (e.g.
+'   "1/5000") — that part was always correct. But >= 0.3 second
+'   exposures use Canon's seconds-symbol notation, with a literal
+'   double-quote standing for "seconds":
+'
+'       0.3 sec  ->  "0\"3"     (i.e. the 5-character string  0 " 3)
+'       0.5 sec  ->  "0\"5"
+'       1.0 sec  ->  "1\""
+'       1.6 sec  ->  "1\"6"
+'       4.0 sec  ->  "4\""
+'       20  sec  ->  "20\""
+'
+'   Our previous code sent decimals like "0.5" and "20", which the
+'   camera silently rejected with HTTP 400 Invalid Param. The shutter
+'   stayed at the last accepted value (typically 1/6) all night, so
+'   Phases 2b, 3, 4a all ran with wildly wrong exposure.
+'
+' APPROACH:
+'   Rather than hard-code the format (fragile across Canon bodies),
+'   query /ccapi/ver100/shooting/settings/tv at startup, parse the
+'   "ability" array, and build a lookup. The R3 reports its full
+'   accepted shutter list there — anything in that list is guaranteed
+'   to work. InitTvLookup is called once from InitShoot. After that,
+'   SecondsToTv picks the closest entry; TvToSeconds parses Canon's
+'   format back to a Double for math.
 ' ============================================================
 
-' Convert shutter speed string to seconds as Double
-' "1/5000" -> 0.0002,  "1/100" -> 0.01,  "1" -> 1.0,  "20" -> 20.0
-Public Function TvToSeconds(ByVal tvStr As String) As Double
-    On Error GoTo ErrHandler
-    tvStr = Trim(tvStr)
-    If InStr(tvStr, "/") > 0 Then
-        ' Fractional — e.g. "1/5000"
-        Dim parts() As String
-        parts = Split(tvStr, "/")
-        TvToSeconds = CDbl(parts(0)) / CDbl(parts(1))
-    Else
-        ' Whole seconds — e.g. "20"
-        TvToSeconds = CDbl(tvStr)
-    End If
-    Exit Function
-ErrHandler:
-    LogEvent "UTILS", "TvToSeconds error: [" & tvStr & "] " & Err.Description
-    TvToSeconds = 0
-End Function
+' Module-level cache, populated by InitTvLookup
+Private g_tvStrings()  As String   ' Canon-format strings, in camera's reported order
+Private g_tvSeconds()  As Double   ' parallel array of float seconds for each
+Private g_tvCount      As Long     ' number of valid entries
+Private g_tvLoaded     As Boolean
 
-' Convert seconds to nearest CCAPI TV string
-' 0.0002 -> "1/5000",  0.01 -> "1/100",  1.0 -> "1",  20.0 -> "20"
-Public Function SecondsToTv(ByVal secs As Double) As String
-    ' Full list of valid TV values for R3 in Manual mode
-    Dim tvValues As Variant
-    tvValues = Array("1/8000", "1/6400", "1/5000", "1/4000", "1/3200", _
-                     "1/2500", "1/2000", "1/1600", "1/1250", "1/1000", _
-                     "1/800", "1/640", "1/500", "1/400", "1/320", _
-                     "1/250", "1/200", "1/160", "1/125", "1/100", _
-                     "1/80", "1/60", "1/50", "1/40", "1/30", _
-                     "1/25", "1/20", "1/15", "1/13", "1/10", _
-                     "1/8", "1/6", "1/5", "1/4", "0.3", _
-                     "0.4", "0.5", "0.6", "0.8", "1", _
-                     "1.3", "1.6", "2", "2.5", "3", _
-                     "4", "5", "6", "8", "10", _
-                     "13", "15", "20", "25", "30")
+' Populate the Tv lookup from the camera. Call once from InitShoot,
+' before any photo is taken. Falls back to a hard-coded list if the
+' camera is unreachable, so the workbook still opens cleanly offline.
+Public Sub InitTvLookup()
+    On Error GoTo Fallback
     
-    ' Find closest match
-    Dim bestMatch  As String
-    Dim bestDelta  As Double
-    bestDelta = 999999
-    bestMatch = "1/5000"
+    Dim resp As String
+    resp = CameraGet("/ccapi/ver100/shooting/settings/tv")
+    If LenB(resp) = 0 Then GoTo Fallback
     
-    Dim i As Integer
-    For i = 0 To UBound(tvValues)
-        Dim tvSecs As Double
-        tvSecs = TvToSeconds(CStr(tvValues(i)))
-        Dim delta As Double
-        delta = Abs(tvSecs - secs)
-        If delta < bestDelta Then
-            bestDelta = delta
-            bestMatch = CStr(tvValues(i))
+    ' Find the ability array: ..."ability":[ ... ]
+    Dim openPos As Long, closePos As Long
+    openPos = InStr(resp, """ability"":[")
+    If openPos = 0 Then GoTo Fallback
+    openPos = openPos + Len("""ability"":[")
+    closePos = InStr(openPos, resp, "]")
+    If closePos = 0 Then GoTo Fallback
+    
+    Dim arr As String
+    arr = Mid$(resp, openPos, closePos - openPos)
+    
+    ' Each item in the array looks like  "1\/5000"  or  "20\""  or  "0\"5".
+    ' Strategy: split on commas FIRST, then process each item:
+    '   1. Trim whitespace
+    '   2. Strip the outer wrapping quotes (the first and last char of each item
+    '      are JSON's wrapping quotes, after Trim)
+    '   3. Decode the JSON escapes (\/ -> /, \" -> ")
+    ' This order matters — if we decode \" before stripping the wrappers, we
+    ' lose track of which " is structural and which is the seconds symbol.
+    Dim items() As String
+    items = Split(arr, ",")
+    
+    ReDim g_tvStrings(0 To UBound(items))
+    ReDim g_tvSeconds(0 To UBound(items))
+    
+    Dim i As Long, n As Long
+    n = 0
+    For i = 0 To UBound(items)
+        Dim s As String
+        s = Trim$(items(i))
+        
+        ' Strip exactly one wrapping quote pair, if present
+        If Len(s) >= 2 And Left$(s, 1) = Chr(34) And Right$(s, 1) = Chr(34) Then
+            s = Mid$(s, 2, Len(s) - 2)
+        End If
+        
+        ' Now decode JSON escapes inside the value
+        s = Replace(s, "\/", "/")
+        s = Replace(s, "\""", Chr(34))   ' \" -> "
+        
+        If LenB(s) > 0 And LCase$(s) <> "bulb" Then
+            g_tvStrings(n) = s
+            g_tvSeconds(n) = ParseCanonTv(s)
+            n = n + 1
         End If
     Next i
     
-    SecondsToTv = bestMatch
+    If n = 0 Then GoTo Fallback
+    
+    g_tvCount = n
+    ReDim Preserve g_tvStrings(0 To n - 1)
+    ReDim Preserve g_tvSeconds(0 To n - 1)
+    g_tvLoaded = True
+    
+    LogEvent "UTILS", "Tv lookup populated from camera: " & n & " values"
+    Exit Sub
+    
+Fallback:
+    ' Camera unreachable or unparseable response — fall back to the
+    ' hard-coded R3 list verified May 2026.
+    BuildTvLookupFallback
+    LogEvent "UTILS", "Tv lookup fallback used (" & g_tvCount & " values)"
+End Sub
+
+' Hard-coded R3 ability list captured 10 May 2026 from a real camera.
+' Used only when the live query fails.
+Private Sub BuildTvLookupFallback()
+    Dim raw As Variant
+    raw = Array( _
+        "30""", "25""", "20""", "15""", "13""", "10""", "8""", "6""", _
+        "5""", "4""", "3""2", "2""5", "2""", "1""6", "1""3", "1""", _
+        "0""8", "0""6", "0""5", "0""4", "0""3", _
+        "1/4", "1/5", "1/6", "1/8", "1/10", "1/13", "1/15", "1/20", _
+        "1/25", "1/30", "1/40", "1/50", "1/60", "1/80", "1/100", _
+        "1/125", "1/160", "1/200", "1/250", "1/320", "1/400", "1/500", _
+        "1/640", "1/800", "1/1000", "1/1250", "1/1600", "1/2000", _
+        "1/2500", "1/3200", "1/4000", "1/5000", "1/6400", "1/8000", _
+        "1/10000", "1/12800", "1/16000", "1/32000", "1/64000")
+    
+    Dim n As Long
+    n = UBound(raw) - LBound(raw) + 1
+    ReDim g_tvStrings(0 To n - 1)
+    ReDim g_tvSeconds(0 To n - 1)
+    
+    Dim i As Long
+    For i = 0 To n - 1
+        g_tvStrings(i) = CStr(raw(i + LBound(raw)))
+        g_tvSeconds(i) = ParseCanonTv(g_tvStrings(i))
+    Next i
+    
+    g_tvCount = n
+    g_tvLoaded = True
+End Sub
+
+' Parse a Canon-format Tv string to seconds.
+' Handles all three forms:
+'   "1/5000"  -> 0.0002         (fractional)
+'   "20"""    -> 20.0           (whole seconds; trailing " is the symbol)
+'   "1""6"    -> 1.6            (decimal seconds; the " sits BETWEEN integer
+'                                and decimal parts, e.g. "1"6" = "1.6")
+Private Function ParseCanonTv(ByVal tvStr As String) As Double
+    On Error GoTo BadInput
+    Dim s As String
+    s = Trim$(tvStr)
+    
+    If LenB(s) = 0 Then ParseCanonTv = 0: Exit Function
+    
+    ' Fractional form
+    If InStr(s, "/") > 0 Then
+        Dim parts() As String
+        parts = Split(s, "/")
+        ParseCanonTv = CDbl(parts(0)) / CDbl(parts(1))
+        Exit Function
+    End If
+    
+    ' Canon seconds form — replace the embedded/trailing " with "."
+    ' "20""    -> "20."  -> 20.0
+    ' "1""6"   -> "1.6"  -> 1.6
+    ' "0""5"   -> "0.5"  -> 0.5
+    Dim withDot As String
+    withDot = Replace(s, Chr(34), ".")
+    
+    ' Trim trailing dot (from whole-seconds case)
+    If Right$(withDot, 1) = "." Then withDot = Left$(withDot, Len(withDot) - 1)
+    
+    ParseCanonTv = CDbl(withDot)
+    Exit Function
+    
+BadInput:
+    LogEvent "UTILS", "ParseCanonTv: bad input [" & tvStr & "] " & Err.Description
+    ParseCanonTv = 0
+End Function
+
+' Public conversion API — drop-in replacement for the previous
+' TvToSeconds. Accepts whatever Canon format the camera reported,
+' returns float seconds.
+Public Function TvToSeconds(ByVal tvStr As String) As Double
+    TvToSeconds = ParseCanonTv(tvStr)
+End Function
+
+' Public conversion API — return the Canon-format string nearest to
+' the requested exposure in seconds. Picks from the lookup populated
+' at startup. If InitTvLookup hasn't been called yet, calls it now
+' (lazy init) so callers don't need to think about ordering.
+Public Function SecondsToTv(ByVal secs As Double) As String
+    If Not g_tvLoaded Then InitTvLookup
+    
+    If g_tvCount = 0 Then
+        ' Total failure — return something the camera will at least accept
+        SecondsToTv = "1/5000"
+        Exit Function
+    End If
+    
+    Dim bestIdx   As Long
+    Dim bestDelta As Double
+    bestDelta = 1E+18
+    bestIdx = 0
+    
+    Dim i As Long
+    For i = 0 To g_tvCount - 1
+        Dim delta As Double
+        delta = Abs(g_tvSeconds(i) - secs)
+        If delta < bestDelta Then
+            bestDelta = delta
+            bestIdx = i
+        End If
+    Next i
+    
+    SecondsToTv = g_tvStrings(bestIdx)
 End Function
 
 ' ============================================================
@@ -517,8 +674,22 @@ Public Sub StopCartLogPolling()
 End Sub
 
 ' ============================================================
-' JSON helper (shared — also used by Camera module)
+' JSON helpers (shared — also used by Camera module)
 ' ============================================================
+
+' Escape a value for safe inclusion inside a JSON string literal.
+' Required for Canon's seconds-symbol Tv values (e.g. "20""" / "0""5")
+' which contain literal " characters that must be \"-escaped before
+' going into a request body.
+Public Function JsonEscape(ByVal s As String) As String
+    Dim out As String
+    out = Replace(s, "\", "\\")          ' must come first — escapes existing backslashes
+    out = Replace(out, Chr(34), "\""")   ' " -> \"
+    out = Replace(out, vbTab, "\t")
+    out = Replace(out, vbCr, "\r")
+    out = Replace(out, vbLf, "\n")
+    JsonEscape = out
+End Function
 
 ' Parse a single field value from simple JSON
 Public Function ParseJsonField(ByVal json As String, ByVal field As String) As String
@@ -561,13 +732,26 @@ End Function
 ' Logging (shared — called by all modules)
 ' ============================================================
 
+' Append a row to the Log sheet.
+'
+' Each row: timestamp | category | message.
+'
+' BUG FIX (May 2026, session 2): the timestamp was being stored as the
+' string "YYYY-MM-DD HH:nn:ss" but Excel auto-detected it as a date and
+' reformatted it according to the user's locale (e.g. "10/05/2026 11:50",
+' losing the seconds). We now force column A to text format so Excel
+' stores exactly what we write. Set once per call (cheap; Excel doesn't
+' do anything if it's already correct).
 Public Sub LogEvent(ByVal category As String, ByVal message As String)
     On Error Resume Next
     Dim ws As Worksheet
     Set ws = Sheets("Log")
+    
+    ws.Columns(1).NumberFormat = "@"   ' force text — preserve seconds
+    
     Dim nextRow As Long
     nextRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).row + 1
-    ws.Cells(nextRow, 1).value = Format(Now(), "YYYY-MM-DD HH:nn:ss")
+    ws.Cells(nextRow, 1).value = Format(Now(), "yyyy-mm-dd hh:nn:ss")
     ws.Cells(nextRow, 2).value = category
     ws.Cells(nextRow, 3).value = message
 End Sub

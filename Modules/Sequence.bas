@@ -98,10 +98,16 @@ Public Sub InitShoot()
     ' 4. Initialise camera
     InitCamera
     
-    ' 5. Build phase 2a shutter transition steps
+    ' 5. Populate Tv lookup from camera's actual ability list.
+    '    Must come AFTER InitCamera (needs HTTP working) and BEFORE
+    '    BuildPhase2aSteps (which uses SecondsToTv to build the
+    '    sunset shutter transition table).
+    InitTvLookup
+    
+    ' 6. Build phase 2a shutter transition steps
     BuildPhase2aSteps
     
-    ' 6. Update Monitor sheet
+    ' 7. Update Monitor sheet
     UpdateMonitor
     
     LogEvent "SEQ", "InitShoot complete. Sunset: " & _
@@ -113,27 +119,41 @@ Public Sub InitShoot()
            "Run StartSequence at 4:00pm.", vbInformation
 End Sub
 
-' Build the Phase 2a shutter transition steps
-' Shutter progresses from 1/5000 to 20s over ~45 minutes
-' Steps chosen to be valid CCAPI TV values
+' Build the Phase 2a shutter transition steps.
+' Shutter progresses from 1/5000 to 20s over ~45 minutes.
+'
+' BUG FIX (May 2026, session 2): the previous version contained hard-coded
+' format strings like "0.3", "0.5", "1", "20" that the camera rejected
+' with HTTP 400 Invalid Param (it wants Canon's "0\"3", "0\"5", "1\"",
+' "20\"" notation — see Utils.InitTvLookup).
+'
+' Rather than hand-typing Canon's format, we list the target exposures in
+' SECONDS and let SecondsToTv pick the closest camera-accepted string from
+' the live ability list. That makes this table firmware/body agnostic.
 Private Sub BuildPhase2aSteps()
-    g_phase2a_steps = Array( _
-        "1/5000", "1/4000", "1/3200", "1/2500", "1/2000", _
-        "1/1600", "1/1250", "1/1000", "1/800", "1/640", _
-        "1/500", "1/400", "1/320", "1/250", "1/200", _
-        "1/160", "1/125", "1/100", "1/80", "1/60", _
-        "1/50", "1/40", "1/30", "1/25", "1/20", _
-        "1/15", "1/13", "1/10", "1/8", "1/6", _
-        "1/5", "1/4", "0.3", "0.5", "0.8", _
-        "1", "1.3", "1.6", "2", "2.5", _
-        "3", "4", "5", "6", "8", _
-        "10", "13", "15", "20")
+    Dim targetSecs As Variant
+    targetSecs = Array( _
+        1 / 5000, 1 / 4000, 1 / 3200, 1 / 2500, 1 / 2000, _
+        1 / 1600, 1 / 1250, 1 / 1000, 1 / 800, 1 / 640, _
+        1 / 500, 1 / 400, 1 / 320, 1 / 250, 1 / 200, _
+        1 / 160, 1 / 125, 1 / 100, 1 / 80, 1 / 60, _
+        1 / 50, 1 / 40, 1 / 30, 1 / 25, 1 / 20, _
+        1 / 15, 1 / 13, 1 / 10, 1 / 8, 1 / 6, _
+        1 / 5, 1 / 4, 0.3, 0.5, 0.8, _
+        1#, 1.3, 1.6, 2#, 2.5, _
+        3#, 4#, 5#, 6#, 8#, _
+        10#, 13#, 15#, 20#)
+    
+    ReDim g_phase2a_steps(0 To UBound(targetSecs))
+    Dim i As Long
+    For i = 0 To UBound(targetSecs)
+        g_phase2a_steps(i) = SecondsToTv(CDbl(targetSecs(i)))
+    Next i
     
     ' Reverse for phase 4b
-    Dim n As Integer
+    Dim n As Long
     n = UBound(g_phase2a_steps)
     ReDim g_phase4b_steps(n)
-    Dim i As Integer
     For i = 0 To n
         g_phase4b_steps(i) = g_phase2a_steps(n - i)
     Next i
@@ -156,8 +176,22 @@ Public Sub StartSequence()
     g_nextShotTime = Now()
     g_lastPhase = 0          ' 0 ≠ any real phase, so first loop fires OnPhaseEnter
     
+    ResetPhotoTimer          ' first shot will show "int=-" rather than a stale value
+    
     Sheets("Settings").Range("dataSequenceRunning").value = "RUNNING"
     LogEvent "SEQ", "=== Sequence STARTED ==="
+    
+    ' Warm-up: prod the camera and Arduino once before the first loop.
+    ' BUG A FIX (May 2026, session 2): the first POST shutterbutton in the
+    ' first iteration sometimes fails with "connection terminated
+    ' abnormally" — the WiFi/TCP session hasn't fully woken up. A pre-loop
+    ' GET forces the connection to be established cleanly before the
+    ' time-sensitive shutter call.
+    On Error Resume Next
+    Dim warmup As String
+    warmup = CameraGet("/ccapi/ver100/shooting/settings/tv")
+    GetGimbalStatus
+    On Error GoTo 0
     
     ' Kick off the loop
     SequenceLoop
@@ -200,16 +234,26 @@ Public Sub SequenceLoop()
     If Not g_running Then Exit Sub
     
     Dim phase As Integer
+    Dim t0    As Double, t1 As Double
+    Dim msStatus As Long, msMonitor As Long, msHeartbeat As Long, msPhase As Long
+    
     phase = GetCurrentPhase()
     
-    ' Update Monitor and send heartbeat every loop
+    ' Update Monitor and send heartbeat every loop. Time each step so we
+    ' can see which one is causing inter-shot drift. (May 2026 — Phase 1
+    ' was running at 5-7s per loop instead of 2s; instrumentation added
+    ' to track down the offender. Remove once cause is fixed.)
+    t0 = Timer
     GetGimbalStatus
+    t1 = Timer: msStatus = (t1 - t0) * 1000: t0 = t1
+    
     UpdateMonitor
+    t1 = Timer: msMonitor = (t1 - t0) * 1000: t0 = t1
+    
     GimbalHeartbeat
+    t1 = Timer: msHeartbeat = (t1 - t0) * 1000: t0 = t1
     
     ' BUG 3 FIX: detect phase transitions and run entry hook once per change.
-    ' g_lastPhase is reset to 0 in StartSequence so the first loop always fires
-    ' the entry hook for whatever phase we're starting in.
     If phase <> g_lastPhase Then
         OnPhaseEnter phase
         g_lastPhase = phase
@@ -224,6 +268,16 @@ Public Sub SequenceLoop()
         Case 4:  RunPhase4
         Case 5:  RunPhase5
     End Select
+    t1 = Timer: msPhase = (t1 - t0) * 1000
+    
+    ' Only log timing if total exceeds 500ms — skips the chatter when
+    ' everything's fast, but flags every problem loop.
+    If msStatus + msMonitor + msHeartbeat + msPhase > 500 Then
+        LogEvent "TIMING", "status=" & msStatus & "ms" & _
+                 " monitor=" & msMonitor & "ms" & _
+                 " heartbeat=" & msHeartbeat & "ms" & _
+                 " phase=" & msPhase & "ms"
+    End If
     
     ' Schedule next loop. Capture g_scheduledTime so StopSequence can cancel it.
     If g_running Then
@@ -325,8 +379,12 @@ End Sub
 
 ' Phase 2b — ISO ramp: shutter fixed at 20s, ISO 100→1600 via luminance
 Private Sub RunPhase2b()
-    ' Ensure shutter is at 20s
-    If Range("dataCurrentTv").value <> "20" Then SetShutterSpeed "20"
+    ' Ensure shutter is at 20s. Use SecondsToTv so we send the camera's
+    ' actual format (e.g. "20""") rather than a raw "20" which the camera
+    ' rejects with HTTP 400 Invalid Param.
+    Dim tv20 As String
+    tv20 = SecondsToTv(20#)
+    If Range("dataCurrentTv").value <> tv20 Then SetShutterSpeed tv20
     
     ' Wait for camera to finish exposure before any CCAPI queries.
     ' If not safe, bail and let SequenceLoop reschedule.
@@ -349,8 +407,10 @@ End Sub
 
 ' Phase 3 — Full night: 20s ISO1600, gimbal tracks Milky Way
 Private Sub RunPhase3()
-    ' Ensure max night settings
-    If Range("dataCurrentTv").value <> "20" Then SetShutterSpeed "20"
+    ' Ensure max night settings — use SecondsToTv for robust Canon formatting
+    Dim tv20 As String
+    tv20 = SecondsToTv(20#)
+    If Range("dataCurrentTv").value <> tv20 Then SetShutterSpeed tv20
     If Range("dataCurrentISO").value <> "1600" Then SetISO "1600"
     
     ' Wait for camera. Bail if previous 20s exposure isn't done yet.
@@ -402,8 +462,10 @@ Private Sub RunPhase4()
 End Sub
 
 Private Sub RunPhase4a()
-    ' Shutter fixed at 20s
-    If Range("dataCurrentTv").value <> "20" Then SetShutterSpeed "20"
+    ' Shutter fixed at 20s — use SecondsToTv for robust Canon formatting
+    Dim tv20 As String
+    tv20 = SecondsToTv(20#)
+    If Range("dataCurrentTv").value <> tv20 Then SetShutterSpeed tv20
     
     If Not WaitForCamera(20#) Then Exit Sub
     

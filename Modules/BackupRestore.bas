@@ -239,9 +239,143 @@ NextFile:
     MsgBox msg, IIf(failCount = 0, vbInformation, vbExclamation), "Import Modules"
 End Sub
 
-' ============================================================
-' Helpers
-' ============================================================
+' Verify that every module-level Public/Private declaration sits in the
+' header block (above the first Sub/Function/Property). Flags any that
+' have drifted into the body of the module.
+'
+' Procedure-local Dim statements are NOT checked — they are legitimate
+' anywhere within their procedure. This rule only governs MODULE-level
+' declarations: Public/Private variables, constants, types, and Declares.
+'
+' Output: a popup listing every offence as "Module:line  >>  text".
+' If the project is clean, says so.
+Public Sub CheckDeclarationStyle()
+    If Not VbaProjectAccessible() Then Exit Sub
+    
+    Dim report   As String
+    Dim totalBad As Long
+    
+    Dim comp As Object
+    For Each comp In ThisWorkbook.VBProject.VBComponents
+        ' Only check standard modules and class modules. Document modules
+        ' (sheets, ThisWorkbook) and userforms have their own structure.
+        If comp.Type <> vbext_ct_StdModule And comp.Type <> vbext_ct_ClassModule Then
+            ' skip
+        Else
+            Dim modBad As String
+            modBad = CheckOneModule(comp)
+            If LenB(modBad) > 0 Then
+                report = report & vbCrLf & "── " & comp.Name & " ──" & vbCrLf & modBad
+                ' count newlines as a proxy for offence count
+                Dim p As Long, c As Long
+                c = 0
+                p = 1
+                Do
+                    p = InStr(p, modBad, vbCrLf)
+                    If p = 0 Then Exit Do
+                    c = c + 1
+                    p = p + 1
+                Loop
+                totalBad = totalBad + c
+            End If
+        End If
+    Next comp
+    
+    If totalBad = 0 Then
+        MsgBox "All module-level declarations are in the header block." & vbCrLf & vbCrLf & _
+               "Procedure-local Dim statements are not checked.", _
+               vbInformation, "Declaration Style Check"
+    Else
+        MsgBox "Found " & totalBad & " misplaced module-level declaration(s):" & vbCrLf & _
+               report & vbCrLf & vbCrLf & _
+               "Move these to the top of their module, under Option Explicit.", _
+               vbExclamation, "Declaration Style Check"
+    End If
+End Sub
+
+' Scan one VBComponent for misplaced module-level declarations.
+' Returns a multi-line report of offending lines, or "" if clean.
+Private Function CheckOneModule(ByVal comp As Object) As String
+    Dim cm As Object
+    Set cm = comp.CodeModule
+    
+    Dim totalLines As Long
+    totalLines = cm.CountOfLines
+    If totalLines = 0 Then Exit Function
+    
+    Dim seenProcedure As Boolean
+    Dim insideProc    As Boolean
+    Dim report        As String
+    
+    Dim ln As Long
+    For ln = 1 To totalLines
+        Dim raw As String
+        raw = cm.Lines(ln, 1)
+        
+        Dim trimmed As String
+        trimmed = Trim$(raw)
+        
+        ' Track whether we're inside a Sub/Function/Property body.
+        If StartsProcedure(trimmed) Then
+            seenProcedure = True
+            insideProc = True
+        ElseIf EndsProcedure(trimmed) Then
+            insideProc = False
+        End If
+        
+        ' Only inspect lines AFTER the first procedure has appeared,
+        ' AND only when we're not currently inside a procedure body.
+        If seenProcedure And Not insideProc Then
+            If IsModuleLevelDeclaration(trimmed) Then
+                report = report & "  line " & ln & ":  " & trimmed & vbCrLf
+            End If
+        End If
+    Next ln
+    
+    CheckOneModule = report
+End Function
+
+' Does this line begin a procedure (Sub/Function/Property)?
+Private Function StartsProcedure(ByVal s As String) As Boolean
+    Dim u As String
+    u = UCase$(s)
+    StartsProcedure = (u Like "SUB *") Or (u Like "FUNCTION *") Or _
+                      (u Like "PUBLIC SUB *") Or (u Like "PUBLIC FUNCTION *") Or _
+                      (u Like "PRIVATE SUB *") Or (u Like "PRIVATE FUNCTION *") Or _
+                      (u Like "FRIEND SUB *") Or (u Like "FRIEND FUNCTION *") Or _
+                      (u Like "PUBLIC PROPERTY *") Or (u Like "PRIVATE PROPERTY *") Or _
+                      (u Like "PROPERTY *")
+End Function
+
+Private Function EndsProcedure(ByVal s As String) As Boolean
+    Dim u As String
+    u = UCase$(s)
+    EndsProcedure = (u = "END SUB") Or (u = "END FUNCTION") Or (u = "END PROPERTY")
+End Function
+
+' Does this line look like a module-level Public/Private declaration of
+' a variable, constant, type, or Declare? We deliberately ignore the
+' procedure starters (caught by StartsProcedure already).
+Private Function IsModuleLevelDeclaration(ByVal s As String) As Boolean
+    Dim u As String
+    u = UCase$(s)
+    
+    ' Procedure declarations are handled separately
+    If StartsProcedure(s) Then
+        IsModuleLevelDeclaration = False
+        Exit Function
+    End If
+    
+    ' Module-level Public/Private declarations
+    IsModuleLevelDeclaration = _
+        (u Like "PUBLIC * AS *") Or (u Like "PRIVATE * AS *") Or _
+        (u Like "PUBLIC CONST *") Or (u Like "PRIVATE CONST *") Or _
+        (u Like "PUBLIC TYPE *") Or (u Like "PRIVATE TYPE *") Or _
+        (u Like "PUBLIC ENUM *") Or (u Like "PRIVATE ENUM *") Or _
+        (u Like "PUBLIC DECLARE *") Or (u Like "PRIVATE DECLARE *")
+End Function
+
+
 
 ' Decide whether a VBComponent should be exported.
 ' Excludes document modules (sheets, ThisWorkbook) and excludes this module.
