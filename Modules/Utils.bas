@@ -38,6 +38,11 @@ Option Explicit
 ' https://api.sunrise-sunset.org/json?lat=&lng=&date=today&formatted=0
 ' Returns times in UTC — convert using dataUTCOffset named range
 ' ============================================================
+' Module-level cache, populated by InitTvLookup
+Private g_tvStrings()  As String   ' Canon-format strings, in camera's reported order
+Private g_tvSeconds()  As Double   ' parallel array of float seconds for each
+Private g_tvCount      As Long     ' number of valid entries
+Private g_tvLoaded     As Boolean
 
 ' Get today's sunset time as Excel serial (local time)
 Public Function GetSunsetTime() As Date
@@ -187,11 +192,7 @@ End Function
 '   format back to a Double for math.
 ' ============================================================
 
-' Module-level cache, populated by InitTvLookup
-Private g_tvStrings()  As String   ' Canon-format strings, in camera's reported order
-Private g_tvSeconds()  As Double   ' parallel array of float seconds for each
-Private g_tvCount      As Long     ' number of valid entries
-Private g_tvLoaded     As Boolean
+
 
 ' Populate the Tv lookup from the camera. Call once from InitShoot,
 ' before any photo is taken. Falls back to a hard-coded list if the
@@ -637,7 +638,7 @@ Public Sub PollCartLog()
     Dim ws As Worksheet
     Set ws = Sheets("CartLog")
     Dim nextRow As Long
-    nextRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).row + 1
+    nextRow = ws.Cells(ws.Rows.count, 1).End(xlUp).row + 1
     
     Dim lines() As String
     lines = Split(response, Chr(10))
@@ -750,7 +751,7 @@ Public Sub LogEvent(ByVal category As String, ByVal message As String)
     ws.Columns(1).NumberFormat = "@"   ' force text — preserve seconds
     
     Dim nextRow As Long
-    nextRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).row + 1
+    nextRow = ws.Cells(ws.Rows.count, 1).End(xlUp).row + 1
     ws.Cells(nextRow, 1).value = Format(Now(), "yyyy-mm-dd hh:nn:ss")
     ws.Cells(nextRow, 2).value = category
     ws.Cells(nextRow, 3).value = message

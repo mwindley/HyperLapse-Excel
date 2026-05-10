@@ -672,7 +672,7 @@ Public Sub RunCartReplayStep()
     Set ws = Sheets("Sequence")
     
     Dim lastRow As Long
-    lastRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).row
+    lastRow = ws.Cells(ws.Rows.count, 1).End(xlUp).row
     If g_replayRow > lastRow Then
         g_replayRow = 0
         LogEvent "CART", "=== Cart replay complete ==="

@@ -209,7 +209,7 @@ Public Sub GetGimbalLog()
     Dim ws As Worksheet
     Set ws = Sheets("GimbalLog")
     Dim nextRow As Long
-    nextRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).row + 1
+    nextRow = ws.Cells(ws.Rows.count, 1).End(xlUp).row + 1
     
     Dim lines() As String
     lines = Split(response, Chr(10))
