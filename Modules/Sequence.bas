@@ -61,14 +61,20 @@ Private g_scheduledTime As Date     ' the time actually passed to OnTime (must m
                                     ' exactly when cancelling — see StopSequence)
 Private g_lastPhase     As Integer  ' previous phase, for phase-change detection
 Private g_replayRow     As Long     ' next row to execute in cart replay (Bug 5 fix)
+Private g_shotCounter   As Long     ' loop counter — used to throttle luminance kickoff
 
-' Phase 2a shutter transition table
-' Each entry: [shutter_string, seconds_value]
-' Progresses from 1/5000 toward 20s over ~45 minutes
-Private g_phase2a_steps As Variant
-
-' Phase 4b shutter reverse table (same steps, reversed)
-Private g_phase4b_steps As Variant
+' How often to kick off a fresh luminance measurement, in loop cycles.
+' Session B finding (May 2026): at fast cadence (2-3s cycles) firing
+' kickoff every cycle hammers the camera with CCAPI GETs while it's
+' still writing the previous JPG, producing 503 retries and 3-6s
+' cadence slips. The camera's buffer is fine; the chokepoint is the
+' CCAPI being busy. Kicking off every Nth shot gives the camera N-1
+' quiet cycles between thumbnail fetches.
+'
+' N=3 matches the real-world measurement cadence Mike used in earlier
+' shoots. Staleness still tracked per shot — adjustments act on the
+' freshest reading regardless of when it was taken.
+Private Const LUM_KICKOFF_EVERY_N As Long = 3
 
 ' ============================================================
 ' Initialisation
@@ -99,15 +105,11 @@ Public Sub InitShoot()
     InitCamera
     
     ' 5. Populate Tv lookup from camera's actual ability list.
-    '    Must come AFTER InitCamera (needs HTTP working) and BEFORE
-    '    BuildPhase2aSteps (which uses SecondsToTv to build the
-    '    sunset shutter transition table).
+    '    Must come AFTER InitCamera (needs HTTP working). Used by the
+    '    feedback algorithm in RunShot to walk Tv one step at a time.
     InitTvLookup
     
-    ' 6. Build phase 2a shutter transition steps
-    BuildPhase2aSteps
-    
-    ' 7. Update Monitor sheet
+    ' 6. Update Monitor sheet
     UpdateMonitor
     
     LogEvent "SEQ", "InitShoot complete. Sunset: " & _
@@ -117,46 +119,6 @@ Public Sub InitShoot()
            "Sunset: " & Format(Sheets("Settings").Range("dataSunsetTime").value, "HH:nn:ss") & Chr(10) & _
            "Sunrise: " & Format(Sheets("Settings").Range("dataSunriseTime").value, "HH:nn:ss") & Chr(10) & Chr(10) & _
            "Run StartSequence at 4:00pm.", vbInformation
-End Sub
-
-' Build the Phase 2a shutter transition steps.
-' Shutter progresses from 1/5000 to 20s over ~45 minutes.
-'
-' BUG FIX (May 2026, session 2): the previous version contained hard-coded
-' format strings like "0.3", "0.5", "1", "20" that the camera rejected
-' with HTTP 400 Invalid Param (it wants Canon's "0\"3", "0\"5", "1\"",
-' "20\"" notation — see Utils.InitTvLookup).
-'
-' Rather than hand-typing Canon's format, we list the target exposures in
-' SECONDS and let SecondsToTv pick the closest camera-accepted string from
-' the live ability list. That makes this table firmware/body agnostic.
-Private Sub BuildPhase2aSteps()
-    Dim targetSecs As Variant
-    targetSecs = Array( _
-        1 / 5000, 1 / 4000, 1 / 3200, 1 / 2500, 1 / 2000, _
-        1 / 1600, 1 / 1250, 1 / 1000, 1 / 800, 1 / 640, _
-        1 / 500, 1 / 400, 1 / 320, 1 / 250, 1 / 200, _
-        1 / 160, 1 / 125, 1 / 100, 1 / 80, 1 / 60, _
-        1 / 50, 1 / 40, 1 / 30, 1 / 25, 1 / 20, _
-        1 / 15, 1 / 13, 1 / 10, 1 / 8, 1 / 6, _
-        1 / 5, 1 / 4, 0.3, 0.5, 0.8, _
-        1#, 1.3, 1.6, 2#, 2.5, _
-        3#, 4#, 5#, 6#, 8#, _
-        10#, 13#, 15#, 20#)
-    
-    ReDim g_phase2a_steps(0 To UBound(targetSecs))
-    Dim i As Long
-    For i = 0 To UBound(targetSecs)
-        g_phase2a_steps(i) = SecondsToTv(CDbl(targetSecs(i)))
-    Next i
-    
-    ' Reverse for phase 4b
-    Dim n As Long
-    n = UBound(g_phase2a_steps)
-    ReDim g_phase4b_steps(n)
-    For i = 0 To n
-        g_phase4b_steps(i) = g_phase2a_steps(n - i)
-    Next i
 End Sub
 
 ' ============================================================
@@ -169,12 +131,12 @@ Public Sub StartSequence()
         Exit Sub
     End If
     
-    If Not IsArray(g_phase2a_steps) Then BuildPhase2aSteps
-    
     g_running = True
     g_lastShotTime = Now()
     g_nextShotTime = Now()
+    g_scheduledTime = Now()  ' Bug B anchor — first RunShot anchors next shot from this
     g_lastPhase = 0          ' 0 ≠ any real phase, so first loop fires OnPhaseEnter
+    g_shotCounter = 0        ' Kickoff throttle counter (Session B finding)
     
     ResetPhotoTimer          ' first shot will show "int=-" rather than a stale value
     
@@ -240,19 +202,26 @@ End Function
 
 ' Main loop — fires once per shot interval via Application.OnTime.
 '
-' SESSION A REORDER (May 2026):
+' SESSION B REORDER (May 2026):
+' The seven phase handlers have been retired. Exposure is now driven
+' by pure luminance feedback in a single RunShot handler; phase boundaries
+' survive only as gimbal-entry triggers and observational labels.
+'
 ' Each iteration now does, in order:
 '   1. POLL — harvest any ready luminance result (non-blocking).
 '      Updates g_lastLuminance + dataLuminance if a fresh value arrived.
 '   2. Housekeeping — Arduino status, Monitor sheet, gimbal heartbeat.
-'   3. PHASE — run the active phase handler (which takes the photo,
-'      consumes g_lastLuminance for adjustments, and sets g_nextShotTime).
-'   4. BUMP — increment luminance staleness counter (one shot just happened).
-'   5. KICK-OFF — if this phase wants luminance and no job is running,
-'      fetch the last thumbnail and fire Python for next iteration.
-'      Photo has already happened; this runs in the gap before
-'      OnTime wakes us up again.
-'   6. SCHEDULE — reschedule for g_nextShotTime.
+'   3. ENTRY HOOK — if the phase number just changed, fire OnPhaseEnter
+'      to repoint the gimbal. This is the ONLY remaining role of the
+'      phase number; it has no influence on exposure decisions.
+'   4. SHOT — RunShot takes the photo, runs feedback (if applicable),
+'      and calls ScheduleNextShot to set g_nextShotTime.
+'   5. BUMP — increment luminance staleness counter.
+'   6. KICK-OFF — fetch the last thumbnail and fire Python for next
+'      iteration. Unconditional (no PhaseWantsLuminance gate any more);
+'      saturated readings during daytime still cost only the kickoff time
+'      and give us calibration data through the boundaries.
+'   7. SCHEDULE — reschedule for g_nextShotTime.
 '
 ' Photos are sacred. The luminance pipeline never blocks the photo loop.
 ' Adjustments may be 1-3 photo-cycles late relative to the reading they
@@ -264,7 +233,7 @@ Public Sub SequenceLoop()
     Dim phase As Integer
     Dim t0    As Double, t1 As Double
     Dim msPoll As Long, msStatus As Long, msMonitor As Long
-    Dim msHeartbeat As Long, msPhase As Long, msKickoff As Long
+    Dim msHeartbeat As Long, msShot As Long, msKickoff As Long
     
     phase = GetCurrentPhase()
     
@@ -288,44 +257,44 @@ Public Sub SequenceLoop()
     GimbalHeartbeat
     t1 = Timer: msHeartbeat = (t1 - t0) * 1000: t0 = t1
     
+    ' ── Step 3: gimbal entry hook (the only surviving role of phase) ─
     ' BUG 3 FIX: detect phase transitions and run entry hook once per change.
     If phase <> g_lastPhase Then
         OnPhaseEnter phase
         g_lastPhase = phase
     End If
     
-    ' ── Step 3: phase handler (the photo happens here) ───────
-    Select Case phase
-        Case 1:  RunPhase1
-        Case 22: RunPhase2a
-        Case 23: RunPhase2b
-        Case 3:  RunPhase3
-        Case 4:  RunPhase4
-        Case 5:  RunPhase5
-    End Select
-    t1 = Timer: msPhase = (t1 - t0) * 1000: t0 = t1
-    
-    ' ── Step 4: bump staleness (one shot just happened) ──────
-    BumpLuminanceStaleness
-    
-    ' ── Step 5: kick off next luminance measurement if needed ─
-    ' Only for phases that want luminance feedback. Phase 1 and 5 don't
-    ' (fully saturated, no signal). Phases 2a/2b/3/4a/4b all measure —
-    ' even when not acting on it (3, 2a, 4b) the data is useful for
-    ' Session B calibration.
-    If PhaseWantsLuminance(phase) Then
+    ' ── Step 4: kick off next luminance measurement (BEFORE TakePhoto) ──
+    ' Session B finding (May 2026): kickoff used to run AFTER TakePhoto
+    ' and hit the same camera-busy 503 problem the adjust call did. Fix:
+    ' do the CCAPI thumbnail fetch in the idle gap BEFORE the photo. The
+    ' thumbnail we get is the PREVIOUS shot's image — fine, because
+    ' luminance feedback is already a few cycles stale anyway. One more
+    ' cycle of staleness changes nothing.
+    '
+    ' Throttled to every Nth cycle (LUM_KICKOFF_EVERY_N) so we don't
+    ' hammer the CCAPI; staleness still bumped per shot regardless.
+    g_shotCounter = g_shotCounter + 1
+    If (g_shotCounter Mod LUM_KICKOFF_EVERY_N) = 0 Then
         KickOffLuminanceFromLastThumb   ' returns immediately, fire-and-forget
     End If
-    t1 = Timer: msKickoff = (t1 - t0) * 1000
+    t1 = Timer: msKickoff = (t1 - t0) * 1000: t0 = t1
+    
+    ' ── Step 5: take the photo (and adjust for next cycle) ───
+    RunShot
+    t1 = Timer: msShot = (t1 - t0) * 1000: t0 = t1
+    
+    ' ── Step 6: bump staleness (one shot just happened) ──────
+    BumpLuminanceStaleness
     
     ' Only log timing if total exceeds 500ms — skips the chatter when
     ' everything's fast, but flags every problem loop.
-    If msPoll + msStatus + msMonitor + msHeartbeat + msPhase + msKickoff > 500 Then
+    If msPoll + msStatus + msMonitor + msHeartbeat + msShot + msKickoff > 500 Then
         LogEvent "TIMING", "poll=" & msPoll & "ms" & _
                  " status=" & msStatus & "ms" & _
                  " monitor=" & msMonitor & "ms" & _
                  " heartbeat=" & msHeartbeat & "ms" & _
-                 " phase=" & msPhase & "ms" & _
+                 " shot=" & msShot & "ms" & _
                  " kickoff=" & msKickoff & "ms"
     End If
     
@@ -336,20 +305,13 @@ Public Sub SequenceLoop()
     End If
 End Sub
 
-' Does the active phase want a luminance measurement this cycle?
-' Phases 1 and 5 are daytime — fully saturated, no signal. All others
-' measure: 2b and 4a *act* on the data, 2a/3/4b just record it (useful
-' for Session B calibration even though not used for control).
-Private Function PhaseWantsLuminance(ByVal phase As Integer) As Boolean
-    Select Case phase
-        Case 22, 23, 3, 4: PhaseWantsLuminance = True
-        Case Else:          PhaseWantsLuminance = False
-    End Select
-End Function
-
 ' Phase-entry hook — fires once when the active phase number changes.
 ' Position the gimbal for the upcoming phase and log the transition.
 ' BUG 3 FIX — wires the previously-orphaned GimbalTo* subs into the loop.
+'
+' Session B note: this is now the ONLY use of phase numbers in the loop.
+' Exposure control is in RunShot, driven by luminance feedback and a
+' two-mode rule (brighten before astro_dusk+30min, darken after).
 Private Sub OnPhaseEnter(ByVal newPhase As Integer)
     LogEvent "SEQ", "=== Entering " & PhaseLabel(newPhase) & " ==="
     Select Case newPhase
@@ -365,243 +327,175 @@ Private Sub OnPhaseEnter(ByVal newPhase As Integer)
 End Sub
 
 ' ============================================================
-' Phase handlers
+' Shot handler (Session B, May 2026)
+'
+' One handler for every cycle. Exposure is controlled entirely by
+' luminance feedback; phase boundaries no longer dictate Tv or ISO.
+' Operator manually sets initial Tv/ISO before StartSequence; from there
+' the algorithm walks one knob one step per cycle, in the direction
+' allowed by the current mode.
+'
+' Two modes, switched once per shoot at dataAstroDusk + 30 minutes:
+'
+'   MODE 1 — Brightening (afternoon → night)
+'     Active until astro_dusk + 30 min.
+'     Adjustments only ever BRIGHTEN.
+'     Walk: slow Tv toward 20" first (lower-noise knob); once Tv is
+'     pinned at 20", raise ISO toward 1600.
+'     Lum above target: do nothing. Post-production handles transient
+'     over-bright frames.
+'
+'   MODE 2 — Darkening (night → morning)
+'     Active from astro_dusk + 30 min onward.
+'     Adjustments only ever DARKEN.
+'     Walk: drop ISO toward 100 first (lower-noise knob); once ISO is
+'     pinned at 100, speed Tv toward 1/5000.
+'     Lum below target: do nothing. Same rationale.
+'
+' Both modes are monotone — once a knob has moved, it never moves back
+' during the same mode. This eliminates oscillation as a failure mode.
+' The two extreme cases (saturated daytime, pitch night) self-pin at
+' the floors; no special-case code needed.
+'
+' PHOTO PRIMACY:
+' AdjustExposureByLuminance fires BEFORE TakePhoto, with errors contained.
+' Photo primacy is preserved via the error handler — if SetShutterSpeed
+' or SetISO fail (or the whole adjust path explodes), we log it and take
+' the photo at the existing settings anyway. The photo is sacred; the
+' adjustment is best-effort.
+'
+' Why this order: TakePhoto returns ~150ms after the shutter trips, but
+' the camera continues writing to the SD card for several hundred ms
+' more. Issuing CCAPI PUT calls during that write window hits 503 Device
+' Busy and the retry logic adds ~3s slip per adjusting cycle. Doing the
+' adjust BEFORE the photo means the CCAPI calls land during the natural
+' idle gap between cycles, when the camera has drained its buffer.
+' (Session B finding, May 2026 — first ordering of this loop had adjust
+' after TakePhoto for photo-primacy reasons, but the 503-on-write cost
+' was worse than the abandoned alternative.)
+'
+' For the very first shot the camera is at the operator's chosen
+' settings; the adjust runs but does nothing (no luminance reading yet,
+' so AdjustExposureByLuminance skips). Subsequent shots: adjust based
+' on the freshest luminance reading, then take the photo.
 ' ============================================================
 
-' Phase 1 — Daytime: 1/5000, ISO 100, 2s interval, cart moving
-Private Sub RunPhase1()
-    ' Ensure correct camera settings (in case of restart)
-    If Range("dataCurrentTv").value <> "1/5000" Then SetShutterSpeed "1/5000"
-    If Range("dataCurrentISO").value <> "100" Then SetISO "100"
+Private Sub RunShot()
+    Dim currentTv As String
+    currentTv = Range("dataCurrentTv").value
+    Dim currentTvSecs As Double
+    currentTvSecs = TvToSeconds(currentTv)
     
-    ' Take photo
-    TakePhoto
-    g_lastShotTime = Now()
+    ' Gate on the camera being safe to talk to (previous exposure done +
+    ' write buffer drained). If not, WaitForCamera has pushed g_nextShotTime
+    ' out to the safe time; SequenceLoop's reschedule tail handles it.
+    If Not WaitForCamera(currentTvSecs) Then Exit Sub
     
-    ' Next shot in 2 seconds
-    g_nextShotTime = Now() + (2# / 86400#)
-    
-    LogEvent "SEQ", "Ph1 shot " & Range("dataShotCount").value
-End Sub
-
-' Phase 2a — Shutter transition: 1/5000 → 20s, ISO stays 100
-' Shutter advances one step every N shots based on phase duration
-Private Sub RunPhase2a()
-    Dim phase2aStart As Date
-    Dim phase2bStart As Date
-    phase2aStart = Sheets("Settings").Range("dataPhase2aStart").value
-    phase2bStart = Sheets("Settings").Range("dataPhase2bStart").value
-    
-    ' How far through Phase 2a are we? (0.0 to 1.0)
-    Dim elapsed As Double
-    Dim total   As Double
-    elapsed = (Now() - phase2aStart) * 86400#   ' seconds
-    total = (phase2bStart - phase2aStart) * 86400#
-    Dim progress As Double
-    progress = elapsed / total
-    If progress > 1 Then progress = 1
-    If progress < 0 Then progress = 0
-    
-    ' Target step index in phase2a_steps array
-    Dim targetIdx As Integer
-    targetIdx = CInt(progress * UBound(g_phase2a_steps))
-    If targetIdx > UBound(g_phase2a_steps) Then targetIdx = UBound(g_phase2a_steps)
-    
-    Dim targetTv As String
-    targetTv = CStr(g_phase2a_steps(targetIdx))
-    
-    ' Set shutter if changed
-    If Range("dataCurrentTv").value <> targetTv Then
-        SetShutterSpeed targetTv
+    ' ── Adjustment FIRST — runs during the natural idle gap, before
+    '    the next photo. Errors contained so a CCAPI hiccup never blocks
+    '    the photo. The photo is sacred; the adjustment is best-effort.
+    On Error Resume Next
+    AdjustExposureByLuminance GetActiveLumTarget(), GetLumMode()
+    If Err.Number <> 0 Then
+        LogEvent "LUMINANCE", "Adjust failed: " & Err.Description & " — continuing"
+        Err.Clear
     End If
+    On Error GoTo 0
     
-    ' ISO stays 100 throughout 2a
-    If Range("dataCurrentISO").value <> "100" Then SetISO "100"
-    
-    ' Take photo
-    ' Wait until camera is safe to query (exposure + write buffer).
-    ' If not safe, WaitForCamera has already pushed g_nextShotTime out;
-    ' bail out and let SequenceLoop reschedule us.
-    Dim shutterSecs As Double
-    shutterSecs = TvToSeconds(targetTv)
-    If Not WaitForCamera(shutterSecs) Then Exit Sub
-    
+    ' ── Take the photo. Whatever Tv/ISO are now on the camera (just-set
+    '    or unchanged) are what this photo will use.
     TakePhoto
-    g_lastShotTime = Now()
     
-    ' Calculate next interval
-    Dim interval As Double
-    interval = CalcInterval(targetTv)
-    g_nextShotTime = g_lastShotTime + (interval / 86400#)
+    ' Interval is computed from the (possibly just-updated) Tv. The new
+    ' cadence rule: interval = ceiling(Tv + 1.5s). See CalcInterval in Utils.
+    Dim newTv As String
+    newTv = Range("dataCurrentTv").value
+    ScheduleNextShot CalcInterval(newTv)
     
-    LogEvent "SEQ", "Ph2a Tv=" & targetTv & " interval=" & Format(interval, "0.0") & _
-             "s shot=" & Range("dataShotCount").value
-End Sub
-
-' Phase 2b — ISO ramp: shutter fixed at 20s, ISO 100→1600 via luminance
-Private Sub RunPhase2b()
-    ' Ensure shutter is at 20s. Use SecondsToTv so we send the camera's
-    ' actual format (e.g. "20""") rather than a raw "20" which the camera
-    ' rejects with HTTP 400 Invalid Param.
-    Dim tv20 As String
-    tv20 = SecondsToTv(20#)
-    If Range("dataCurrentTv").value <> tv20 Then SetShutterSpeed tv20
-    
-    ' Wait for camera to finish exposure before any CCAPI queries.
-    ' If not safe, bail and let SequenceLoop reschedule.
-    If Not WaitForCamera(20#) Then Exit Sub
-    
-    ' Adjust ISO toward sunset luminance target. NON-BLOCKING — consumes
-    ' the most recent g_lastLuminance value, doesn't wait for a fresh one.
-    ' (Session A change — target comes from named range; previous code
-    ' used hardcoded TARGET_LOW=95/TARGET_HIGH=135.)
-    AdjustExposureByLuminance GetSunsetLumTarget()
-    
-    ' Take next photo
-    TakePhoto
-    g_lastShotTime = Now()
-    
-    ' Fixed 22s interval
-    g_nextShotTime = g_lastShotTime + (22# / 86400#)
-    
-    LogEvent "SEQ", "Ph2b ISO=" & Range("dataCurrentISO").value & _
-             " Lum=" & Range("dataLuminance").value & _
+    LogEvent "SEQ", "Shot Tv=" & newTv & _
+             " ISO=" & Range("dataCurrentISO").value & _
+             " Lum=" & GetLatestLuminance() & _
+             " mode=" & LumModeName(GetLumMode()) & _
              " shot=" & Range("dataShotCount").value
 End Sub
 
-' Phase 3 — Full night: 20s ISO1600, gimbal tracks Milky Way
-Private Sub RunPhase3()
-    ' Ensure max night settings — use SecondsToTv for robust Canon formatting
-    Dim tv20 As String
-    tv20 = SecondsToTv(20#)
-    If Range("dataCurrentTv").value <> tv20 Then SetShutterSpeed tv20
-    If Range("dataCurrentISO").value <> "1600" Then SetISO "1600"
+' Read the active luminance mode from the clock.
+' MODE_BRIGHTEN until astro_dusk + 30 min, MODE_DARKEN thereafter.
+' Hardcoded 30 min offset — exposed as a named range later if operators
+' want to tune it (Session B PROJECT_STATE note).
+Public Function GetLumMode() As Integer
+    Const SWITCH_OFFSET_MINUTES As Double = 30#
+    Dim astroDusk As Date
+    On Error GoTo Fallback
+    astroDusk = Sheets("Settings").Range("dataAstroDusk").value
+    If astroDusk = 0 Then GoTo Fallback
     
-    ' Wait for camera. Bail if previous 20s exposure isn't done yet.
-    If Not WaitForCamera(20#) Then Exit Sub
-    
-    ' Update gimbal to track galactic centre
-    Dim cartHeading As Double
-    cartHeading = Sheets("Settings").Range("dataCartHeading").value
-    
-    Dim gcYaw As Double, gcPitch As Double
-    If GetGCGimbalAngles(Now(), cartHeading, gcYaw, gcPitch) Then
-        ' GC is above horizon — track it
-        ' Move slowly — only if more than 0.1° change needed
-        Dim currentYaw   As Double
-        Dim currentPitch As Double
-        currentYaw = Sheets("Settings").Range("dataGimbalYaw").value
-        currentPitch = Sheets("Settings").Range("dataGimbalPitch").value
-        
-        If Abs(gcYaw - currentYaw) > 0.1 Or Abs(gcPitch - currentPitch) > 0.1 Then
-            ' Move over the interval period so camera doesn't catch movement
-            GimbalPosition gcYaw, 0#, gcPitch, 20#
-        End If
-    End If
-    
-    ' Take photo
-    TakePhoto
-    g_lastShotTime = Now()
-    g_nextShotTime = g_lastShotTime + (22# / 86400#)
-    
-    LogEvent "SEQ", "Ph3 GC yaw=" & Format(gcYaw, "0.1") & _
-             " pitch=" & Format(gcPitch, "0.1") & _
-             " shot=" & Range("dataShotCount").value
-End Sub
-
-' Phase 4 — Pre-sunrise: ISO reverse then shutter reverse
-Private Sub RunPhase4()
-    Dim phase4aStart As Date
-    Dim phase4bStart As Date
-    phase4aStart = Sheets("Settings").Range("dataPhase4aStart").value
-    phase4bStart = Sheets("Settings").Range("dataPhase4bStart").value
-    
-    If Now() < phase4bStart Then
-        ' Phase 4a — ISO reverse: 1600 → 100, shutter stays 20s
-        RunPhase4a
+    If Now() < astroDusk + (SWITCH_OFFSET_MINUTES / 1440#) Then
+        GetLumMode = LUM_MODE_BRIGHTEN
     Else
-        ' Phase 4b — Shutter reverse: 20s → 1/5000
-        RunPhase4b
+        GetLumMode = LUM_MODE_DARKEN
     End If
-End Sub
-
-Private Sub RunPhase4a()
-    ' Shutter fixed at 20s — use SecondsToTv for robust Canon formatting
-    Dim tv20 As String
-    tv20 = SecondsToTv(20#)
-    If Range("dataCurrentTv").value <> tv20 Then SetShutterSpeed tv20
-    
-    If Not WaitForCamera(20#) Then Exit Sub
-    
-    ' Adjust ISO toward sunrise luminance target. NON-BLOCKING — consumes
-    ' g_lastLuminance via the new pipeline. Luminance will be higher as
-    ' dawn approaches; ISO steps down naturally as lum > targetHigh.
-    AdjustExposureByLuminance GetSunriseLumTarget()
-    
-    TakePhoto
-    g_lastShotTime = Now()
-    g_nextShotTime = g_lastShotTime + (22# / 86400#)
-    
-    LogEvent "SEQ", "Ph4a ISO=" & Range("dataCurrentISO").value & _
-             " Lum=" & Range("dataLuminance").value & _
-             " shot=" & Range("dataShotCount").value
-End Sub
-
-Private Sub RunPhase4b()
-    ' ISO should be at 100 by now
-    If Range("dataCurrentISO").value <> "100" Then SetISO "100"
-    
-    ' Mirror of Phase 2a — shutter speeds back up using reverse step table
-    Dim phase4bStart As Date
-    Dim phase5Start  As Date
-    phase4bStart = Sheets("Settings").Range("dataPhase4bStart").value
-    phase5Start = Sheets("Settings").Range("dataPhase5Start").value
-    
-    Dim elapsed  As Double
-    Dim total    As Double
-    elapsed = (Now() - phase4bStart) * 86400#
-    total = (phase5Start - phase4bStart) * 86400#
-    Dim progress As Double
-    progress = elapsed / total
-    If progress > 1 Then progress = 1
-    If progress < 0 Then progress = 0
-    
-    Dim targetIdx As Integer
-    targetIdx = CInt(progress * UBound(g_phase4b_steps))
-    If targetIdx > UBound(g_phase4b_steps) Then targetIdx = UBound(g_phase4b_steps)
-    
-    Dim targetTv As String
-    targetTv = CStr(g_phase4b_steps(targetIdx))
-    
-    If Range("dataCurrentTv").value <> targetTv Then
-        SetShutterSpeed targetTv
+    Exit Function
+Fallback:
+    ' dataAstroDusk missing or zero — fall back to time-of-day heuristic.
+    ' Afternoon/evening: brighten. Past midnight or morning: darken.
+    If Hour(Now()) >= 12 Then
+        GetLumMode = LUM_MODE_BRIGHTEN
+    Else
+        GetLumMode = LUM_MODE_DARKEN
     End If
-    
-    Dim shutterSecs As Double
-    shutterSecs = TvToSeconds(targetTv)
-    If Not WaitForCamera(shutterSecs) Then Exit Sub
-    
-    TakePhoto
-    g_lastShotTime = Now()
-    
-    Dim interval As Double
-    interval = CalcInterval(targetTv)
-    g_nextShotTime = g_lastShotTime + (interval / 86400#)
-    
-    LogEvent "SEQ", "Ph4b Tv=" & targetTv & " interval=" & Format(interval, "0.0") & _
-             "s shot=" & Range("dataShotCount").value
-End Sub
+End Function
 
-' Phase 5 — Daytime again: back to 1/5000 ISO100
-Private Sub RunPhase5()
-    If Range("dataCurrentTv").value <> "1/5000" Then SetShutterSpeed "1/5000"
-    If Range("dataCurrentISO").value <> "100" Then SetISO "100"
+Public Function LumModeName(ByVal mode As Integer) As String
+    Select Case mode
+        Case LUM_MODE_BRIGHTEN: LumModeName = "brighten"
+        Case LUM_MODE_DARKEN:   LumModeName = "darken"
+        Case Else:               LumModeName = "?"
+    End Select
+End Function
+
+' Pick the operator-set target appropriate to the current mode.
+' Mode 1 (brighten) uses dataLumTargetSunset (default 60).
+' Mode 2 (darken) uses dataLumTargetSunrise (default 40).
+Public Function GetActiveLumTarget() As Integer
+    If GetLumMode() = LUM_MODE_BRIGHTEN Then
+        GetActiveLumTarget = GetSunsetLumTarget()
+    Else
+        GetActiveLumTarget = GetSunriseLumTarget()
+    End If
+End Function
+
+' Schedule the next shot.
+'
+' BUG B FIX (Session B, May 2026): the next-shot anchor is now
+' g_scheduledTime (the time THIS loop was scheduled for by the previous
+' OnTime call), NOT Now() after housekeeping has eaten variable seconds.
+' Anchoring off Now() let the cadence slip forward by however long the
+' previous cycle ran long, and the slip compounded — eventually
+' g_nextShotTime sat in the past for many cycles in a row, OnTime fired
+' immediately, and a burst of fast photos played out until real time
+' caught up.
+'
+' Phase 5 fast-forward test (Session A) showed exactly this: 22 consecutive
+' shots at 20-21s intervals against a 2s target, then a sudden catch-up.
+'
+' Clamp behaviour: if g_scheduledTime + interval is already in the past,
+' we're behind schedule. Resync to Now() + interval and log a TIMING line
+' showing the slip magnitude. Bursting photos to catch up would produce
+' irregular intervals in the timelapse output — unacceptable for video.
+' Output cadence consistency is the goal; recovering the original schedule
+' is not. The log line is the diagnostic data for finding the slip cause.
+Private Sub ScheduleNextShot(ByVal intervalSecs As Double)
+    g_lastShotTime = Now()                                      ' diagnostic — when shutter actually fired
+    g_nextShotTime = g_scheduledTime + (intervalSecs / 86400#)
     
-    TakePhoto
-    g_lastShotTime = Now()
-    g_nextShotTime = g_lastShotTime + (2# / 86400#)
-    
-    LogEvent "SEQ", "Ph5 shot " & Range("dataShotCount").value
+    If g_nextShotTime <= Now() Then
+        Dim slipSecs As Double
+        slipSecs = (Now() - g_nextShotTime) * 86400#
+        g_nextShotTime = Now() + (intervalSecs / 86400#)
+        LogEvent "TIMING", "Cadence slip " & Format(slipSecs, "0.0") & _
+                 "s — resynced (interval=" & Format(intervalSecs, "0.0") & "s)"
+    End If
 End Sub
 
 ' ============================================================
@@ -858,3 +752,6 @@ Public Sub SystemCheck()
     MsgBox msg, vbInformation, "System Check"
     LogEvent "SEQ", msg
 End Sub
+
+
+

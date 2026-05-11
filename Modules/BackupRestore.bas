@@ -161,7 +161,7 @@ Public Sub ImportModules()
     resp = MsgBox("Import " & toImport.Count & " module(s) from:" & vbCrLf & _
                   folderPath & vbCrLf & vbCrLf & _
                   "Any in-workbook modules with the same names will be " & _
-                  "REPLACED:" & summary & vbCrLf & vbCrLf & _
+                  "OVERWRITTEN IN PLACE:" & summary & vbCrLf & vbCrLf & _
                   "Continue?", _
                   vbYesNo + vbQuestion, "Import Modules")
     If resp <> vbYes Then Exit Sub
@@ -175,7 +175,7 @@ Public Sub ImportModules()
         Dim modName As String
         modName = ModuleNameFromPath(CStr(fPath))
         
-        ' Don't try to import over ourselves while we're running.
+        ' Don't try to overwrite ourselves while we're running.
         If StrComp(modName, SELF_NAME, vbTextCompare) = 0 Then
             skipCount = skipCount + 1
             failList = failList & vbCrLf & "  " & modName & _
@@ -183,48 +183,77 @@ Public Sub ImportModules()
             GoTo NextFile
         End If
         
-        ' Remove existing component if present, then re-import from disk.
         On Error Resume Next
         Err.Clear
         
         Dim existing As Object
         Set existing = Nothing
         Set existing = ThisWorkbook.VBProject.VBComponents(modName)
-        If Err.Number <> 0 Then
-            ' Not found — that's fine, we'll just import.
-            Err.Clear
-        End If
+        Err.Clear   ' "not found" is fine, handled below
+        On Error GoTo 0
         
-        If Not existing Is Nothing Then
-            ' Document modules (ThisWorkbook, Sheet1...) can't be removed —
-            ' you can only overwrite their code. Skip those here; they're
-            ' not what this workflow is for.
+        If existing Is Nothing Then
+            ' New module — no collision possible. Use VBComponents.Import,
+            ' which preserves the file's Attribute VB_Name as the new
+            ' component's name.
+            On Error Resume Next
+            ThisWorkbook.VBProject.VBComponents.Import CStr(fPath)
+            If Err.Number <> 0 Then
+                failCount = failCount + 1
+                failList = failList & vbCrLf & "  " & modName & _
+                           " (import failed: " & Err.Description & ")"
+                Err.Clear
+            Else
+                okCount = okCount + 1
+            End If
+            On Error GoTo 0
+        Else
+            ' Existing module — overwrite in place.
+            '
+            ' Why not Remove + Import: VBComponents.Remove is deferred —
+            ' the component doesn't actually disappear until VBA returns
+            ' to idle. A subsequent .Import in the same run sees the name
+            ' as still taken and silently renames the incoming module to
+            ' "Camera1" / "Utils1" / etc. This was the source of the
+            ' rename-on-import bug that had been creeping in for ages.
+            '
+            ' In-place overwrite avoids the problem entirely: the
+            ' VBComponent stays put, we just replace its code.
+            
+            ' Document modules (ThisWorkbook, Sheet1...) can have their
+            ' code overwritten but it's not what this workflow is for.
+            ' Skip them.
             If existing.Type = vbext_ct_Document Then
                 skipCount = skipCount + 1
                 failList = failList & vbCrLf & "  " & modName & _
                            " (skipped — document module)"
                 GoTo NextFile
             End If
-            ThisWorkbook.VBProject.VBComponents.Remove existing
+            
+            Dim fileText As String
+            fileText = ReadFileStripAttributes(CStr(fPath))
+            If LenB(fileText) = 0 Then
+                failCount = failCount + 1
+                failList = failList & vbCrLf & "  " & modName & _
+                           " (read failed or file empty)"
+                GoTo NextFile
+            End If
+            
+            On Error Resume Next
+            With existing.CodeModule
+                If .CountOfLines > 0 Then .DeleteLines 1, .CountOfLines
+                .AddFromString fileText
+            End With
             If Err.Number <> 0 Then
                 failCount = failCount + 1
                 failList = failList & vbCrLf & "  " & modName & _
-                           " (remove failed: " & Err.Description & ")"
+                           " (overwrite failed: " & Err.Description & ")"
                 Err.Clear
-                GoTo NextFile
+            Else
+                okCount = okCount + 1
             End If
+            On Error GoTo 0
         End If
-        
-        ThisWorkbook.VBProject.VBComponents.Import CStr(fPath)
-        If Err.Number <> 0 Then
-            failCount = failCount + 1
-            failList = failList & vbCrLf & "  " & modName & _
-                       " (import failed: " & Err.Description & ")"
-            Err.Clear
-        Else
-            okCount = okCount + 1
-        End If
-        On Error GoTo 0
         
 NextFile:
     Next fPath
@@ -238,6 +267,88 @@ NextFile:
     
     MsgBox msg, IIf(failCount = 0, vbInformation, vbExclamation), "Import Modules"
 End Sub
+
+' Read a .bas / .cls file and return its contents with the leading
+' Attribute lines stripped.
+'
+' A .bas file from VBA starts with:
+'     Attribute VB_Name = "Camera"
+' A .cls file starts with a longer header:
+'     VERSION 1.0 CLASS
+'     BEGIN
+'       MultiUse = -1  'True
+'     END
+'     Attribute VB_Name = "MyClass"
+'     Attribute VB_GlobalNameSpace = False
+'     ...etc
+'
+' Those lines are how VBA persists module metadata to disk, but when
+' inserting code via CodeModule.AddFromString into an EXISTING component,
+' the metadata is already set and re-inserting the Attribute lines either
+' fails or creates duplicates that show up as syntax errors in the IDE.
+'
+' Strategy: skip every leading line that is blank, starts with "Attribute",
+' "VERSION", "BEGIN", "END", or is inside a BEGIN..END block. As soon as
+' we hit anything else (typically "Option Explicit" or a comment), we
+' take the rest verbatim.
+Private Function ReadFileStripAttributes(ByVal filePath As String) As String
+    On Error GoTo ErrHandler
+    
+    Dim fNum As Integer
+    fNum = FreeFile
+    Open filePath For Input As #fNum
+    
+    Dim allText As String
+    Do While Not EOF(fNum)
+        Dim line As String
+        Line Input #fNum, line
+        allText = allText & line & vbCrLf
+    Loop
+    Close #fNum
+    
+    ' Split, scan past the header, rejoin.
+    Dim lines() As String
+    lines = Split(allText, vbCrLf)
+    
+    Dim i As Long
+    Dim inBeginBlock As Boolean
+    inBeginBlock = False
+    
+    For i = 0 To UBound(lines)
+        Dim t As String
+        t = Trim$(lines(i))
+        
+        If inBeginBlock Then
+            If StrComp(t, "END", vbTextCompare) = 0 Then inBeginBlock = False
+            ' otherwise still inside the BEGIN..END block; skip
+        ElseIf LenB(t) = 0 Then
+            ' blank — keep scanning past the header
+        ElseIf StrComp(t, "BEGIN", vbTextCompare) = 0 Then
+            inBeginBlock = True
+        ElseIf Left$(t, 7) = "VERSION" Then
+            ' header line, skip
+        ElseIf Left$(t, 9) = "Attribute" Then
+            ' header line, skip
+        Else
+            ' First content line — take from here.
+            Exit For
+        End If
+    Next i
+    
+    Dim out As String
+    Dim j As Long
+    For j = i To UBound(lines)
+        out = out & lines(j) & vbCrLf
+    Next j
+    
+    ReadFileStripAttributes = out
+    Exit Function
+    
+ErrHandler:
+    On Error Resume Next
+    Close #fNum
+    ReadFileStripAttributes = ""
+End Function
 
 ' Verify that every module-level Public/Private declaration sits in the
 ' header block (above the first Sub/Function/Property). Flags any that

@@ -375,20 +375,89 @@ Public Function SecondsToTv(ByVal secs As Double) As String
     SecondsToTv = g_tvStrings(bestIdx)
 End Function
 
+' Walk one step through the camera's Tv ability list.
+'
+' g_tvStrings is in the camera's reported order, which is slow → fast
+' (e.g. "30""", "25""", "20""", ..., "1/4000", "1/5000", ...). Therefore:
+'   direction = +1  →  one step SLOWER (more light, brighter exposure)
+'   direction = -1  →  one step FASTER (less light, darker exposure)
+'
+' Returns the new Tv string, or "" if at the wall in the requested
+' direction. Callers use the empty-string return to detect "knob pinned,
+' switch to the other knob" — see AdjustExposureByLuminance in Camera.bas.
+'
+' Session B helper (May 2026). Replaces the predictive g_phase2a_steps /
+' g_phase4b_steps tables; feedback walks one camera-Tv-step at a time.
+Public Function NextTv(ByVal currentTv As String, ByVal direction As Integer) As String
+    If Not g_tvLoaded Then InitTvLookup
+    If g_tvCount = 0 Then NextTv = "": Exit Function
+    
+    Dim idx As Long: idx = -1
+    Dim i As Long
+    For i = 0 To g_tvCount - 1
+        If g_tvStrings(i) = currentTv Then idx = i: Exit For
+    Next i
+    
+    If idx < 0 Then
+        ' currentTv not in the ability list — find the closest by seconds.
+        ' This can happen if the operator set Tv to something the camera
+        ' accepts but our cached list doesn't have an exact-string match
+        ' for (e.g. case differences, whitespace).
+        Dim secs As Double
+        secs = TvToSeconds(currentTv)
+        Dim bestDelta As Double: bestDelta = 1E+18
+        For i = 0 To g_tvCount - 1
+            Dim d As Double: d = Abs(g_tvSeconds(i) - secs)
+            If d < bestDelta Then bestDelta = d: idx = i
+        Next i
+        If idx < 0 Then NextTv = "": Exit Function
+    End If
+    
+    Dim newIdx As Long
+    ' g_tvStrings is ordered slow → fast (e.g. 30", 25", ..., 1/4000, 1/5000).
+    ' To go SLOWER (direction = +1) we move to an EARLIER index;
+    ' to go FASTER (direction = -1) we move to a LATER index.
+    ' Subtract, don't add — the natural reading of "+1 = next array slot"
+    ' gives the wrong physical direction here. Caught in Session B
+    ' validation run, May 2026: Tv was walking 1/5000 → 1/6400 → 1/8000 ...
+    ' (getting faster) when feedback wanted slower for an under-exposed
+    ' indoor frame.
+    newIdx = idx - direction
+    If newIdx < 0 Or newIdx > g_tvCount - 1 Then
+        NextTv = ""             ' at the wall — caller switches knobs
+    Else
+        NextTv = g_tvStrings(newIdx)
+    End If
+End Function
+
 ' ============================================================
 ' Interval calculation
 ' ============================================================
 
-' Calculate shooting interval from shutter speed
-' interval = max(2.0, shutter_seconds + 2.0)
+' Calculate shooting interval from shutter speed.
+'
+' SESSION B RULE (May 2026): interval = ceiling(Tv + 1.5 seconds).
+' The +1.5s budget covers read-out + write-buffer + CCAPI roundtrip + a
+' small margin. ceiling() rounds up to the next whole second because
+' Application.OnTime's resolution is effectively whole seconds anyway.
+'
+' Examples:
+'   Tv 1/5000  (0.0002s) → ceiling(0.0002 + 1.5) = ceiling(1.5)  = 2s
+'   Tv 1/8     (0.125s)  → ceiling(0.125 + 1.5)  = ceiling(1.625) = 2s
+'   Tv 1"      (1.0s)    → ceiling(1.0 + 1.5)    = ceiling(2.5)   = 3s
+'   Tv 17"     (17s)     → ceiling(17 + 1.5)     = ceiling(18.5)  = 19s
+'   Tv 20"     (20s)     → ceiling(20 + 1.5)     = ceiling(21.5)  = 22s
+'
+' Replaces the previous "max(2.0, shutter+2.0)" rule. The new rule
+' produces faster cadence in the short-exposure tail (2s for everything
+' under 0.5s, was the same; 2s for 0.125s, was 2s; 3s for 1s, was 3s)
+' and is more honest about the actual time needed for longer exposures.
+'
+' Ceiling implemented as -Int(-x) to avoid pulling in WorksheetFunction.
 Public Function CalcInterval(ByVal tvStr As String) As Double
     Dim shutterSecs As Double
     shutterSecs = TvToSeconds(tvStr)
-    If shutterSecs <= 0.5 Then
-        CalcInterval = 2#
-    Else
-        CalcInterval = shutterSecs + 2#
-    End If
+    CalcInterval = -Int(-(shutterSecs + 1.5))
 End Function
 
 ' ============================================================
@@ -756,3 +825,6 @@ Public Sub LogEvent(ByVal category As String, ByVal message As String)
     ws.Cells(nextRow, 2).value = category
     ws.Cells(nextRow, 3).value = message
 End Sub
+
+
+

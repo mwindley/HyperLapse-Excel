@@ -506,3 +506,6 @@ Public Sub CartLogSummary()
            "Total distance: " & Round(totalDist, 1) & "m", _
            vbInformation, "CartLog Summary"
 End Sub
+
+
+

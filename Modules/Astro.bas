@@ -336,11 +336,11 @@ End Sub
 
 ' Convert Excel date/time to Julian Day Number
 Private Function DateToJulian(ByVal dt As Date) As Double
-    Dim y As Integer, M As Integer, D As Integer
+    Dim y As Integer, M As Integer, d As Integer
     Dim hr As Double, mn As Double, sc As Double
     y = Year(dt)
     M = Month(dt)
-    D = Day(dt)
+    d = Day(dt)
     hr = Hour(dt)
     mn = Minute(dt)
     sc = Second(dt)
@@ -356,7 +356,7 @@ Private Function DateToJulian(ByVal dt As Date) As Double
     
     DateToJulian = Int(365.25 * (y + 4716)) + _
                    Int(30.6001 * (M + 1)) + _
-                   D + B - 1524.5 + _
+                   d + B - 1524.5 + _
                    (hr + mn / 60# + sc / 3600#) / 24#
 End Function
 
@@ -400,3 +400,6 @@ Private Function Atn2(ByVal y As Double, ByVal x As Double) As Double
         Atn2 = 0
     End If
 End Function
+
+
+

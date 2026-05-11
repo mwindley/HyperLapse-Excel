@@ -1,6 +1,6 @@
 # HyperLapse Cart — Project State
 
-**Last updated:** 11 May 2026 (end of session A)
+**Last updated:** 11 May 2026 (end of session B)
 
 This file is the handoff document between sessions. Update at the end of
 every working session. Upload it with the latest `.bas` files at the
@@ -12,13 +12,13 @@ start of the next session to get straight back to productive work.
 
 A self-driving photography cart that runs an unattended overnight
 hyperlapse from late afternoon through to the following morning,
-automatically transitioning camera and gimbal through 5 phases:
-daytime → sunset → astronomical night → sunrise → daytime.
+automatically transitioning camera and gimbal through the night sky
+from daytime → sunset → astronomical night → sunrise → daytime.
 
 ### Hardware
 - **Camera:** Canon EOS R3, controlled over WiFi via CCAPI v1.4.0
-- **Gimbal:** DJI Ronin RS4 Pro, driven via SBUS by Arduino
-- **Controller:** Arduino Uno R4 WiFi
+- **Gimbal:** DJI Ronin RS4 Pro, driven via CAN bus by Arduino
+- **Controller:** Arduino Uno R4 WiFi (Giga R1 also on hand, see Session C)
 - **Cart:** custom drive platform with steering / speed / battery telemetry
 - **Operator UI:** Excel workbook, talks HTTP to Arduino (gimbal + cart)
   and Canon CCAPI
@@ -36,13 +36,13 @@ daytime → sunset → astronomical night → sunrise → daytime.
 
 | Module          | Role                                                 |
 |-----------------|------------------------------------------------------|
-| `Sequence`      | Master timing loop, phase handlers, replay execution |
-| `Camera`        | Canon R3 CCAPI, luminance feedback, Tv lookup table  |
+| `Sequence`      | Master timing loop, single RunShot handler, replay   |
+| `Camera`        | Canon R3 CCAPI, luminance feedback, mode-driven walk |
 | `Gimbal`        | RS4 Pro control via Arduino HTTP                     |
 | `Cart`          | Cart log retrieval, replay plan generation           |
 | `Astro`         | Sun and Milky Way galactic centre angle calculations |
-| `Utils`         | Shared timing, phase math, JSON, logging             |
-| `BackupRestore` | Export/Import all modules + CheckDeclarationStyle    |
+| `Utils`         | Shared timing, phase math, Tv lookup, NextTv walker  |
+| `BackupRestore` | Export/Import (in-place overwrite), CheckDeclaration |
 | `Buttons`       | RunButton, CellFormat, AllBorder; BuildControlSheet  |
 
 Plus: `Control` sheet has its own code module with the
@@ -50,322 +50,284 @@ Plus: `Control` sheet has its own code module with the
 
 ---
 
-## Working baseline (end of session A)
+## Working baseline (end of session B)
 
-System runs end-to-end through all 7 phases with:
-- Tv encoding correct (Canon's `0"5`, `20"` format)
-- JSON properly escaped for shutter values containing `"`
-- Phase transitions firing gimbal moves at correct moments
-- **Non-blocking luminance pipeline** — Python runs concurrently with
-  the photo cycle, harvested next iteration. Photos never blocked.
-- ISO/Tv adjustment in feedback to luminance values, using operator
-  target values from Settings sheet (sunset 60, sunrise 40 provisional)
-- No blocking MsgBoxes in the photo loop path
-- Predictive Tv/ISO step tables still in use (retired in Session B)
+System runs end-to-end with:
+- **Single `RunShot` handler** replacing the seven phase-specific handlers
+  (RunPhase1, 2a, 2b, 3, 4, 4a, 4b, 5). Exposure is driven entirely by
+  pure luminance feedback, not by phase timing.
+- **Two modes** decided by clock vs `dataAstroDusk + 30 min`:
+  - **MODE_BRIGHTEN** (afternoon → night): adjustments only ever brighten.
+    Tv slows first toward 20", then ISO climbs toward 1600. Lum-too-bright
+    → do nothing (post fixes it).
+  - **MODE_DARKEN** (night → morning): adjustments only ever darken.
+    ISO drops first toward 100, then Tv speeds up toward 1/5000.
+    Lum-too-dark → do nothing.
+- **Monotone walks per mode**: a knob never reverses during one mode.
+  Eliminates oscillation as a failure mode.
+- **Photo primacy**: TakePhoto fires before any adjustment in the cycle.
+  Adjust failures are caught and logged; the photo always happens.
+- **Bug B clamp**: next-shot scheduling anchored off `g_scheduledTime`,
+  not `Now()`, with resync + TIMING-log on slip.
+- **503 retry hardening**: both CameraGet and CameraPut now retry on
+  503 with body-message parsing per CCAPI spec §3.3.3. Retries only
+  on transient messages ("Device busy", "During shooting or recording",
+  "Out of focus", "Can not write to card"); permanent states give up
+  immediately ("Mode not supported", "Live view not started" etc.).
+- **Kickoff throttled**: luminance kickoff fires every 3rd cycle only,
+  and BEFORE TakePhoto so its CCAPI calls land in the natural idle gap
+  rather than on top of the camera's write window.
 
-State at end of session A: indoor validation confirms full pipeline,
-including ISO step-down from 1600 → 1250 → 1000 → 800 → 640 under
-indoor saturated luminance (255 vs target 40, band [25,55]).
+### Validation results — fast-forward bench runs
+
+Indoor 27-shot runs through the brightening sweep showed consistent
+3-second intervals. Tv walked from 1/5000 down to 1/50–1/60 over 22-23
+shots; algorithm correctly idled once lum entered the deadzone band.
+Zero photos missed across multiple runs. One small cadence slip per
+run on average (1-2s), explained.
+
+### The 3-second cadence floor
+
+The shoot now runs at a steady 3-second photo interval during the
+fast-Tv stretches (Phase 1 / Phase 5). The cadence rule asks for 2s
+at fast Tv, but `Application.OnTime` has approximately 1-second
+resolution and the loop body work (status + monitor + heartbeat +
+kickoff + adjust + photo) consumes 0.5-1.5s, leaving no headroom for
+Excel to schedule sub-second precisely.
+
+This is a hard-floor architectural limit, not a bug. Software
+optimisation has been exhausted on the Excel side. Long-cadence
+performance (Phase 2b/3/4a at 22s, etc.) is unaffected — the 3s floor
+only bites in fast daytime cadence.
+
+**The operator's stated requirement is 2-second cadence: ~7800 photos
+over the overnight shoot drive the image-stabilisation pipeline.
+Small frame-to-frame changes are critical for clean stabilisation.**
+Session C is the work to deliver 2s.
 
 ---
 
-## Bugs fixed this session (session A)
+## Bugs fixed this session (session B)
 
 | Bug | Description | File |
 |---|---|---|
-| Bug A — MsgBox in GimbalToMilkyWay | Modal dialog when GC below horizon blocked the photo loop for ~18s. Earlier session's "fix" targeted a different MsgBox. | Sequence.bas |
-| Bug C — PollLuminanceCalc kills finished jobs | Timeout was checked before process status, terminating already-completed Python jobs that hadn't been polled yet. Reorder: status first, timeout only if still running. | Camera.bas |
+| Predictive Tv/ISO tables retired | g_phase2a_steps, g_phase4b_steps, BuildPhase2aSteps all gone. Phase handlers collapsed to one RunShot. | Sequence.bas |
+| NextTv direction sign | Walked Tv toward 1/64000 instead of 20" when feedback wanted "slower". g_tvStrings is slow→fast so the +1 direction had to subtract from the index, not add. | Utils.bas |
+| Bug B — OnTime cadence slip | Next-shot anchored off Now() instead of g_scheduledTime, so any cycle overrun shifted the schedule forward. Now anchored correctly with a Now()+interval clamp + log line on slip. | Sequence.bas |
+| 503 cascade on SetShutterSpeed | Adjust call fired immediately after TakePhoto, hit 503 on every adjusting cycle, retried 3s. Adjust moved to BEFORE TakePhoto with error containment around it; photo primacy preserved via the error handler, not via call ordering. | Sequence.bas |
+| 503 on kickoff GETs | Same root cause as above, on the luminance-fetch CCAPI GETs. CameraGet had no retry logic (asymmetric with CameraPut Bug 7). Added retry with shorter backoff than CameraPut. | Camera.bas |
+| 503 body unparsed | Spec §3.3.3 documents nine 503 messages; only four are transient. Both CameraGet and CameraPut now parse the body's "message" field and use IsBusyRetryable() to decide retry vs give-up. Body message logged on every retry — diagnostic gold for future investigations. | Camera.bas |
+| Kickoff hammering camera mid-write | Kickoff fired after TakePhoto during the camera's write window. Moved BEFORE TakePhoto so it lands in the idle gap; fetches the previous shot's thumbnail, which is fine since luminance is already 1-3 cycles stale anyway. | Sequence.bas |
+| Kickoff every cycle on fast cadence | At 2-3s cycle the camera never got idle time. Throttled to every 3rd cycle (LUM_KICKOFF_EVERY_N). Matches the real-world 3-shot measurement cadence from prior shoots. | Sequence.bas |
+| ImportModules rename collision | VBComponents.Remove is deferred — a subsequent Import in the same run found the name still in use and renamed incoming modules to "Camera1" / "Utils1" / "Buttons1". Rewrote ImportModules to overwrite in place via CodeModule.AddFromString, never touching the VBComponent. | BackupRestore.bas |
 
 ---
 
-## Bugs fixed previously (session 2)
+## Bugs fixed previously (session A)
 
 | Bug | Description | File |
 |---|---|---|
-| MsgBox in GimbalToMilkyWay (different one) | Earlier MsgBox along same path | Sequence.bas |
-| Tv encoding | Canon `0"5` / `20"` format, lookup from camera | Utils.bas |
-| JSON escape | `"` in Tv values broke JSON body | Utils.bas, Camera.bas |
-| Phase 2b/3/4a hardcoded `"20"` | Sent invalid Tv to camera | Sequence.bas |
-| Thumbnail JPG parser | Camera returns JSON array, not text lines | Camera.bas |
-| GetLastThumbnailLuminance invalid arg | Missing pageNum bounds check | Camera.bas |
-| First-shot warm-up | "Connection terminated" on first POST | Sequence.bas |
-| Application.Wait polling (Bug 6) | 8.6s per iteration killing luminance | Camera.bas |
-| Luminance script discovery | Hardcoded path, missed OneDrive location | Camera.bas |
-| Pillow not installed | luminance.py silently swallowed ImportError | Python env + luminance.py |
-| getdata() deprecation | Pillow 14 will remove it | luminance.py |
+| Bug A — MsgBox in GimbalToMilkyWay | Modal dialog blocked photo loop ~18s when GC below horizon | Sequence.bas |
+| Bug C — PollLuminanceCalc kills finished jobs | Timeout check before status check terminated finished-but-unpolled jobs | Camera.bas |
+
+(Plus the eleven bugs from session 2 — see git history.)
 
 ---
 
-## Known issues / observations (deferred)
+## Known issues / observations
 
-These are real but acceptable for now. Park for later:
+1. **3-second cadence floor in fast-Tv stretches** — Excel's
+   `Application.OnTime` resolution + the loop work budget can't deliver
+   2-second photos. This is Session C's headline task.
 
-1. **Phase 1 first-7-shots drift** — first sequence start has ~5-6s
-   intervals for shots 8-10 before settling at 2s. Camera buffer
-   warming up. 5 second hiccup on a 4-hour shoot — not worth optimising.
+2. **Phase 1 first-7-shots drift** — first sequence start has ~5-6s
+   intervals for shots 8-10 before settling. Camera buffer warming up.
+   Not worth optimising.
 
-2. **GetGimbalStatus 21-second timeout in one run** — Arduino WiFi
-   hiccup. Has 3-second per-call timeout configured. Either retried
-   internally or some other path. Not yet investigated.
+3. **GetGimbalStatus 21-second timeout in one run** — Arduino WiFi
+   hiccup. Has 3-second per-call timeout configured. Not yet
+   investigated. Bears watching when the cadence rate increases.
 
-3. **Phase 4a→4b transition int=21s residue** — when fast-forward test
+4. **Phase 4a→4b transition int=21s residue** — when fast-forward test
    compresses the phase boundary, leftover camera write from 20"
    exposures spills into the fast-Tv phase. In a real shoot the
    Phase 4 transition takes 25-60 min, plenty of time to drain.
 
-4. **Bug B (deferred to Session B) — Application.OnTime scheduling slip.**
-   Phase 5 in the Session A fast-forward run delivered 20-21s intervals
-   for 22 consecutive shots against a 2s target, then suddenly caught up.
-   Not introduced by Session A. Likely fix: compute `g_nextShotTime` from
-   `g_lastShotTime` consistently rather than from `Now()` after the loop's
-   housekeeping has eaten variable seconds. Investigation folds naturally
-   into Session B since both touch the phase handlers.
-
-5. **Predictive Tv/ISO step tables still in use** — they work, but
-   will be retired in Session B in favour of pure luminance feedback.
-
-6. **Luminance scale 0–255** — different from previous projects.
-   Operator targets set to provisional values pending outdoor calibration:
-   - Sunset target: 60
-   - Sunrise target: 40
-
-7. **Indoor test runs always saturate 255** at long exposures. Real
-   sunset/sunrise validation requires outdoor twilight session.
+5. **CCAPI camera-busy timing investigation deferred** — the 503 body
+   parsing now in place gives us per-call diagnostic data. A proper
+   bench session would fire TakePhoto then poll for a "ready" status
+   at 50ms intervals to build a histogram of how long the camera
+   actually takes to return idle. Would feed WaitForCamera's hardcoded
+   `WRITE_BUFFER = 2#` constant from data instead of guesswork.
 
 ---
 
-## Session A — complete (11 May 2026)
+## Session B — complete (11 May 2026)
 
-Non-blocking parallel luminance + operator target settings, replacing
-the every-Nth gate with emergent scheduling. **Architecture: Option A
-(Python-only deferral)**, decided via the benchmark phase.
+Replaced predictive Tv/ISO step tables with pure luminance feedback,
+folded in Bug B fix, hardened CCAPI 503 handling, and learned the
+fundamental limit of Excel-as-photo-scheduler.
 
-### Benchmark phase — what we learned
+### Key architectural learnings
 
-Built a temporary `Bench.bas` harness; ran 7 tests in real-world
-configuration (camera + gimbal balanced in operating position). Key
-findings:
+1. **Excel `Application.OnTime` has ~1-second resolution.** Whatever
+   sub-second timing we ask for, it'll fire on the next whole-second
+   tick after Excel is idle. The loop body cost (0.5-1.5s) plus this
+   resolution makes 2-second cadence impossible to deliver reliably.
 
-- **TakePhoto:** 137–150ms median, 200–270ms p95
-- **SetShutterSpeed / SetISO:** 250–280ms median, 315–440ms p95
-- **GimbalPosition (Arduino HTTP):** 168–193ms median, 230–400ms p95
-- **Combined worst case (Test 7 sunset cycle):** 620ms median, 1150ms p95 — well under the 1500ms threshold for Option A
+2. **The R3 returns 503 for nine distinct reasons** per CCAPI §3.3.3,
+   not just "busy writing". Parsing the body message tells us exactly
+   why, and which 503s deserve retries.
 
-Two surprises worth recording:
+3. **Photo primacy beats adjustment timing.** Reordering RunShot so
+   the adjust runs *before* TakePhoto (in the natural idle gap)
+   removed every 503-on-SetShutterSpeed event we'd been retrying
+   through. Wrapping the adjust in `On Error Resume Next` preserves
+   photo primacy without needing to put TakePhoto first.
 
-1. **Arduino is fire-and-forget for /move.** Reading the sketch
-   confirmed: setPosControl writes the CAN frame (~16ms) and returns;
-   no wait for gimbal completion. The HTTP roundtrip cost is the only
-   real cost. This means `time_for_action` on the gimbal command is
-   *not* a blocking duration on the VBA side — the gimbal carries out
-   the smooth move autonomously while VBA returns instantly.
+4. **Luminance staleness doesn't matter.** Lum changes per-minute, not
+   per-second. Throttling kickoff to every 3rd cycle, and fetching
+   the *previous* shot's thumbnail, costs us nothing.
 
-2. **The interval column in the bench results was quantised to
-   whole seconds** due to `Now()`'s second-only precision. The
-   apparent 31s/41s intervals on 22s-target tests were a measurement
-   artefact, not real inflation. Per-call timings (Timer-based,
-   millisecond precision) are the trustworthy data.
-
-### DJI SDK note discovered during benchmark phase
-
-DJI R SDK §2.3.4.1 specifies position commands as int16_t in 0.1°
-units. The 0.1° resolution is a hard floor — we can't ask for finer.
-`time_for_action` is uint8_t in 0.1s units, range 0.1s–25.5s. For the
-overnight hyperlapse use case (smooth gimbal motion at ~0.025°/s
-during photo intervals), small `time_for_action` values (0.5s) are
-correct for incremental tracking moves; large values (10–30s) only
-for big phase-boundary repointings.
-
-### Changes shipped
-
-**Settings sheet — two new named ranges (manual edit required):**
-
-| Named range | Default | Notes |
-|---|---|---|
-| `dataLumTargetSunset` | 60 | Phase 2a/2b target luminance (0–255) |
-| `dataLumTargetSunrise` | 40 | Phase 4a/4b target luminance (0–255) |
-
-If either is missing, code logs a warning at sequence start and falls
-back to the default (60/40). The shoot proceeds; it just uses the
-hardcoded defaults.
-
-**Camera.bas — new module state:**
-
-- `g_lumExec` — the running WScript.Shell.Exec object, or Nothing
-- `g_lumJobJpeg`, `g_lumJobStarted` — diagnostics for the in-flight job
-- `g_lastLuminance` — most recent successful value (0–255), or -1
-- `g_lumStaleness` — shots elapsed since last successful measurement
-
-**Camera.bas — new public functions:**
-
-- `KickOffLuminanceCalc(jpegPath)` — fire Python on a local JPEG, non-blocking
-- `KickOffLuminanceFromLastThumb()` — CCAPI dance + kick-off in one call
-- `PollLuminanceCalc()` — returns LUM_BUSY / LUM_DONE_NORESULT / 0..255
-- `GetLatestLuminance()`, `GetLuminanceStaleness()` — accessors
-- `BumpLuminanceStaleness()` — called per-shot by SequenceLoop
-- `ResetLuminanceState()` — called by StartSequence
-- `ValidateLuminanceSettings()` — startup warning if named ranges missing
-- `GetSunsetLumTarget()`, `GetSunriseLumTarget()` — read named range with default fallback
-- `FetchLastThumbnailToDisk()` — extracted from old monolithic GetLastThumbnailLuminance
-
-**Camera.bas — modified:**
-
-- `AdjustExposureByLuminance(targetLum)` — now takes target as parameter,
-  reads from `g_lastLuminance` instead of blocking fetch
-- `GetLastThumbnailLuminance()` — retained as synchronous wrapper around
-  the new kick-off/poll primitives. Production loop uses the primitives
-  directly; this wrapper is for ad-hoc diagnostics.
-- `CalcLuminance` — left in place as a legacy synchronous utility
-
-**Sequence.bas — IsSequenceRunning accessor added** (from bench phase, kept).
-
-**Sequence.bas — StartSequence:**
-- Now calls `ResetLuminanceState` and `ValidateLuminanceSettings` at startup
-
-**Sequence.bas — SequenceLoop reorder:**
-1. Poll for ready luminance (non-blocking harvest)
-2. Housekeeping (status, monitor, heartbeat) — unchanged
-3. Phase handler (the photo happens here) — unchanged
-4. Bump luminance staleness counter
-5. Kick off next luminance measurement if phase wants it
-6. Schedule next loop
-
-**Sequence.bas — phase handlers:**
-- `RunPhase2b` — calls `AdjustExposureByLuminance GetSunsetLumTarget()`
-- `RunPhase4a` — calls `AdjustExposureByLuminance GetSunriseLumTarget()`
-- `RunPhase2a`, `RunPhase3`, `RunPhase4b` — unchanged exposure logic.
-  Luminance kick-off happens in SequenceLoop's step 5 for all of them
-  (data flows for Session B calibration; no acting on it in those phases).
-
-### What didn't change
-
-- The predictive Tv/ISO step tables (g_phase2a_steps, g_phase4b_steps)
-  remain in use. Session B retires them in favour of pure luminance
-  feedback. Phase 2a and 4b still ride those tables.
-- WaitForCamera, OnPhaseEnter, GimbalTo* helpers — all unchanged
-- Cart replay infrastructure (StartCartReplay etc.) — unchanged
-- Gimbal commands in production code still use 10s/20s/30s
-  `time_for_action`. This is a placeholder until Session C's plan
-  expander assigns per-row times. Per-photo incremental tracking
-  moves *should* use 0.5s per the gimbal plan design.
-
-### Validation outcome (11 May 2026)
-
-Ran a fast-forward compressed-phase test that exercised all 7 phases in
-~13 minutes, plus a steady-state Phase 4a test confirming the Bug C fix.
-
-**Working as designed:**
-- ValidateLuminanceSettings ran at startup, both targets read (60, 40)
-- New luminance pipeline plumbed through end-to-end. Phase 2b/4a saw
-  `lum=255 stale=0..3` lines confirming poll/kick-off/staleness logic
-- Phase 4a stepped ISO down (1600 → 1250 → 1000 → 800 → 640) using
-  the new `AdjustExposureByLuminance(GetSunriseLumTarget())` call
-- Phase transitions fired all GimbalTo* helpers
-- TIMING line includes new kickoff column
-- No crashes, no orphan Python jobs, no compile errors
-- Per-photo cycle: 22–27s actual vs 22s target. Steady-state overrun
-  of ~1s is Bug B (deferred); within operator-stated 0–30s tolerance.
+5. **VBA's `VBComponents.Remove` is deferred** — never combine Remove
+   and Import in one run. Use CodeModule.AddFromString in place.
 
 ---
 
-## Session B (next) — replace predictive tables with pure luminance feedback
+## Session C — next: Arduino owns the shutter trigger
 
-- Replace predictive Tv/ISO step tables with pure luminance feedback
-- BuildPhase2aSteps and BuildPhase4bSteps retired
-- g_phase2a_steps and g_phase4b_steps arrays removed
-- Phase boundaries become advisory only (gimbal trigger + cadence
-  rule, no exposure logic dependency)
-- **Fold in Bug B investigation** (Application.OnTime drift): likely
-  fix is to compute `g_nextShotTime` from `g_lastShotTime` consistently
-  rather than from `Now()` after housekeeping. Phase handlers are
-  being touched anyway, natural place to address this.
+**Goal:** deliver true 2-second photo cadence by moving the photo timer
+out of Excel and onto the Arduino, which has microsecond-precision
+timing via `millis()` and no scheduler resolution problem.
 
-### Cadence rule (simplification confirmed)
+### Hardware path
 
-Photo interval becomes a function of Tv:
-```
-interval = roundup(Tv + 1.5s)
-```
+Arduino → CAN bus → Ronin RS4 Pro → Ronin fires the camera shutter.
 
-Examples:
-- Tv 1/5000 → 2s
-- Tv 1/8 → 2s
-- Tv 1" → 3s
-- Tv 17" → 19s (or 20s)
-- Tv 20" → 22s
+This adds no new cables. The Ronin already has the camera control
+cable; we're just adding a CAN frame to the existing Arduino-to-Ronin
+bus to tell the Ronin to fire. One less cable through the gimbal
+rotation point compared to a pin-8 shutter cable from Arduino to
+camera directly.
 
-Self-limiting: at Tv=1/5000 ISO=100 in daylight, luminance saturates
-above target — feedback can't make Tv slower than the lookup's longest
-value. Same at Tv=20" ISO=1600 in deep night. **No special-case Phase 1
-or Phase 5 code needed** — the loop naturally pins at the limits.
+**Validation needed before relying on this:**
+
+- Confirm DJI R SDK's CAN command for "trigger shutter" (R SDK §2.x).
+- Bench test: rapid shutter via CAN while gimbal is sweeping at
+  several speeds. Confirm no missed frames, no Ronin command-queue
+  stalls, no interaction with simultaneous gimbal position commands.
+  Real-world experience says it works but we validate before shipping.
+
+### Software split — minimal version
+
+| Concern | Owner |
+|---|---|
+| Photo trigger timing | Arduino (millis()-based, precise) |
+| Tv / ISO setting via CCAPI | Excel (unchanged) |
+| Thumbnail fetch + luminance | Excel (unchanged) |
+| Plan execution, monitor, log | Excel (unchanged) |
+| Sequence start/stop | Excel commands Arduino |
+| Cadence changes (Tv → 20") | Excel tells Arduino new interval |
+| Shutter inhibit during Tv-change | Excel sets flag, Arduino respects |
+
+### Proposed Arduino endpoints
+
+- `POST /shutter/start?interval_ms=2000` — start firing every N ms
+- `POST /shutter/stop` — stop
+- `POST /shutter/interval?ms=22000` — change cadence
+- `POST /shutter/inhibit?ms=1000` — defer next pulse (wraps SetShutterSpeed)
+- `GET /shutter/status` — last-fire time, interval, inhibit state
+
+### Excel side changes
+
+- `RunShot` no longer calls `TakePhoto`. Arduino does it autonomously.
+- `RunShot` still does: WaitForCamera (CCAPI gating only), inhibit-wrap
+  + AdjustExposureByLuminance, cadence-update-to-Arduino if Tv changed
+  enough to warrant a new interval.
+- The whole `g_scheduledTime` / `g_nextShotTime` / Bug B clamp scaffolding
+  stays for Excel's own loop, but the loop becomes leisurely (3-5s).
+  Photo timing is decoupled from Excel's scheduler entirely.
+
+### Open design questions for Session C
+
+1. **Does Excel need a "photo fired" callback from Arduino?** Probably
+   no — Excel adjusts Tv/ISO at its own pace, trusts Arduino is shooting.
+2. **Inhibit duration.** SetShutterSpeed p95 ~440ms; pair Tv+ISO worst
+   case ~900ms. Inhibit ~1000ms before the PUT, release after returns.
+3. **Should WaitForCamera be deleted?** It exists to prevent CCAPI
+   calls during the camera's write window. 503 retry now handles this.
+   Reconsider whether the explicit gate is still earning its keep.
+4. **What happens at exactly the strategy-switch moment?** Arduino is
+   shooting at 2s, Excel decides to switch to 22s. Arduino must accept
+   the new interval and apply it to the *next* pulse, not retroactively
+   to one mid-fire.
+
+### Also for Session C (validation work, lower priority)
+
+- **Giga R1 CAN bus retry.** Previous Giga attempts failed because the
+  `mbed::CAN` global constructor claims the FDCAN peripheral before
+  `Arduino_CAN.begin()` runs. Documented in `DJI_Ronin_UnoR4_Diag.ino`
+  header. The Uno R4 was the workaround. With this known, retry Giga
+  — its 1 MB RAM could host the luminance pipeline directly (MicroPython
+  on Giga can decode JPEGs), eliminating the Excel/Python round-trip
+  for luminance. Aspirational; not on the critical path.
+- **Validate "Arduino fires camera via Ronin" end-to-end.** Bench session
+  with diag sketch, capture frame timing while gimbal moves, look for
+  interaction effects.
 
 ---
 
-## Session C — Gimbal plan (design refined during Session A)
+## Session D — Gimbal plan (design refined during Session A)
 
-The Session A discussion clarified the design substantially. Locking in:
+(Unchanged — see prior PROJECT_STATE history. Brief:)
 
 **Sparse plan (operator-authored):** Excel sheet with rows copy-pasted
-from two reference sources — the GimbalLog (recorded actuals from
-rehearsal) and the Astro table (computed celestial positions). Operator
-edits offsets and picks an action per row. No special UI required.
+from GimbalLog (recorded actuals) and the Astro table (computed
+celestial positions). Operator edits offsets and picks an action.
 
-**Action vocabulary (open, shaped by examples):** at minimum we need
-`goto&hold` (arrive and stay), `goto&track` (arrive at a celestial
-target and follow it), `goto&tracknextposition` (smooth pan between
-two operator-chosen waypoints). Actions describe the expansion
-behaviour, not just the row's destination.
+**Action vocabulary:** `goto&hold`, `goto&track`, `goto&tracknextposition`.
 
 **Expander:** Python script `Python/expand_plan.py`, same pattern as
 `luminance.py`. Smoothing maths (catmull-rom or natural cubic spline)
-lives here. Operator clicks "Build Plan"; VBA exports sparse rows +
-dense astro lookup table to a temp file, Python returns the dense plan,
-VBA writes it to the Sequence sheet.
+lives here.
 
-**Astro single-sourced in VBA.** At expansion time VBA generates a
-dense astro table (every 30s through the shoot) and exports it. Python
-interpolates within. No duplicate celestial maths.
+**Astro single-sourced in VBA.** Dense astro table exported at
+expansion time; Python interpolates.
 
 **Per-row `time_for_action`** set by the expander. Big initial moves
-get 20–30s. Per-photo tracking steps get 0.5s. Holds emit no command.
+20-30s; per-photo tracking 0.5s; holds emit no command.
 
-**Executor:** generalised version of the existing `RunCartReplayStep`
-pattern, walking action-prefixed rows (`GIMBAL_GOTO`, `CART_SPEED` etc).
+**Executor:** generalised version of `RunCartReplayStep` walking
+action-prefixed rows.
 
 The current `GimbalToSunset / GimbalToMilkyWay / GimbalToSunrise`
 calls are **interim placeholders** — replaced by plan execution
 when this lands.
 
-`UpdateGimbalDisplay_FUTURE` in Gimbal.bas is the seed — see header
-notes there.
+`UpdateGimbalDisplay_FUTURE` in Gimbal.bas is the seed.
 
-Astronomy info (GC visibility, sunset direction) is **advisory** to
-plan authoring, not commands. Operator may follow or ignore.
+**Astronomy info advisory to plan authoring, not commands.**
 
-**Open unblockers for the next Session C session:**
+**Open unblockers for the next Session D session:**
 1. A worked sparse-plan example from a realistic shoot
-2. Confirm column layouts of GimbalLog and Astro table (so paste-as-block works)
-3. Real GC arc vs smoothed approximation for Milky Way tracking (assume real, confirm)
+2. Confirm column layouts of GimbalLog and Astro table
+3. Real GC arc vs smoothed approximation for Milky Way tracking
 
 ---
 
-## Session D — Cart plan (design refined during Session A)
+## Session E — Cart plan (design refined during Session A)
 
-Same pattern as Session C, cart movement instead of gimbal pointing.
+Same pattern as Session D, cart movement instead of gimbal pointing.
 Foundation already partly built — StartCartReplay / RunCartReplayStep
-from session 1 implements the OnTime-driven plan executor pattern.
+from session 1.
 
-**Sparse plan source:** Arduino CartLog from a high-speed rehearsal
-pass. Operator reviews the log (which contains distance information
-for each turn / start / stop event), then annotates with desired
-production-speed timing. This is the sparse plan.
+**Sparse plan source:** Arduino CartLog from a high-speed rehearsal.
 
 **Expansion rules:**
 - **Turns:** execute at the distance recorded in the log (no smoothing).
 - **Speed changes:** no smoothing; applied at operator-chosen moment.
-- **Stops:** linear smoothing via the Arduino's existing SPEED_DECAY
-  (6-minute ramp to zero). The expander must back-calculate the trigger
-  point so the cart actually stops at the operator's intended distance.
+- **Stops:** linear smoothing via Arduino's SPEED_DECAY (6-min ramp
+  to zero). Expander back-calculates the trigger point.
 
 **Executor:** same unified walker as gimbal plan.
 
@@ -375,44 +337,56 @@ production-speed timing. This is the sparse plan.
 
 1. **Photos are primary, sacred, never delayed.** Luminance
    calculations, gimbal moves, settings adjustments all happen
-   "around" the photo schedule.
+   "around" the photo schedule. Operator's stated requirement:
+   ~7800 photos over the overnight shoot, 2s cadence in daytime,
+   feeding the image-stabilisation pipeline. Small frame-to-frame
+   changes are critical for clean stabilisation.
 
-2. **Phase boundaries are advisory.** They mark astronomical events
-   for operator reference. The actual exposure control is luminance
-   feedback. Phase boundaries trigger gimbal moves (placeholder until
-   Session C) and set photo cadence rule by phase.
+2. **Phase boundaries are advisory only.** They mark astronomical
+   events for operator reference and trigger gimbal repointing.
+   Exposure control is luminance feedback, not phase-driven.
 
 3. **Plans (gimbal, cart) are operator-authored from logs.** Code
    provides info; operator decides creative shape; code executes
    the plan during the shoot.
 
-4. **R3 + good card is fast.** Design for typical-case timing
-   (~22s for 20" exposures, ~2s for fast). Tolerate occasional
-   spikes; don't optimise for worst-case.
+4. **R3 + good card is fast.** 14 fps mechanical shutter indefinitely;
+   the camera is never the bottleneck for cadence. The bottleneck is
+   the host scheduler.
 
 5. **Luminance changes per minute, not per second.** Sample sparsely,
    apply adjustments later. Stale-by-3-shots is fine.
 
-6. **Feedback control is self-limiting.** Tv can't go slower than
-   20", ISO can't go above 1600. No clamp code needed.
+6. **Feedback control is self-limiting per mode.** Tv can't go slower
+   than 20", ISO can't go above 1600, monotone walks. No clamp code
+   needed; the algorithm pins at the floors and stays quiet.
+
+7. **The right job for the right device.** Excel: planning, UI,
+   floating-point math, image processing. Arduino: real-time loops,
+   precise timing, hardware I/O. Don't ask Excel for sub-second
+   timing; don't ask Arduino for Pillow.
+
+8. **503 is information, not just an error.** CCAPI's nine 503
+   messages tell you exactly what state the camera is in. Parse
+   the body, log the message, decide retry intelligently.
 
 ---
 
-## Repo state
+## Repo state (end of session B)
 
-Files in good state (post-session-A):
-- `HyperLapse.xlsm` — tracked binary, Bench sheet removed
-- `Modules/*.bas` — current versions (Astro, BackupRestore, Buttons,
-  Camera, Cart, Gimbal, Sequence, Utils). Camera and Sequence updated
-  for Session A non-blocking luminance pipeline.
-- `Modules/Bench.bas` — REMOVE FROM REPO. Was added during Session A
-  benchmark phase; module removed from workbook at session A close.
-  Run `git rm Modules/Bench.bas` if it's still tracked.
-- `Python/luminance.py` — modernised, Pillow-based, diagnostic-friendly
+Files in good state:
+- `HyperLapse.xlsm` — tracked binary, all Session B changes imported
+- `Modules/*.bas`:
+  - `Sequence.bas` — single RunShot handler, Bug B clamp, kickoff throttle
+  - `Camera.bas` — mode-driven AdjustExposureByLuminance, 503 body parsing
+  - `Utils.bas` — new CalcInterval (ceiling(Tv+1.5)), NextTv walker
+  - `BackupRestore.bas` — ImportModules now overwrites in place
+  - `Astro.bas`, `Cart.bas`, `Gimbal.bas`, `Buttons.bas` — unchanged
+- `Python/luminance.py` — unchanged from session A
 - `.gitattributes`, `.gitignore` — in place
 
 Pillow installed in user's Python environment. luminance.py confirmed
-working from command line (<3s typical runtime including spawn).
+working from command line.
 
 ---
 
@@ -422,9 +396,12 @@ When opening the next session, the first message should:
 
 1. Reference this file (upload it).
 2. Upload the current `.bas` files. Run `ExportModules` first to
-   make sure they're current, then upload.
-3. State what to work on this session — most likely Session B
-   (replace predictive tables with luminance feedback, fold in Bug B fix).
+   make sure they're current.
+3. State what to work on this session — most likely Session C
+   (Arduino owns the shutter trigger).
+4. For Session C specifically: also upload the current Arduino
+   sketch (`DJI_Ronin_UnoR4_v2.ino`) so the protocol changes can
+   be designed against the real sketch state.
 
 Claude has no memory between sessions and cannot fetch private GitHub
 repos. Pasting a URL gives Claude nothing — files must be uploaded.
@@ -434,16 +411,22 @@ repos. Pasting a URL gives Claude nothing — files must be uploaded.
 ## Suggested next session opening
 
 ```
-Continuing HyperLapse Cart project — picking up Session B.
+Continuing HyperLapse Cart project — picking up Session C.
 
-State: end of session A, 11 May 2026. Working baseline confirmed —
-non-blocking luminance pipeline shipped, indoor validation confirms ISO
-feedback stepping ISO down under saturated luminance. Predictive Tv/ISO
-step tables still in place (Session B retires them).
+State: end of session B, 11 May 2026. Session B shipped pure luminance
+feedback, Bug B fix, 503 body-aware retry hardening. Steady 3-second
+cadence achieved indoors but Excel's Application.OnTime resolution is
+the hard floor — 2-second cadence requires Arduino to own the photo
+timer.
 
-This session: Session B — replace predictive Tv/ISO tables with pure
-luminance feedback, fold in Bug B investigation (OnTime drift).
-See PROJECT_STATE.md for full scope.
+This session: Session C — move the photo trigger to the Arduino,
+firing the camera via CAN bus to the Ronin. Excel keeps CCAPI work
+(Tv/ISO/luminance) but stops calling TakePhoto. Target: reliable 2s
+cadence for ~7800 overnight photos.
 
-Attached: PROJECT_STATE.md, all .bas files, luminance.py.
+Pre-work to validate: Arduino-via-Ronin shutter command end-to-end,
+including during gimbal sweeps. Possibly retry Giga R1 with the
+mbed::CAN-vs-Arduino_CAN issue documented in the diag sketch header.
+
+Attached: PROJECT_STATE.md, all .bas files, current Arduino sketch.
 ```

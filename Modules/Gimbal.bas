@@ -296,3 +296,6 @@ Private Function ClampDouble(ByVal val As Double, _
         ClampDouble = val
     End If
 End Function
+
+
+

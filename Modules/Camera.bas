@@ -89,6 +89,20 @@ Public Const LUM_BUSY         As Integer = -2
 Public Const LUM_DONE_NORESULT As Integer = -1
 ' (Values 0..255 returned directly as the luminance reading)
 
+' Luminance feedback mode (Session B, May 2026).
+' MODE_BRIGHTEN: adjustments only ever brighten (Mode 1, afternoon → night).
+'                Walk Tv slower first toward 20"; once Tv pinned, raise ISO.
+' MODE_DARKEN:   adjustments only ever darken (Mode 2, night → morning).
+'                Drop ISO first toward 100; once ISO pinned, speed Tv.
+' Mode switch is at dataAstroDusk + 30 min, decided by Sequence.GetLumMode.
+Public Const LUM_MODE_BRIGHTEN As Integer = 1
+Public Const LUM_MODE_DARKEN   As Integer = 2
+
+' ISO endpoints — the operator's chosen min/max for the shoot.
+' Hard-coded for now; could be operator-tunable via named ranges later.
+Public Const ISO_MIN As String = "100"
+Public Const ISO_MAX As String = "1600"
+
 ' Soft timeout on a running Python job. If a job hasn't completed
 ' within this many seconds we terminate it and return DONE_NORESULT.
 ' The old blocking CalcLuminance used a 5s budget — non-blocking can
@@ -109,28 +123,124 @@ End Function
 ' Core HTTP helpers
 ' ============================================================
 
+' Send a GET to the camera CCAPI.
+'
+' BUG FIX (Session B, May 2026): 503 Device Busy is not just a write-window
+' problem — the camera also returns it on file-listing GETs while it's
+' indexing/processing recently captured frames. The kickoff path
+' (FetchLastThumbnailToDisk) does three sequential GETs of which the
+' "?type=jpeg&kind=number" one frequently hits 503 even with several
+' seconds of idle since the last shutter event.
+'
+' Originally only CameraPut had 503 retry (Bug 7). The asymmetry was the
+' bug — GETs deserve the same hardening. This retry uses a shorter
+' backoff than CameraPut: the GET failures we see are short transient
+' busy states (camera indexing), not long 20s exposures.
+'
+' SESSION B UPGRADE (May 2026): the 503 response body carries a "message"
+' field per CCAPI spec §3.3.3. Nine documented messages, only four are
+' transient (retry might help): "Device busy", "During shooting or
+' recording", "Out of focus", "Can not write to card". Others ("Mode
+' not supported", "Live view not started" etc.) are permanent for the
+' current state — retry just wastes time. We now parse the body and
+' decide retry policy from it. Bonus: the message is logged on every
+' retry, giving us per-call diagnostic data about WHY the camera is
+' busy, which informs Session C's broader camera-timing investigation.
 Public Function CameraGet(ByVal endpoint As String) As String
+    Const MAX_BUSY_RETRIES As Integer = 4
+    Const INITIAL_BACKOFF_SECS As Double = 0.5
+    
     On Error GoTo ErrHandler
     Dim http As Object
     Set http = CreateObject("WinHttp.WinHttpRequest.5.1")
-    http.Open "GET", CAMERA_IP() & endpoint, False
-    http.SetRequestHeader "Content-Type", "application/json"
-    http.Send
-    Select Case http.Status
-        Case HTTP_OK
-            CameraGet = http.ResponseText
-        Case HTTP_DEVICE_BUSY
-            LogEvent "CAMERA", "GET " & endpoint & " - Device busy (503)"
-            CameraGet = ""
-        Case Else
-            LogEvent "CAMERA", "GET " & endpoint & " - HTTP " & http.Status
-            CameraGet = ""
-    End Select
+    
+    Dim attempt As Integer
+    Dim backoff As Double
+    backoff = INITIAL_BACKOFF_SECS
+    
+    For attempt = 0 To MAX_BUSY_RETRIES
+        http.Open "GET", CAMERA_IP() & endpoint, False
+        http.SetRequestHeader "Content-Type", "application/json"
+        http.Send
+        
+        Select Case http.Status
+            Case HTTP_OK
+                CameraGet = http.ResponseText
+                Set http = Nothing
+                Exit Function
+            Case HTTP_DEVICE_BUSY
+                Dim busyMsg As String
+                busyMsg = ParseJsonField(http.ResponseText, "message")
+                
+                If Not IsBusyRetryable(busyMsg) Then
+                    LogEvent "CAMERA", "GET " & endpoint & " - 503 [" & busyMsg & _
+                             "] - permanent for current state, not retrying"
+                    CameraGet = ""
+                    Set http = Nothing
+                    Exit Function
+                End If
+                
+                If attempt < MAX_BUSY_RETRIES Then
+                    LogEvent "CAMERA", "GET " & endpoint & " - 503 [" & busyMsg & _
+                             "], retry " & (attempt + 1) & "/" & MAX_BUSY_RETRIES & _
+                             " in " & Format(backoff, "0.0") & "s"
+                    Application.Wait Now + (backoff / 86400#)
+                    backoff = backoff * 1.5
+                Else
+                    LogEvent "CAMERA", "GET " & endpoint & " - 503 [" & busyMsg & _
+                             "] after " & MAX_BUSY_RETRIES & " retries, giving up"
+                    CameraGet = ""
+                    Set http = Nothing
+                    Exit Function
+                End If
+            Case Else
+                LogEvent "CAMERA", "GET " & endpoint & " - HTTP " & http.Status
+                CameraGet = ""
+                Set http = Nothing
+                Exit Function
+        End Select
+    Next attempt
+    
+    ' Should be unreachable
+    CameraGet = ""
     Set http = Nothing
     Exit Function
 ErrHandler:
     LogEvent "CAMERA", "GET " & endpoint & " - Connection failed: " & Err.Description
     CameraGet = ""
+End Function
+
+' Decide whether a 503 message warrants a retry.
+'
+' Per CCAPI spec §3.3.3, 503 carries one of nine message strings. Four
+' are transient (the camera is doing something that will finish):
+'   "Device busy"                 — function temporarily unavailable
+'   "During shooting or recording" — shutter still active
+'   "Out of focus"                — AF failed this attempt
+'   "Can not write to card"       — write error (often transient)
+'
+' The rest indicate the camera is in a state where the request will
+' NEVER succeed without changing camera mode:
+'   "Mode not supported"     — wrong shooting mode
+'   "Taken in preparation"   — service still starting up
+'   "Live view not started"  — caller forgot to start LV
+'   "Already started"        — double-start
+'   "Not started"            — DELETE called with no API running
+'
+' Unknown messages: retry once (newer firmware may add codes; better to
+' try than to give up on an unrecognised string).
+Private Function IsBusyRetryable(ByVal msg As String) As Boolean
+    Select Case msg
+        Case "Device busy", "During shooting or recording", _
+             "Out of focus", "Can not write to card"
+            IsBusyRetryable = True
+        Case "Mode not supported", "Taken in preparation", _
+             "Live view not started", "Already started", "Not started"
+            IsBusyRetryable = False
+        Case Else
+            ' Empty body or unknown message — try the retry once.
+            IsBusyRetryable = True
+    End Select
 End Function
 
 ' Send a JSON PUT to the camera CCAPI.
@@ -164,15 +274,26 @@ Public Function CameraPut(ByVal endpoint As String, ByVal jsonBody As String) As
                 Set http = Nothing
                 Exit Function
             Case HTTP_DEVICE_BUSY
+                Dim busyMsg As String
+                busyMsg = ParseJsonField(http.ResponseText, "message")
+                
+                If Not IsBusyRetryable(busyMsg) Then
+                    LogEvent "CAMERA", "PUT " & endpoint & " - 503 [" & busyMsg & _
+                             "] - permanent for current state, not retrying"
+                    CameraPut = False
+                    Set http = Nothing
+                    Exit Function
+                End If
+                
                 If attempt < MAX_BUSY_RETRIES Then
-                    LogEvent "CAMERA", "PUT " & endpoint & " - 503 busy, retry " & _
-                             (attempt + 1) & "/" & MAX_BUSY_RETRIES & _
+                    LogEvent "CAMERA", "PUT " & endpoint & " - 503 [" & busyMsg & _
+                             "], retry " & (attempt + 1) & "/" & MAX_BUSY_RETRIES & _
                              " in " & backoff & "s"
                     Application.Wait Now + (backoff / 86400#)
                     backoff = backoff * 1.5   ' gentle exponential backoff
                 Else
-                    LogEvent "CAMERA", "PUT " & endpoint & " - 503 after " & _
-                             MAX_BUSY_RETRIES & " retries, giving up"
+                    LogEvent "CAMERA", "PUT " & endpoint & " - 503 [" & busyMsg & _
+                             "] after " & MAX_BUSY_RETRIES & " retries, giving up"
                     CameraPut = False
                     Set http = Nothing
                     Exit Function
@@ -362,62 +483,168 @@ End Function
 '     so the photo loop is never gated on a luminance result.
 '   - Band width ±15 around target. Old code used absolute thresholds
 '     95/135 (a band of 40 centred on 115) — same shape, parametric.
-Public Function AdjustExposureByLuminance(ByVal targetLum As Integer) As String
-    Const BAND_HALF_WIDTH As Integer = 15
+' Adjust exposure based on the latest luminance reading.
+'
+' SESSION B REDESIGN (May 2026):
+' Replaces the predictive Tv/ISO step tables with pure feedback. The
+' algorithm is MONOTONE per mode — it only ever moves in one direction
+' during a given mode, eliminating oscillation as a failure mode:
+'
+'   MODE_BRIGHTEN (Mode 1, afternoon → night):
+'     If lum < target - DEADZONE:
+'       Slow Tv one step (lower-noise knob first).
+'       If Tv is already at the slowest value, raise ISO one step instead.
+'       If both are pinned (Tv=20", ISO=1600): accept the darkness.
+'     If lum is at or above target: do nothing. Post-production fixes
+'     the transient over-bright frames; the rule "take the photo, fix
+'     in post" trumps perfect exposure.
+'
+'   MODE_DARKEN (Mode 2, night → morning):
+'     If lum > target + DEADZONE:
+'       Drop ISO one step (lower-noise knob first).
+'       If ISO is already at the minimum, speed Tv one step instead.
+'       If both are pinned (ISO=100, Tv=1/5000): accept the brightness.
+'     If lum is at or below target: do nothing.
+'
+' DEADZONE is one-sided slack to prevent jitter on small lum-reading
+' noise. Smaller than the old symmetric ±15 band because we only need
+' slack on the side the algorithm acts.
+'
+' Returns: human-readable description of the action taken (or "" for
+' no action). Kept for compatibility with the previous signature.
+Public Function AdjustExposureByLuminance(ByVal targetLum As Integer, _
+                                          ByVal mode As Integer) As String
+    Const DEADZONE As Integer = 10
     
     Dim lum As Integer
     lum = g_lastLuminance
     
     If lum < 0 Then
         ' No measurement yet this session, or last measurement failed.
-        ' Don't act; phase handlers will retry next cycle.
+        ' Don't act; the algorithm will retry next cycle with a fresh reading.
         LogEvent "LUMINANCE", "AdjustExposure: no luminance available (-1), skipping"
         Range("dataCommCameraCheck").value = "Lum n/a " & Format(Now(), "HH:nn:ss")
         AdjustExposureByLuminance = ""
         Exit Function
     End If
     
-    Dim targetLow  As Integer
-    Dim targetHigh As Integer
-    targetLow = targetLum - BAND_HALF_WIDTH
-    targetHigh = targetLum + BAND_HALF_WIDTH
+    Dim currentTv  As String: currentTv = Range("dataCurrentTv").value
+    Dim currentISO As String: currentISO = Range("dataCurrentISO").value
     
     LogEvent "LUMINANCE", "lum=" & lum & " target=" & targetLum & _
-             " band=[" & targetLow & "," & targetHigh & "]" & _
+             " deadzone=" & DEADZONE & " mode=" & mode & _
              " stale=" & g_lumStaleness & _
-             " ISO=" & Range("dataCurrentISO").value & _
-             " Tv=" & Range("dataCurrentTv").value
+             " Tv=" & currentTv & " ISO=" & currentISO
     
-    Dim isoSteps() As String
-    isoSteps = Split(ISO_STEPS, ",")
-    Dim currentISO As String
-    currentISO = Range("dataCurrentISO").value
-    
-    Dim idx As Integer: idx = -1
-    Dim i As Integer
-    For i = 0 To UBound(isoSteps)
-        If isoSteps(i) = currentISO Then idx = i: Exit For
-    Next i
-    
-    If idx < 0 Then
-        LogEvent "CAMERA", "AdjustExposure: unknown ISO " & currentISO
+    If mode = LUM_MODE_BRIGHTEN Then
+        ' Only act if too DARK. Out-of-band the other way: post fixes it.
+        If lum >= targetLum - DEADZONE Then
+            Range("dataCommCameraCheck").value = "Lum:" & lum & " in/over " & Format(Now(), "HH:nn:ss")
+            AdjustExposureByLuminance = ""
+            Exit Function
+        End If
+        
+        ' Lower-noise knob first: slow Tv (NextTv direction = +1).
+        Dim slowerTv As String
+        slowerTv = NextTv(currentTv, 1)
+        If slowerTv <> "" Then
+            SetShutterSpeed slowerTv
+            Range("dataCommCameraCheck").value = "Lum:" & lum & " Tv slow->" & slowerTv & " " & Format(Now(), "HH:nn:ss")
+            AdjustExposureByLuminance = "Tv->" & slowerTv
+            Exit Function
+        End If
+        
+        ' Tv pinned at slowest — try ISO up.
+        Dim higherISO As String
+        higherISO = NextISO(currentISO, 1)
+        If higherISO <> "" Then
+            SetISO higherISO
+            Range("dataCommCameraCheck").value = "Lum:" & lum & " ISO up->" & higherISO & " " & Format(Now(), "HH:nn:ss")
+            AdjustExposureByLuminance = "ISO->" & higherISO
+            Exit Function
+        End If
+        
+        ' Both pinned at the night floor — accept it.
+        Range("dataCommCameraCheck").value = "Lum:" & lum & " pinned (night) " & Format(Now(), "HH:nn:ss")
         AdjustExposureByLuminance = ""
         Exit Function
     End If
     
-    Dim newISO As String: newISO = ""
-    If lum < targetLow And idx < UBound(isoSteps) Then
-        newISO = isoSteps(idx + 1)
-        SetISO newISO
-        Range("dataCommCameraCheck").value = "Lum:" & lum & " ISO up->" & newISO & " " & Format(Now(), "HH:nn:ss")
-    ElseIf lum > targetHigh And idx > 0 Then
-        newISO = isoSteps(idx - 1)
-        SetISO newISO
-        Range("dataCommCameraCheck").value = "Lum:" & lum & " ISO dn->" & newISO & " " & Format(Now(), "HH:nn:ss")
-    Else
-        Range("dataCommCameraCheck").value = "Lum:" & lum & " ISO OK " & Format(Now(), "HH:nn:ss")
+    If mode = LUM_MODE_DARKEN Then
+        ' Only act if too BRIGHT. Out-of-band the other way: post fixes it.
+        If lum <= targetLum + DEADZONE Then
+            Range("dataCommCameraCheck").value = "Lum:" & lum & " in/under " & Format(Now(), "HH:nn:ss")
+            AdjustExposureByLuminance = ""
+            Exit Function
+        End If
+        
+        ' Lower-noise knob first: drop ISO.
+        Dim lowerISO As String
+        lowerISO = NextISO(currentISO, -1)
+        If lowerISO <> "" Then
+            SetISO lowerISO
+            Range("dataCommCameraCheck").value = "Lum:" & lum & " ISO dn->" & lowerISO & " " & Format(Now(), "HH:nn:ss")
+            AdjustExposureByLuminance = "ISO->" & lowerISO
+            Exit Function
+        End If
+        
+        ' ISO pinned at minimum — try Tv faster.
+        Dim fasterTv As String
+        fasterTv = NextTv(currentTv, -1)
+        If fasterTv <> "" Then
+            SetShutterSpeed fasterTv
+            Range("dataCommCameraCheck").value = "Lum:" & lum & " Tv fast->" & fasterTv & " " & Format(Now(), "HH:nn:ss")
+            AdjustExposureByLuminance = "Tv->" & fasterTv
+            Exit Function
+        End If
+        
+        ' Both pinned at the daytime floor — accept it.
+        Range("dataCommCameraCheck").value = "Lum:" & lum & " pinned (day) " & Format(Now(), "HH:nn:ss")
+        AdjustExposureByLuminance = ""
+        Exit Function
     End If
-    AdjustExposureByLuminance = newISO
+    
+    ' Unknown mode — log and bail. Should never happen.
+    LogEvent "LUMINANCE", "AdjustExposure: unknown mode " & mode
+    AdjustExposureByLuminance = ""
+End Function
+
+' Walk one step through the ISO ladder.
+' direction = +1: one step higher (more amplification, brighter)
+' direction = -1: one step lower (less amplification, darker)
+' Returns "" if already at the wall in the requested direction.
+'
+' The ladder is ISO_STEPS (Camera module constant): 100,125,...,1600.
+' Stays within ISO_MIN .. ISO_MAX endpoints regardless of where the
+' operator may have manually set ISO before sequence start.
+Private Function NextISO(ByVal currentISO As String, ByVal direction As Integer) As String
+    Dim steps() As String
+    steps = Split(ISO_STEPS, ",")
+    
+    Dim idx As Integer: idx = -1
+    Dim i As Integer
+    For i = 0 To UBound(steps)
+        If steps(i) = currentISO Then idx = i: Exit For
+    Next i
+    
+    If idx < 0 Then
+        ' currentISO not in the ladder — find closest by numeric value.
+        Dim cur As Double: cur = CDbl(currentISO)
+        Dim bestDelta As Double: bestDelta = 1E+18
+        For i = 0 To UBound(steps)
+            Dim d As Double: d = Abs(CDbl(steps(i)) - cur)
+            If d < bestDelta Then bestDelta = d: idx = i
+        Next i
+        If idx < 0 Then NextISO = "": Exit Function
+    End If
+    
+    Dim newIdx As Integer
+    newIdx = idx + direction
+    If newIdx < 0 Or newIdx > UBound(steps) Then
+        NextISO = ""
+    Else
+        NextISO = steps(newIdx)
+    End If
 End Function
 
 ' ============================================================
@@ -1084,3 +1311,6 @@ Public Sub InitCamera()
     LogEvent "CAMERA", "Camera initialised: M f1.8 ISO100 1/5000"
     Range("dataCommCameraCheck").value = "Init OK " & Format(Now(), "HH:nn:ss")
 End Sub
+
+
+
