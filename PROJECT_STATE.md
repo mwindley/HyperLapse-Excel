@@ -1,6 +1,6 @@
 # HyperLapse Cart — Project State
 
-**Last updated:** 10 May 2026 (end of session 2)
+**Last updated:** 11 May 2026 (end of session A)
 
 This file is the handoff document between sessions. Update at the end of
 every working session. Upload it with the latest `.bas` files at the
@@ -50,26 +50,39 @@ Plus: `Control` sheet has its own code module with the
 
 ---
 
-## Working baseline (end of session 2)
+## Working baseline (end of session A)
 
 System runs end-to-end through all 7 phases with:
 - Tv encoding correct (Canon's `0"5`, `20"` format)
 - JSON properly escaped for shutter values containing `"`
 - Phase transitions firing gimbal moves at correct moments
-- Luminance pipeline working — real numbers (0-255) flowing through
-- ISO/Tv adjustment in feedback to luminance values
-- No blocking MsgBoxes
-- Per-shot overhead in night phases ~800ms (was 9000ms pre-session)
+- **Non-blocking luminance pipeline** — Python runs concurrently with
+  the photo cycle, harvested next iteration. Photos never blocked.
+- ISO/Tv adjustment in feedback to luminance values, using operator
+  target values from Settings sheet (sunset 60, sunrise 40 provisional)
+- No blocking MsgBoxes in the photo loop path
+- Predictive Tv/ISO step tables still in use (retired in Session B)
 
-State preserved on GitHub at commit `a31cd55` (10 May 2026).
+State at end of session A: indoor validation confirms full pipeline,
+including ISO step-down from 1600 → 1250 → 1000 → 800 → 640 under
+indoor saturated luminance (255 vs target 40, band [25,55]).
 
 ---
 
-## Bugs fixed this session (session 2)
+## Bugs fixed this session (session A)
 
 | Bug | Description | File |
 |---|---|---|
-| MsgBox in GimbalToMilkyWay | Blocked shoot if GC below horizon | Sequence.bas |
+| Bug A — MsgBox in GimbalToMilkyWay | Modal dialog when GC below horizon blocked the photo loop for ~18s. Earlier session's "fix" targeted a different MsgBox. | Sequence.bas |
+| Bug C — PollLuminanceCalc kills finished jobs | Timeout was checked before process status, terminating already-completed Python jobs that hadn't been polled yet. Reorder: status first, timeout only if still running. | Camera.bas |
+
+---
+
+## Bugs fixed previously (session 2)
+
+| Bug | Description | File |
+|---|---|---|
+| MsgBox in GimbalToMilkyWay (different one) | Earlier MsgBox along same path | Sequence.bas |
 | Tv encoding | Canon `0"5` / `20"` format, lookup from camera | Utils.bas |
 | JSON escape | `"` in Tv values broke JSON body | Utils.bas, Camera.bas |
 | Phase 2b/3/4a hardcoded `"20"` | Sent invalid Tv to camera | Sequence.bas |
@@ -80,10 +93,6 @@ State preserved on GitHub at commit `a31cd55` (10 May 2026).
 | Luminance script discovery | Hardcoded path, missed OneDrive location | Camera.bas |
 | Pillow not installed | luminance.py silently swallowed ImportError | Python env + luminance.py |
 | getdata() deprecation | Pillow 14 will remove it | luminance.py |
-
-Also added: timing instrumentation in SequenceLoop, declaration-style
-checker, photo-line log format with `int=` interval column, log
-timestamps showing seconds.
 
 ---
 
@@ -104,79 +113,172 @@ These are real but acceptable for now. Park for later:
    exposures spills into the fast-Tv phase. In a real shoot the
    Phase 4 transition takes 25-60 min, plenty of time to drain.
 
-4. **Predictive Tv/ISO step tables still in use** — they work, but
+4. **Bug B (deferred to Session B) — Application.OnTime scheduling slip.**
+   Phase 5 in the Session A fast-forward run delivered 20-21s intervals
+   for 22 consecutive shots against a 2s target, then suddenly caught up.
+   Not introduced by Session A. Likely fix: compute `g_nextShotTime` from
+   `g_lastShotTime` consistently rather than from `Now()` after the loop's
+   housekeeping has eaten variable seconds. Investigation folds naturally
+   into Session B since both touch the phase handlers.
+
+5. **Predictive Tv/ISO step tables still in use** — they work, but
    will be retired in Session B in favour of pure luminance feedback.
 
-5. **Luminance scale 0–255** — different from previous projects.
-   Operator targets need re-calibration. Provisional starting values
-   for Session B (subject to outdoor calibration):
-   - Sunset target: ~50–80
-   - Sunrise target: ~30–60
+6. **Luminance scale 0–255** — different from previous projects.
+   Operator targets set to provisional values pending outdoor calibration:
+   - Sunset target: 60
+   - Sunrise target: 40
 
-6. **Indoor test runs always saturate 255** at long exposures. Real
+7. **Indoor test runs always saturate 255** at long exposures. Real
    sunset/sunrise validation requires outdoor twilight session.
 
 ---
 
-## Session A (next, revised scope)
+## Session A — complete (11 May 2026)
 
-Original Session A was "add settings + every-Nth gate." Mid-session
-discussion clarified the architecture and merged Session A with what
-was previously Session C.
+Non-blocking parallel luminance + operator target settings, replacing
+the every-Nth gate with emergent scheduling. **Architecture: Option A
+(Python-only deferral)**, decided via the benchmark phase.
 
-**Revised Session A scope: non-blocking parallel luminance + operator
-targets, replacing the every-Nth gate with emergent scheduling.**
+### Benchmark phase — what we learned
 
-Operator priority — explicitly stated:
-> "Taking the photo is always priority. Calculation runs in parallel
-> over 3 photos. Adjustments may be 0-30 seconds late from predicted
-> time, that is fine."
+Built a temporary `Bench.bas` harness; ran 7 tests in real-world
+configuration (camera + gimbal balanced in operating position). Key
+findings:
 
-### What to build
+- **TakePhoto:** 137–150ms median, 200–270ms p95
+- **SetShutterSpeed / SetISO:** 250–280ms median, 315–440ms p95
+- **GimbalPosition (Arduino HTTP):** 168–193ms median, 230–400ms p95
+- **Combined worst case (Test 7 sunset cycle):** 620ms median, 1150ms p95 — well under the 1500ms threshold for Option A
 
-1. **Settings sheet additions** (2 new named ranges):
-   - `dataLumTargetSunset` (default ~60)
-   - `dataLumTargetSunrise` (default ~40)
-   - (No `dataLumSampleEvery` — emergent, not configured)
+Two surprises worth recording:
 
-2. **Camera.bas — non-blocking luminance:**
-   - Module-level state: `g_luminanceJob` (running exec object or Nothing),
-     `g_lastLuminance`, `g_lumStaleness` (shots since last update)
-   - New `KickOffLuminanceCalc(jpegPath)` — non-blocking start
-   - New `PollLuminanceCalc()` — checks status, returns
-     BUSY / READY+value / DONE_NORESULT
-   - Old blocking `GetLastThumbnailLuminance` retired or wrapped
+1. **Arduino is fire-and-forget for /move.** Reading the sketch
+   confirmed: setPosControl writes the CAN frame (~16ms) and returns;
+   no wait for gimbal completion. The HTTP roundtrip cost is the only
+   real cost. This means `time_for_action` on the gimbal command is
+   *not* a blocking duration on the VBA side — the gimbal carries out
+   the smooth move autonomously while VBA returns instantly.
 
-3. **Sequence.bas — loop reorder:**
-   - Each loop iteration:
-     1. Poll for ready luminance result, store if ready
-     2. Take photo (non-negotiable, never blocked)
-     3. Schedule next iteration
-     4. If no Python job running and current phase wants luminance,
-        kick off new measurement (uses last-saved thumb, fire-and-forget)
-   - Phase handlers consume `g_lastLuminance` (most recent value),
-     don't wait for fresh measurement
+2. **The interval column in the bench results was quantised to
+   whole seconds** due to `Now()`'s second-only precision. The
+   apparent 31s/41s intervals on 22s-target tests were a measurement
+   artefact, not real inflation. Per-call timings (Timer-based,
+   millisecond precision) are the trustworthy data.
 
-4. **Phase logic update:**
-   - Phase 2a/2b: feedback toward sunset target
-   - Phase 3: optional measurement, no acting
-   - Phase 4a/4b: feedback toward sunrise target
+### DJI SDK note discovered during benchmark phase
 
-### Key principle for Session A
+DJI R SDK §2.3.4.1 specifies position commands as int16_t in 0.1°
+units. The 0.1° resolution is a hard floor — we can't ask for finer.
+`time_for_action` is uint8_t in 0.1s units, range 0.1s–25.5s. For the
+overnight hyperlapse use case (smooth gimbal motion at ~0.025°/s
+during photo intervals), small `time_for_action` values (0.5s) are
+correct for incremental tracking moves; large values (10–30s) only
+for big phase-boundary repointings.
 
-**Photos are sacred.** Adjustments are best-effort. Adjustments may be
-applied 1-3 photo-cycles after the luminance reading they're based on,
-which is fine because luminance changes per-minute, not per-second.
+### Changes shipped
+
+**Settings sheet — two new named ranges (manual edit required):**
+
+| Named range | Default | Notes |
+|---|---|---|
+| `dataLumTargetSunset` | 60 | Phase 2a/2b target luminance (0–255) |
+| `dataLumTargetSunrise` | 40 | Phase 4a/4b target luminance (0–255) |
+
+If either is missing, code logs a warning at sequence start and falls
+back to the default (60/40). The shoot proceeds; it just uses the
+hardcoded defaults.
+
+**Camera.bas — new module state:**
+
+- `g_lumExec` — the running WScript.Shell.Exec object, or Nothing
+- `g_lumJobJpeg`, `g_lumJobStarted` — diagnostics for the in-flight job
+- `g_lastLuminance` — most recent successful value (0–255), or -1
+- `g_lumStaleness` — shots elapsed since last successful measurement
+
+**Camera.bas — new public functions:**
+
+- `KickOffLuminanceCalc(jpegPath)` — fire Python on a local JPEG, non-blocking
+- `KickOffLuminanceFromLastThumb()` — CCAPI dance + kick-off in one call
+- `PollLuminanceCalc()` — returns LUM_BUSY / LUM_DONE_NORESULT / 0..255
+- `GetLatestLuminance()`, `GetLuminanceStaleness()` — accessors
+- `BumpLuminanceStaleness()` — called per-shot by SequenceLoop
+- `ResetLuminanceState()` — called by StartSequence
+- `ValidateLuminanceSettings()` — startup warning if named ranges missing
+- `GetSunsetLumTarget()`, `GetSunriseLumTarget()` — read named range with default fallback
+- `FetchLastThumbnailToDisk()` — extracted from old monolithic GetLastThumbnailLuminance
+
+**Camera.bas — modified:**
+
+- `AdjustExposureByLuminance(targetLum)` — now takes target as parameter,
+  reads from `g_lastLuminance` instead of blocking fetch
+- `GetLastThumbnailLuminance()` — retained as synchronous wrapper around
+  the new kick-off/poll primitives. Production loop uses the primitives
+  directly; this wrapper is for ad-hoc diagnostics.
+- `CalcLuminance` — left in place as a legacy synchronous utility
+
+**Sequence.bas — IsSequenceRunning accessor added** (from bench phase, kept).
+
+**Sequence.bas — StartSequence:**
+- Now calls `ResetLuminanceState` and `ValidateLuminanceSettings` at startup
+
+**Sequence.bas — SequenceLoop reorder:**
+1. Poll for ready luminance (non-blocking harvest)
+2. Housekeeping (status, monitor, heartbeat) — unchanged
+3. Phase handler (the photo happens here) — unchanged
+4. Bump luminance staleness counter
+5. Kick off next luminance measurement if phase wants it
+6. Schedule next loop
+
+**Sequence.bas — phase handlers:**
+- `RunPhase2b` — calls `AdjustExposureByLuminance GetSunsetLumTarget()`
+- `RunPhase4a` — calls `AdjustExposureByLuminance GetSunriseLumTarget()`
+- `RunPhase2a`, `RunPhase3`, `RunPhase4b` — unchanged exposure logic.
+  Luminance kick-off happens in SequenceLoop's step 5 for all of them
+  (data flows for Session B calibration; no acting on it in those phases).
+
+### What didn't change
+
+- The predictive Tv/ISO step tables (g_phase2a_steps, g_phase4b_steps)
+  remain in use. Session B retires them in favour of pure luminance
+  feedback. Phase 2a and 4b still ride those tables.
+- WaitForCamera, OnPhaseEnter, GimbalTo* helpers — all unchanged
+- Cart replay infrastructure (StartCartReplay etc.) — unchanged
+- Gimbal commands in production code still use 10s/20s/30s
+  `time_for_action`. This is a placeholder until Session C's plan
+  expander assigns per-row times. Per-photo incremental tracking
+  moves *should* use 0.5s per the gimbal plan design.
+
+### Validation outcome (11 May 2026)
+
+Ran a fast-forward compressed-phase test that exercised all 7 phases in
+~13 minutes, plus a steady-state Phase 4a test confirming the Bug C fix.
+
+**Working as designed:**
+- ValidateLuminanceSettings ran at startup, both targets read (60, 40)
+- New luminance pipeline plumbed through end-to-end. Phase 2b/4a saw
+  `lum=255 stale=0..3` lines confirming poll/kick-off/staleness logic
+- Phase 4a stepped ISO down (1600 → 1250 → 1000 → 800 → 640) using
+  the new `AdjustExposureByLuminance(GetSunriseLumTarget())` call
+- Phase transitions fired all GimbalTo* helpers
+- TIMING line includes new kickoff column
+- No crashes, no orphan Python jobs, no compile errors
+- Per-photo cycle: 22–27s actual vs 22s target. Steady-state overrun
+  of ~1s is Bug B (deferred); within operator-stated 0–30s tolerance.
 
 ---
 
-## Session B (after Session A)
+## Session B (next) — replace predictive tables with pure luminance feedback
 
 - Replace predictive Tv/ISO step tables with pure luminance feedback
 - BuildPhase2aSteps and BuildPhase4bSteps retired
 - g_phase2a_steps and g_phase4b_steps arrays removed
 - Phase boundaries become advisory only (gimbal trigger + cadence
   rule, no exposure logic dependency)
+- **Fold in Bug B investigation** (Application.OnTime drift): likely
+  fix is to compute `g_nextShotTime` from `g_lastShotTime` consistently
+  rather than from `Now()` after housekeeping. Phase handlers are
+  being touched anyway, natural place to address this.
 
 ### Cadence rule (simplification confirmed)
 
@@ -199,17 +301,36 @@ or Phase 5 code needed** — the loop naturally pins at the limits.
 
 ---
 
-## Future sessions
+## Session C — Gimbal plan (design refined during Session A)
 
-### Session C — Gimbal Plan (separate large feature)
+The Session A discussion clarified the design substantially. Locking in:
 
-Operator workflow:
-1. Rehearsal pass at high speed with cart and gimbal
-2. Operator marks waypoints in `GimbalLog` via UI button
-   ("mark current gimbal position to log")
-3. Post-process log into a slow-time plan on a sheet
-4. During real shoot, plan executor runs alongside SequenceLoop,
-   issuing GimbalPosition commands at planned times
+**Sparse plan (operator-authored):** Excel sheet with rows copy-pasted
+from two reference sources — the GimbalLog (recorded actuals from
+rehearsal) and the Astro table (computed celestial positions). Operator
+edits offsets and picks an action per row. No special UI required.
+
+**Action vocabulary (open, shaped by examples):** at minimum we need
+`goto&hold` (arrive and stay), `goto&track` (arrive at a celestial
+target and follow it), `goto&tracknextposition` (smooth pan between
+two operator-chosen waypoints). Actions describe the expansion
+behaviour, not just the row's destination.
+
+**Expander:** Python script `Python/expand_plan.py`, same pattern as
+`luminance.py`. Smoothing maths (catmull-rom or natural cubic spline)
+lives here. Operator clicks "Build Plan"; VBA exports sparse rows +
+dense astro lookup table to a temp file, Python returns the dense plan,
+VBA writes it to the Sequence sheet.
+
+**Astro single-sourced in VBA.** At expansion time VBA generates a
+dense astro table (every 30s through the shoot) and exports it. Python
+interpolates within. No duplicate celestial maths.
+
+**Per-row `time_for_action`** set by the expander. Big initial moves
+get 20–30s. Per-photo tracking steps get 0.5s. Holds emit no command.
+
+**Executor:** generalised version of the existing `RunCartReplayStep`
+pattern, walking action-prefixed rows (`GIMBAL_GOTO`, `CART_SPEED` etc).
 
 The current `GimbalToSunset / GimbalToMilkyWay / GimbalToSunrise`
 calls are **interim placeholders** — replaced by plan execution
@@ -221,16 +342,32 @@ notes there.
 Astronomy info (GC visibility, sunset direction) is **advisory** to
 plan authoring, not commands. Operator may follow or ignore.
 
-### Session D — Cart Plan (parallel to Gimbal Plan)
+**Open unblockers for the next Session C session:**
+1. A worked sparse-plan example from a realistic shoot
+2. Confirm column layouts of GimbalLog and Astro table (so paste-as-block works)
+3. Real GC arc vs smoothed approximation for Milky Way tracking (assume real, confirm)
 
-Same pattern, cart movement instead of gimbal pointing. Foundation
-already partly built — StartCartReplay / RunCartReplayStep from
-session 1 implements the OnTime-driven plan executor pattern.
+---
 
-Operator workflow:
-1. Drive recce pass at speed; Arduino logs cart events to CartLog
-2. Post-process into slow-time replay plan on Sequence sheet
-3. Plan executor walks the rows during shoot
+## Session D — Cart plan (design refined during Session A)
+
+Same pattern as Session C, cart movement instead of gimbal pointing.
+Foundation already partly built — StartCartReplay / RunCartReplayStep
+from session 1 implements the OnTime-driven plan executor pattern.
+
+**Sparse plan source:** Arduino CartLog from a high-speed rehearsal
+pass. Operator reviews the log (which contains distance information
+for each turn / start / stop event), then annotates with desired
+production-speed timing. This is the sparse plan.
+
+**Expansion rules:**
+- **Turns:** execute at the distance recorded in the log (no smoothing).
+- **Speed changes:** no smoothing; applied at operator-chosen moment.
+- **Stops:** linear smoothing via the Arduino's existing SPEED_DECAY
+  (6-minute ramp to zero). The expander must back-calculate the trigger
+  point so the cart actually stops at the operator's intended distance.
+
+**Executor:** same unified walker as gimbal plan.
 
 ---
 
@@ -263,17 +400,19 @@ Operator workflow:
 
 ## Repo state
 
-Both repos clean, pushed. Last commit: `a31cd55`.
-
-Files in good state:
-- `HyperLapse.xlsm` — tracked binary
+Files in good state (post-session-A):
+- `HyperLapse.xlsm` — tracked binary, Bench sheet removed
 - `Modules/*.bas` — current versions (Astro, BackupRestore, Buttons,
-  Camera, Cart, Gimbal, Sequence, Utils)
+  Camera, Cart, Gimbal, Sequence, Utils). Camera and Sequence updated
+  for Session A non-blocking luminance pipeline.
+- `Modules/Bench.bas` — REMOVE FROM REPO. Was added during Session A
+  benchmark phase; module removed from workbook at session A close.
+  Run `git rm Modules/Bench.bas` if it's still tracked.
 - `Python/luminance.py` — modernised, Pillow-based, diagnostic-friendly
 - `.gitattributes`, `.gitignore` — in place
 
 Pillow installed in user's Python environment. luminance.py confirmed
-working from command line.
+working from command line (<3s typical runtime including spawn).
 
 ---
 
@@ -284,8 +423,8 @@ When opening the next session, the first message should:
 1. Reference this file (upload it).
 2. Upload the current `.bas` files. Run `ExportModules` first to
    make sure they're current, then upload.
-3. State what to work on this session — most likely Session A
-   (non-blocking parallel luminance + operator targets).
+3. State what to work on this session — most likely Session B
+   (replace predictive tables with luminance feedback, fold in Bug B fix).
 
 Claude has no memory between sessions and cannot fetch private GitHub
 repos. Pasting a URL gives Claude nothing — files must be uploaded.
@@ -295,14 +434,16 @@ repos. Pasting a URL gives Claude nothing — files must be uploaded.
 ## Suggested next session opening
 
 ```
-Continuing HyperLapse Cart project — picking up Session A.
+Continuing HyperLapse Cart project — picking up Session B.
 
-State: end of session 2, 10 May 2026. Working baseline confirmed —
-luminance pipeline functional, all infrastructure bugs fixed, predictive
-control still in place.
+State: end of session A, 11 May 2026. Working baseline confirmed —
+non-blocking luminance pipeline shipped, indoor validation confirms ISO
+feedback stepping ISO down under saturated luminance. Predictive Tv/ISO
+step tables still in place (Session B retires them).
 
-This session: Session A — non-blocking parallel luminance + operator
-target settings. See PROJECT_STATE.md for full scope.
+This session: Session B — replace predictive Tv/ISO tables with pure
+luminance feedback, fold in Bug B investigation (OnTime drift).
+See PROJECT_STATE.md for full scope.
 
 Attached: PROJECT_STATE.md, all .bas files, luminance.py.
 ```

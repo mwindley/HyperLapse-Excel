@@ -178,6 +178,16 @@ Public Sub StartSequence()
     
     ResetPhotoTimer          ' first shot will show "int=-" rather than a stale value
     
+    ' Reset non-blocking luminance state (Session A) — kills any orphan
+    ' Python job from a previous run, clears g_lastLuminance to -1 so
+    ' phase handlers know there's no measurement yet.
+    ResetLuminanceState
+    
+    ' Validate operator luminance targets (Session A). Logs warnings if
+    ' the named ranges are missing — code will fall back to defaults
+    ' (60 sunset, 40 sunrise) per PROJECT_STATE provisional values.
+    ValidateLuminanceSettings
+    
     Sheets("Settings").Range("dataSequenceRunning").value = "RUNNING"
     LogEvent "SEQ", "=== Sequence STARTED ==="
     
@@ -216,34 +226,59 @@ Public Sub StopSequence()
     End If
 End Sub
 
+' Public accessor for the private g_running flag.
+' Added for Bench.bas (Session A benchmark phase) to gate against
+' running benchmarks while a real sequence is live. Safe to keep in
+' place after benchmarking is removed — harmless and useful.
+Public Function IsSequenceRunning() As Boolean
+    IsSequenceRunning = g_running
+End Function
+
 ' ============================================================
 ' Main loop — fires at each shot interval
 ' ============================================================
 
 ' Main loop — fires once per shot interval via Application.OnTime.
 '
-' Each iteration:
-'   1. Polls Arduino status, updates Monitor sheet, sends gimbal heartbeat.
-'   2. Detects phase transitions and runs OnPhaseEnter once per change
-'      (BUG 3 FIX — previously the GimbalToSunset/MilkyWay/Sunrise transitions
-'      were defined but never called from anywhere).
-'   3. Dispatches to the active phase handler.
-'   4. Reschedules itself for g_nextShotTime — which the phase handler
-'      (or WaitForCamera, Bug 1) has set to the desired next firing time.
+' SESSION A REORDER (May 2026):
+' Each iteration now does, in order:
+'   1. POLL — harvest any ready luminance result (non-blocking).
+'      Updates g_lastLuminance + dataLuminance if a fresh value arrived.
+'   2. Housekeeping — Arduino status, Monitor sheet, gimbal heartbeat.
+'   3. PHASE — run the active phase handler (which takes the photo,
+'      consumes g_lastLuminance for adjustments, and sets g_nextShotTime).
+'   4. BUMP — increment luminance staleness counter (one shot just happened).
+'   5. KICK-OFF — if this phase wants luminance and no job is running,
+'      fetch the last thumbnail and fire Python for next iteration.
+'      Photo has already happened; this runs in the gap before
+'      OnTime wakes us up again.
+'   6. SCHEDULE — reschedule for g_nextShotTime.
+'
+' Photos are sacred. The luminance pipeline never blocks the photo loop.
+' Adjustments may be 1-3 photo-cycles late relative to the reading they
+' are based on. This is acceptable: luminance changes per-minute, not
+' per-second.
 Public Sub SequenceLoop()
     If Not g_running Then Exit Sub
     
     Dim phase As Integer
     Dim t0    As Double, t1 As Double
-    Dim msStatus As Long, msMonitor As Long, msHeartbeat As Long, msPhase As Long
+    Dim msPoll As Long, msStatus As Long, msMonitor As Long
+    Dim msHeartbeat As Long, msPhase As Long, msKickoff As Long
     
     phase = GetCurrentPhase()
     
-    ' Update Monitor and send heartbeat every loop. Time each step so we
-    ' can see which one is causing inter-shot drift. (May 2026 — Phase 1
-    ' was running at 5-7s per loop instead of 2s; instrumentation added
-    ' to track down the offender. Remove once cause is fixed.)
+    ' ── Step 1: harvest any ready luminance ──────────────────
+    ' PollLuminanceCalc has side effects only — it updates g_lastLuminance
+    ' and dataLuminance if a fresh value arrived. Return value is unused.
+    '   LUM_BUSY (-2)         — still running, do nothing
+    '   LUM_DONE_NORESULT (-1) — finished but failed (already logged)
+    '   0..255                 — fresh value, stored in g_lastLuminance
     t0 = Timer
+    PollLuminanceCalc
+    t1 = Timer: msPoll = (t1 - t0) * 1000: t0 = t1
+    
+    ' ── Step 2: housekeeping ─────────────────────────────────
     GetGimbalStatus
     t1 = Timer: msStatus = (t1 - t0) * 1000: t0 = t1
     
@@ -259,7 +294,7 @@ Public Sub SequenceLoop()
         g_lastPhase = phase
     End If
     
-    ' Execute current phase logic
+    ' ── Step 3: phase handler (the photo happens here) ───────
     Select Case phase
         Case 1:  RunPhase1
         Case 22: RunPhase2a
@@ -268,15 +303,30 @@ Public Sub SequenceLoop()
         Case 4:  RunPhase4
         Case 5:  RunPhase5
     End Select
-    t1 = Timer: msPhase = (t1 - t0) * 1000
+    t1 = Timer: msPhase = (t1 - t0) * 1000: t0 = t1
+    
+    ' ── Step 4: bump staleness (one shot just happened) ──────
+    BumpLuminanceStaleness
+    
+    ' ── Step 5: kick off next luminance measurement if needed ─
+    ' Only for phases that want luminance feedback. Phase 1 and 5 don't
+    ' (fully saturated, no signal). Phases 2a/2b/3/4a/4b all measure —
+    ' even when not acting on it (3, 2a, 4b) the data is useful for
+    ' Session B calibration.
+    If PhaseWantsLuminance(phase) Then
+        KickOffLuminanceFromLastThumb   ' returns immediately, fire-and-forget
+    End If
+    t1 = Timer: msKickoff = (t1 - t0) * 1000
     
     ' Only log timing if total exceeds 500ms — skips the chatter when
     ' everything's fast, but flags every problem loop.
-    If msStatus + msMonitor + msHeartbeat + msPhase > 500 Then
-        LogEvent "TIMING", "status=" & msStatus & "ms" & _
+    If msPoll + msStatus + msMonitor + msHeartbeat + msPhase + msKickoff > 500 Then
+        LogEvent "TIMING", "poll=" & msPoll & "ms" & _
+                 " status=" & msStatus & "ms" & _
                  " monitor=" & msMonitor & "ms" & _
                  " heartbeat=" & msHeartbeat & "ms" & _
-                 " phase=" & msPhase & "ms"
+                 " phase=" & msPhase & "ms" & _
+                 " kickoff=" & msKickoff & "ms"
     End If
     
     ' Schedule next loop. Capture g_scheduledTime so StopSequence can cancel it.
@@ -285,6 +335,17 @@ Public Sub SequenceLoop()
         Application.OnTime g_scheduledTime, "SequenceLoop"
     End If
 End Sub
+
+' Does the active phase want a luminance measurement this cycle?
+' Phases 1 and 5 are daytime — fully saturated, no signal. All others
+' measure: 2b and 4a *act* on the data, 2a/3/4b just record it (useful
+' for Session B calibration even though not used for control).
+Private Function PhaseWantsLuminance(ByVal phase As Integer) As Boolean
+    Select Case phase
+        Case 22, 23, 3, 4: PhaseWantsLuminance = True
+        Case Else:          PhaseWantsLuminance = False
+    End Select
+End Function
 
 ' Phase-entry hook — fires once when the active phase number changes.
 ' Position the gimbal for the upcoming phase and log the transition.
@@ -390,8 +451,11 @@ Private Sub RunPhase2b()
     ' If not safe, bail and let SequenceLoop reschedule.
     If Not WaitForCamera(20#) Then Exit Sub
     
-    ' Get luminance of last shot and adjust ISO if needed
-    AdjustExposureByLuminance
+    ' Adjust ISO toward sunset luminance target. NON-BLOCKING — consumes
+    ' the most recent g_lastLuminance value, doesn't wait for a fresh one.
+    ' (Session A change — target comes from named range; previous code
+    ' used hardcoded TARGET_LOW=95/TARGET_HIGH=135.)
+    AdjustExposureByLuminance GetSunsetLumTarget()
     
     ' Take next photo
     TakePhoto
@@ -469,9 +533,10 @@ Private Sub RunPhase4a()
     
     If Not WaitForCamera(20#) Then Exit Sub
     
-    ' Use luminance to step ISO down (same as 2b but in reverse)
-    ' Luminance will be higher as dawn approaches — ISO will step down naturally
-    AdjustExposureByLuminance
+    ' Adjust ISO toward sunrise luminance target. NON-BLOCKING — consumes
+    ' g_lastLuminance via the new pipeline. Luminance will be higher as
+    ' dawn approaches; ISO steps down naturally as lum > targetHigh.
+    AdjustExposureByLuminance GetSunriseLumTarget()
     
     TakePhoto
     g_lastShotTime = Now()
@@ -603,8 +668,15 @@ Public Sub GimbalToMilkyWay()
         LogEvent "SEQ", "Gimbal moved to Milky Way: yaw=" & Format(yaw, "0.1") & _
                  " pitch=" & Format(pitch, "0.1")
     Else
-        LogEvent "SEQ", "WARNING: Galactic centre below horizon at this time"
-        MsgBox "Galactic centre is below the horizon. Check AstroTable for rise time.", vbExclamation
+        ' BUG A FIX (Session A, May 2026): the previous code popped a
+        ' modal MsgBox here that blocked the photo loop for as long as
+        ' the operator took to dismiss it. Observed cost: 18s of dead
+        ' loop time during a Session A validation run when the GC was
+        ' below the horizon (test ran in daytime; Phase 3 fired anyway).
+        ' Now: log the warning and continue. The gimbal simply doesn't
+        ' move for this phase entry. Operator can read the log later if
+        ' the framing was wrong.
+        LogEvent "SEQ", "WARNING: Galactic centre below horizon at this time — Phase 3 entered without gimbal repoint"
     End If
 End Sub
 
