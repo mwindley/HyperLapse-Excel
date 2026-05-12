@@ -1,77 +1,77 @@
 # HyperLapse Cart — Project State
 
-**Last updated:** 12 May 2026 (end of Session C day 2 — pin-8 architecture in service, RAW-only buffer fix committed, R3 WiFi-drop investigation open but de-risked)
+**Last updated:** 12 May 2026 (end of Session C day 3 — exposure walk in service, Tv/ISO autonomy on cart, all Session C core deliverables complete)
 
 This file is the handoff document between sessions. Upload it with the
 latest `.bas` files and Arduino sketches at the start of the next session.
 
 ---
 
-## ⚠️ Top-of-file context — Session C day 2 outcomes
+## ⚠️ Top-of-file context — Session C day 3 outcomes
 
-### Yesterday's open issue is resolved (by architecture change)
+### Exposure walk shipped — Tv/ISO autonomy on cart
 
-Day 1 ended with the Ronin's CAN-via-cable shutter broken — could send
-the command, no photo on card. Day 2 confirmed this couldn't be recovered
-cheaply: Ronin's only "supported" R3 shutter path is Bluetooth (M-button),
-which doesn't coexist with the camera-control cable used for focus/record.
-**CAN-via-Ronin shutter is now retired** as a near-dead capability.
+Day 3 ports `AdjustExposureByLuminance + NextTv + NextISO` from Excel
+`Camera.bas` / `Utils.bas` to the Arduino. The cart now owns exposure
+control end-to-end: read luminance via CCAPI live view → walk Tv/ISO
+one step toward target → PUT to camera via CCAPI → update local state.
 
-**Architectural pivot:** the Arduino's existing pin-8 + cable to the
-camera's remote shutter port is now the shutter path. WiFi-independent.
-Tangle risk on the gimbal accepted. CCAPI is reserved for luminance only.
+**Committed at `331d242`.** Validated on real hardware:
 
-**This change is committed and validated:**
-- Commit `71f62c2` — pin-8 owns shutter, CAN shutter retired
-- All shutter modes (manual, button-18 backup, mode 3 timer) now fire pin-8
-- Test 1 single shot: photo on card, red card-write LED ✓
-- Test 2 mode-3 timer: 22 photos at 2s cadence, card-verified ✓
+| Test | Result |
+|---|---|
+| E1 — `/exposure/init` loads Tv/ISO from camera | PASS (matched camera display) |
+| E2 — `/exposure/state` returns walk state JSON | PASS (all fields correct) |
+| E3 — Walk with no luminance available | PASS (returns `reason:"no_luminance"`, no PUT) |
+| E4 — BRIGHTEN walk, real PUT | PASS (Tv 1/20 → 1/15, camera confirmed) |
+| E5 — DARKEN walk, real PUT | PASS (Tv 1/15 → 1/20 → 1/25, two walks correct) |
 
-### Today's other commit — RAW-only buffer fix
+Day 2's pin-8 architecture and RAW-only buffer fix remain in service
+(commits `71f62c2` and `a2ccca1` from yesterday). Total Session C state:
 
-Commit `a2ccca1` — `LUM_RESP_BUF_SIZE` bumped from 5120 to 6144.
+| Commit | Subject |
+|---|---|
+| `331d242` | Exposure walk (Tv/ISO via CCAPI PUT) |
+| `a2ccca1` | RAW-only buffer fix (5120 → 6144) |
+| `71f62c2` | Pin-8 owns shutter (CAN shutter retired) |
+| `ffe7dce` | (Day 1 — luminance + resilience plumbing) |
 
-When the camera was switched from RAW+JPEG to RAW-only during this session,
-the CCAPI `liveview/flipdetail?kind=info` response grew from ~4521 bytes
-to ~5360 bytes, overflowing the 5KB buffer. Symptoms: every fetch failed
-with "bad data size" or "response timeout". 10KB was attempted first but
-caused linker RAM overflow on the Uno R4. 6KB fits with ~700-byte headroom
-and is now the production-safe size.
+### What's NOT done yet (deferred to next session)
 
-Validated by the 10-minute Test 4 below.
+- **Auto-trigger of walk from luminance fetch path.** Currently the walk
+  is manual-endpoint-only. Wiring it to run automatically after every
+  successful luminance fetch is the next step — estimated ~3 lines of
+  code. Stage 2 of the two-stage plan.
+- **Deliberate WiFi drop test** — resilience layer caught a real outage
+  today (`live view RECOVERED after 5 attempts`) but a controlled drop
+  test still pending.
+- **Excel-side changes** — Excel should stop firing TakePhoto, stop
+  calling CCAPI directly, and poll the new cart endpoints instead.
+- **Cleanup commit** — `cameraShutter()` dead-code function definition
+  still present; removable.
 
-### R3 WiFi profile drop — open investigation, de-risked
+### R3 WiFi-profile drop — incident #4 observed
 
-The camera's WiFi profile selection has been observed to drop three times
-across two sessions, requiring manual operator recovery (cycle camera
-menu through SET1 to SET3 = "Rosedale CCAPI" to reselect). This is a
-camera-side behaviour; no software path from the Arduino can recover it.
+Camera power-cycled today (battery saving), self-cleared battery
+warning on restart, came up with no WiFi profile selected. Recovery
+procedure (SET3 reselect) worked. **First incident with a clear
+trigger: camera power cycle.** The earlier three drops had unclear
+triggers; this one didn't.
 
-**Root cause: not conclusively identified.** Two tests today:
+Operational implication unchanged: operator should not need to
+power-cycle the camera during a shoot. Pin-8 architecture means cart
+keeps shooting through any camera WiFi loss; only luminance and
+exposure updates pause until SET3 is reselected.
 
-- **Test 3 (deprivation):** 5-min mode-3 pin-8 run with ALL spontaneous
-  CCAPI traffic disabled. Camera survived — green light on, /ccapi
-  responsive. CCAPI traffic implicated as candidate trigger family.
-- **Test 4 (full operation):** 10-min mode-3 pin-8 run with full CCAPI
-  traffic (live view, ~150 luminance fetches). Camera survived — green
-  light on, /ccapi responsive, 99% card delivery. **Did not reproduce
-  the drop** despite significant CCAPI use.
+### Resilience layer demonstrated in production-like conditions
 
-**Most plausible remaining hypothesis:** today's earlier drop happened
-during a run with the 5KB buffer where every fetch failed with
-oversized/timeout errors. Repeated *failed* fetches (not successful
-ones) may be the trigger family. Pre-buffer-fix this kind of stress
-was inevitable in RAW-only mode; post-fix it should be rare.
-
-**Mitigation already in place by architecture:**
-- Pin-8 shutter keeps photos flowing through any CCAPI failure
-- Resilience layer (3-fail threshold, 30s retry, rate-limited logging)
-  absorbs transient camera unresponsiveness
-- Worst-case overnight failure: exposure freezes at last good values;
-  shoot continues; operator recovers SET3 in the morning
-
-**Operationally accepted as a residual risk.** Worth instrumenting for
-next time it happens, but no longer blocking production.
+During today's E4-prep mode-3 run, live view initially failed to start
+(camera was in some transient state) and the cart entered the retry
+loop. After 5 retries (~2.5 minutes), live view came up and luminance
+started flowing normally: `[lum] live view RECOVERED after 5 attempts`,
+then steady `[lum] mean=66 photos=N` lines. The cart kept firing
+photos via pin-8 throughout. **This is the first observed real-world
+fire of the resilience plumbing**, and it behaved exactly as designed.
 
 ### Recovery procedure for R3 WiFi drop (when it does happen)
 
@@ -132,6 +132,17 @@ late afternoon → sunset → astronomical night → sunrise → daytime.
   (NOT `/liveview` — that returns 405)
 - **Stop call can return 503 (camera busy)** — observed today. Treat as
   transient; live view typically still gets cleaned up on camera side.
+- **Tv GET/PUT:** `GET / PUT /ccapi/ver100/shooting/settings/tv`
+  - GET returns `{"value":"<canon>","ability":[...]}` — value extracted
+    via `parseCcapiValue()`. Decodes `\/` and `\"` escapes.
+  - PUT body: `{"value":"<canon>"}` — Canon's seconds-symbol `"` must
+    be JSON-escaped to `\"`. Done by `jsonEscapeTv()`.
+  - Cart GET-once at `/exposure/init`; PUT on every walk step.
+- **ISO GET/PUT:** `GET / PUT /ccapi/ver100/shooting/settings/iso`
+  - Same shape. ISO values are plain digit strings; no escaping needed.
+- **503 retry policy** for Tv/ISO PUTs: 5 retries, 3s initial backoff,
+  1.5× growth (max ~33s worst-case wait). Matches `CameraPut` in
+  `Camera.bas`. Busy-message-aware via `isBusyRetryable()`.
 
 ---
 
@@ -144,14 +155,15 @@ late afternoon → sunset → astronomical night → sunrise → daytime.
 | `main` | Uno R4 v13 production sketch | Stable, behind by Session C work |
 | `session-c-giga` | Giga TX test sketch | Parked — Giga CAN proven, not the path forward |
 | `session-c-uno-timer` | Mode 3 photo timer (CAN-shutter era) | Superseded by `session-c-uno-luminance` |
-| `session-c-uno-luminance` | **Current head** — pin-8 shutter, mode 3 timer, CCAPI luminance, WiFi resilience, RAW-only buffer | All work below committed and pushed |
+| `session-c-uno-luminance` | **Current head** — pin-8 shutter, mode 3 timer, CCAPI luminance, WiFi resilience, RAW-only buffer, **exposure walk (Tv/ISO via CCAPI PUT)** | All work below committed and pushed |
 | `session-c-liveview-test` | One-shot coexistence test sketch | Archived — not for merge |
 
 The `session-c-uno-luminance` branch is the cumulative head of Session C
-work. Two new commits today on top of yesterday's `ffe7dce`:
+work. Three commits today on top of yesterday's `ffe7dce`:
 
 | Commit | Subject |
 |---|---|
+| `331d242` | Session C day 3: exposure walk — Tv/ISO control via CCAPI PUT |
 | `a2ccca1` | Session C: bump LUM_RESP_BUF_SIZE 5120 to 6144 for RAW-only payloads |
 | `71f62c2` | Session C: pin-8 owns shutter; CAN shutter retired |
 | `ffe7dce` | (previous head — yesterday's luminance + resilience work) |
@@ -175,12 +187,25 @@ work. Two new commits today on top of yesterday's `ffe7dce`:
 ✅ Camera WiFi profile holds through full-operation CCAPI traffic
    (Test 4, but see drop-history note above — single-run negative is
    not the same as proof)
+✅ **Exposure walk end-to-end** — `/exposure/init`, `/exposure/state`,
+   `/exposure/target`, `/exposure/walk` all working; both BRIGHTEN and
+   DARKEN modes confirmed walking the right direction; Tv PUT verified
+   against camera back-screen; JSON escaping of Canon `"` works;
+   ladder math correct in both directions
+✅ **Resilience caught a real outage during day-3 testing** —
+   `[lum] live view RECOVERED after 5 attempts` then steady fetches.
+   First production-like fire of the resilience plumbing.
 
 ### What's NOT verified
 
-❌ Resilience behaviour under deliberate WiFi drop (transient failures
-   recovered, but a full disconnect/reconnect cycle hasn't been forced)
-❌ Tv/ISO walk — code not written yet
+❌ Resilience behaviour under deliberate WiFi drop (a real outage was
+   recovered today, but a controlled drop/recover test hasn't been
+   forced)
+❌ Walk auto-trigger from luminance fetch path (walk only fires via
+   manual endpoint — Stage 2 of two-stage plan)
+❌ Walk deadzone branch (luminance within ±DEADZONE of target — the
+   "no action needed" path); implicit from BRIGHTEN E3 but not
+   explicitly exercised
 ❌ Excel-side changes — not started
 
 ### What's been retired
@@ -188,7 +213,8 @@ work. Two new commits today on top of yesterday's `ffe7dce`:
 - CAN-via-Ronin shutter (`cameraShutter()` still exists as a function
   definition but no execution path calls it; will be removed in a future
   cleanup commit)
-- Deprivation test toggle (used today, stripped before commit `a2ccca1`)
+- Deprivation test toggle (used Session C day 2, stripped before commit
+  `a2ccca1`)
 
 ---
 
@@ -212,13 +238,14 @@ Phases:
 What it's good at: deterministic timing, hardware loops, CAN, motors.
 **The shoot runtime.**
 
-Owns (post-Session-C day 2):
+Owns (post-Session-C day 3):
 - Photo trigger timing (mode 3 via pin-8 — **validated**)
 - Single-shot trigger via pin-8 — **validated**
 - Luminance fetch via CCAPI histogram (validated, RAW-only safe)
-- Resilience under transient CCAPI failure (validated)
-- Luminance feedback decision (next deliverable: Tv/ISO walk)
-- CCAPI Tv/ISO PUT calls with 503 retry (next deliverable)
+- Resilience under transient CCAPI failure (validated, including real
+  recovery from a live-view start outage)
+- **Exposure walk (Tv/ISO via CCAPI PUT) — validated end-to-end**
+- Auto-trigger walk from luminance fetch — not yet wired (next session)
 - Phase clock + gimbal repointing (later)
 - Gimbal and cart plan execution (Sessions D/E)
 - Shoot-time logging
@@ -248,8 +275,9 @@ Camera WiFi outage during plateau is now also harmless for photo cadence
 
 Migration ordering:
 - **Critical:** photo trigger autonomous on cart ✅ (done — pin-8)
-- **Nice-to-have:** Tv/ISO + luminance autonomous on cart (luminance done;
-  Tv/ISO walk next)
+- **Nice-to-have:** Tv/ISO + luminance autonomous on cart ✅ (done — walk
+  works on manual endpoint; auto-trigger from fetch path is the small
+  follow-up)
 - **Convenience:** plan execution autonomous on cart
 
 ---
@@ -274,7 +302,8 @@ Migration ordering:
 Each step kills a class of alarm:
 - Move photo trigger to cart → kills "missed photo" on WiFi drop ✅ (done)
 - Move Tv/ISO + luminance to cart → kills "exposure adjust failed"
-  (luminance done; Tv/ISO walk next)
+  ✅ (done — walk validated on manual endpoint; auto-trigger pending
+  but the autonomy is in place)
 - Move plan execution to cart → kills "Excel/Python round-trip"
 
 ### WiFi-criticality windows
@@ -312,22 +341,27 @@ CPU for the simpler path. Giga is preserved as future-headroom backup.
 |---|---|---|
 | 1 | Mode 3 photo timer with /shutter/start, /stop, /interval, /pause, /resume, /status | **Validated end-to-end via pin-8** (Test 4: 311 triggers, 308 photos on card, 99% delivery) |
 | 2 | CCAPI HTTP client + histogram fetch + /luminance endpoint | **Validated in RAW-only mode** with 6KB buffer (Test 4: stable mean=94-95 across ~150 fetches, ~10% transient failures absorbed by resilience layer) |
-| 2b | WiFi resilience (retry on connection failure) | Code complete, transient-failure absorption verified; deliberate drop test still pending |
-| 3 | Tv/ISO walk + CCAPI Tv/ISO PUTs | **Not started — next deliverable** |
+| 2b | WiFi resilience (retry on connection failure) | **Validated** — caught a real outage during day-3 testing, recovered after 5 retries, photo cadence uninterrupted |
+| 3 | Tv/ISO walk + CCAPI Tv/ISO PUTs | **Validated end-to-end via manual endpoint** (E4 BRIGHTEN, E5 DARKEN, both PUT-verified against camera back-screen). Auto-trigger from fetch path is the small Stage-2 follow-up |
 | 4 | Excel-side changes (stop firing, stop fetching, poll cart) | **Not started** |
 
 ### Suggested next-session work, in order
 
-1. **Tv/ISO walk + CCAPI PUTs** — port `AdjustExposureByLuminance` and
-   `NextTv` from `Camera.bas` to C. Test with luminance feedback
-   actually driving exposure.
-2. **Deliberate WiFi drop test** — turn off camera WiFi mid-shoot,
-   watch live view marked down → recovery on reconnect. Verify
-   resilience layer behaves as designed.
-3. **Long soak** (30+ min, ideally 60+) of everything together,
-   verified by card-file count. Aim for ~99% delivery to match Test 4.
-4. **Excel-side changes** — Excel polls `/luminance` and `/shutter/status`,
-   no longer fires or fetches itself.
+1. **Wire walk to auto-fire from luminance fetch** (Stage 2 of two-stage
+   plan). After every successful fetch of `lum_last_value`, call
+   `adjustExposureByLuminance()` with stored `lum_target` and `lum_mode`,
+   PUT if action returned. Estimate ~3-10 lines of code. The walk's
+   own deadzone logic naturally throttles PUTs to real-need rate (~1/min
+   in production), even though it evaluates every 6s.
+2. **Long soak with walk auto-firing** (30-60 min) — full system
+   running, verified by card-file count. Watch luminance + walks
+   produce sensible exposure trajectory over the run.
+3. **Deliberate WiFi drop test** — turn off camera WiFi mid-shoot,
+   watch live view marked down → recovery on reconnect. Confirm
+   resilience layer behaves as designed under controlled outage.
+4. **Excel-side changes** — Excel polls `/luminance`, `/shutter/status`,
+   `/exposure/state`; no longer fires or fetches itself. Excel becomes
+   the planning/monitoring/alerting end; cart owns the shoot runtime.
 5. **Optional cleanup commit** — remove now-unused `cameraShutter()`
    function definition (CAN shutter dead code).
 6. **Update PROJECT_STATE.md** to reflect what Session C completed.
@@ -377,15 +411,21 @@ From Session A: Bug A (MsgBox blocked photo loop), Bug C
 
 ## Known issues / observations
 
-1. **R3 WiFi profile drop (recurring, manual recovery).** Camera has
-   dropped its selected WiFi profile three times across two sessions.
-   Root cause not conclusively identified; suspected trigger is
-   repeated failed CCAPI exchanges (which Test 4's buffer fix should
-   reduce in production). Recovery is operator-only: cycle SET1 → SET3
-   in camera wireless menu. **Architecturally de-risked** — pin-8
-   shutter keeps cart shooting through any camera WiFi loss; only
-   luminance updates are affected. Worth instrumenting next time it
-   happens (note time, recent CCAPI traffic pattern, camera state).
+1. **R3 WiFi profile drop (recurring, manual recovery, partial trigger
+   identified).** Camera has dropped its selected WiFi profile four
+   times across three sessions. **Day 3's incident #4 had a clear
+   trigger: camera power cycle following a self-clearing battery
+   warning.** The earlier three drops had unclear triggers. Recovery
+   in all cases is operator-only: cycle SET1 → SET3 in camera wireless
+   menu. **Architecturally de-risked** — pin-8 shutter keeps cart
+   shooting through any camera WiFi loss; only luminance updates and
+   exposure adjustments pause until SET3 is reselected. Operational
+   guidance: avoid power-cycling the camera during a shoot.
+
+2. **Exposure walk auto-trigger pending.** The walk has manual endpoint
+   `/exposure/walk?mode=...` that takes one step on demand, but no
+   auto-firing from the luminance fetch path yet. Excel/operator can
+   trigger walks today; cart will do it autonomously next session.
 
 2. **CCAPI fetch transient failures (~10% at 2s cadence).** Test 4
    showed individual fetches occasionally fail (mix of `connect failed`
@@ -505,14 +545,14 @@ rehearsal-day-before pattern.
 
 ---
 
-## Repo state (end of session 12 May)
+## Repo state (end of session 12 May, day 3)
 
 ### Arduino repo (`mwindley/DJI-Ronin-RS4-Arduino`)
 
 `main` and feature branches as listed in "Branches on GitHub" above.
 The `session-c-uno-luminance` branch is the cumulative Session C head,
-with two new commits today (`71f62c2` pin-8 architecture, `a2ccca1`
-RAW-only buffer fix). Both pushed to origin.
+with three commits today (`71f62c2` pin-8 architecture, `a2ccca1`
+RAW-only buffer fix, `331d242` exposure walk). All pushed to origin.
 
 ### Excel repo (`mwindley/HyperLapse-Excel`)
 
@@ -539,28 +579,30 @@ repos. Files must be uploaded.
 ## Suggested next session opening
 
 ```
-Continuing HyperLapse Cart project — Session C day 3.
+Continuing HyperLapse Cart project — Session C day 4.
 
-End-state of day 2 (12 May 2026):
-- session-c-uno-luminance branch now has pin-8 shutter ownership
-  (commit 71f62c2) and RAW-only buffer fix (commit a2ccca1). Both
-  validated by Test 4: 311 triggers, 308 photos on card (99%
-  delivery), luminance stable at mean=94-95 across ~150 fetches,
-  resilience absorbed ~10% transient failures, camera survived
-  10 minutes of full operation.
-- Yesterday's Ronin shutter problem resolved by architectural
-  pivot: CAN-via-Ronin retired (near-dead), pin-8 + cable now owns
-  shutter. WiFi-independent. Tangle risk accepted.
-- R3 WiFi profile drop investigation: 3 historical incidents,
-  cause not conclusively identified, mitigated by architecture
-  (pin-8 keeps shooting through any camera WiFi loss). Open
-  hypothesis: pre-buffer-fix CCAPI failure traffic was the
-  trigger family. Operationally accepted as residual risk;
-  recovery is manual (operator cycles SET3 in camera menu).
+End-state of day 3 (12 May 2026):
+- session-c-uno-luminance branch now has exposure walk
+  (commit 331d242). Ports AdjustExposureByLuminance from
+  Excel Camera.bas. Validated end-to-end on real hardware:
+  /exposure/init reads Tv/ISO from camera, /exposure/state
+  returns JSON, /exposure/walk runs one walk step and PUTs
+  to camera if action needed. Both BRIGHTEN and DARKEN
+  modes confirmed walking correctly, PUT-verified against
+  camera back-screen.
+- Day 3 also observed resilience layer absorbing a real
+  outage during testing (live view RECOVERED after 5
+  attempts), and incident #4 of the R3 WiFi profile drop
+  (trigger: camera power cycle).
+- Cart now owns: pin-8 shutter, mode 3 timer, luminance
+  fetch, resilience, exposure walk.
 
-Next deliverable: Tv/ISO walk + CCAPI PUTs from the Arduino —
-port AdjustExposureByLuminance and NextTv from Excel's Camera.bas.
+Next deliverable: wire walk to auto-fire from luminance
+fetch path (Stage 2 of two-stage plan, estimated ~3-10
+lines). After that: long soak with everything running,
+then Excel-side changes.
 
-Attached: PROJECT_STATE.md, all .bas files, current Arduino
-sketch from session-c-uno-luminance branch.
+Attached: PROJECT_STATE.md, all .bas files, current
+Arduino sketch from session-c-uno-luminance branch
+(head commit 331d242).
 ```
