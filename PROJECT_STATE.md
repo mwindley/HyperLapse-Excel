@@ -1,392 +1,524 @@
 # HyperLapse Cart — Project State
 
-**Last updated:** 11 May 2026 (end of session B)
+**Last updated:** 12 May 2026 (end of Session C day 2 — pin-8 architecture in service, RAW-only buffer fix committed, R3 WiFi-drop investigation open but de-risked)
 
-This file is the handoff document between sessions. Update at the end of
-every working session. Upload it with the latest `.bas` files at the
-start of the next session to get straight back to productive work.
+This file is the handoff document between sessions. Upload it with the
+latest `.bas` files and Arduino sketches at the start of the next session.
+
+---
+
+## ⚠️ Top-of-file context — Session C day 2 outcomes
+
+### Yesterday's open issue is resolved (by architecture change)
+
+Day 1 ended with the Ronin's CAN-via-cable shutter broken — could send
+the command, no photo on card. Day 2 confirmed this couldn't be recovered
+cheaply: Ronin's only "supported" R3 shutter path is Bluetooth (M-button),
+which doesn't coexist with the camera-control cable used for focus/record.
+**CAN-via-Ronin shutter is now retired** as a near-dead capability.
+
+**Architectural pivot:** the Arduino's existing pin-8 + cable to the
+camera's remote shutter port is now the shutter path. WiFi-independent.
+Tangle risk on the gimbal accepted. CCAPI is reserved for luminance only.
+
+**This change is committed and validated:**
+- Commit `71f62c2` — pin-8 owns shutter, CAN shutter retired
+- All shutter modes (manual, button-18 backup, mode 3 timer) now fire pin-8
+- Test 1 single shot: photo on card, red card-write LED ✓
+- Test 2 mode-3 timer: 22 photos at 2s cadence, card-verified ✓
+
+### Today's other commit — RAW-only buffer fix
+
+Commit `a2ccca1` — `LUM_RESP_BUF_SIZE` bumped from 5120 to 6144.
+
+When the camera was switched from RAW+JPEG to RAW-only during this session,
+the CCAPI `liveview/flipdetail?kind=info` response grew from ~4521 bytes
+to ~5360 bytes, overflowing the 5KB buffer. Symptoms: every fetch failed
+with "bad data size" or "response timeout". 10KB was attempted first but
+caused linker RAM overflow on the Uno R4. 6KB fits with ~700-byte headroom
+and is now the production-safe size.
+
+Validated by the 10-minute Test 4 below.
+
+### R3 WiFi profile drop — open investigation, de-risked
+
+The camera's WiFi profile selection has been observed to drop three times
+across two sessions, requiring manual operator recovery (cycle camera
+menu through SET1 to SET3 = "Rosedale CCAPI" to reselect). This is a
+camera-side behaviour; no software path from the Arduino can recover it.
+
+**Root cause: not conclusively identified.** Two tests today:
+
+- **Test 3 (deprivation):** 5-min mode-3 pin-8 run with ALL spontaneous
+  CCAPI traffic disabled. Camera survived — green light on, /ccapi
+  responsive. CCAPI traffic implicated as candidate trigger family.
+- **Test 4 (full operation):** 10-min mode-3 pin-8 run with full CCAPI
+  traffic (live view, ~150 luminance fetches). Camera survived — green
+  light on, /ccapi responsive, 99% card delivery. **Did not reproduce
+  the drop** despite significant CCAPI use.
+
+**Most plausible remaining hypothesis:** today's earlier drop happened
+during a run with the 5KB buffer where every fetch failed with
+oversized/timeout errors. Repeated *failed* fetches (not successful
+ones) may be the trigger family. Pre-buffer-fix this kind of stress
+was inevitable in RAW-only mode; post-fix it should be rare.
+
+**Mitigation already in place by architecture:**
+- Pin-8 shutter keeps photos flowing through any CCAPI failure
+- Resilience layer (3-fail threshold, 30s retry, rate-limited logging)
+  absorbs transient camera unresponsiveness
+- Worst-case overnight failure: exposure freezes at last good values;
+  shoot continues; operator recovers SET3 in the morning
+
+**Operationally accepted as a residual risk.** Worth instrumenting for
+next time it happens, but no longer blocking production.
+
+### Recovery procedure for R3 WiFi drop (when it does happen)
+
+1. Camera menu → wireless settings
+2. Cycle through saved profiles: SET1, SET2, SET3
+3. Re-select **SET3 = "Rosedale CCAPI"**
+4. Green WiFi light should come on immediately
+5. Verify with `http://192.168.1.99:8080/ccapi` in browser
 
 ---
 
 ## System overview
 
-A self-driving photography cart that runs an unattended overnight
-hyperlapse from late afternoon through to the following morning,
-automatically transitioning camera and gimbal through the night sky
-from daytime → sunset → astronomical night → sunrise → daytime.
+Self-driving photography cart for unattended overnight hyperlapse from
+late afternoon → sunset → astronomical night → sunrise → daytime.
 
 ### Hardware
-- **Camera:** Canon EOS R3, controlled over WiFi via CCAPI v1.4.0
-- **Gimbal:** DJI Ronin RS4 Pro, driven via CAN bus by Arduino
-- **Controller:** Arduino Uno R4 WiFi (Giga R1 also on hand, see Session C)
-- **Cart:** custom drive platform with steering / speed / battery telemetry
-- **Operator UI:** Excel workbook, talks HTTP to Arduino (gimbal + cart)
-  and Canon CCAPI
+
+- **Camera:** Canon EOS R3 via CCAPI v1.4.0 over WiFi
+- **Gimbal:** DJI Ronin RS4 Pro, driven via CAN bus (for motion only;
+  shutter no longer goes through it)
+- **Controller (production):** Arduino Uno R4 WiFi
+- **Controller (backup, on shelf):** Arduino Giga R1 WiFi — dual-core
+  STM32H747. CAN proven working (RX + TX). Future-headroom option only.
+- **Cart:** custom drive platform
+- **Camera shutter path:** Arduino pin 8 → cable → R3 remote shutter port
+  (WiFi-independent)
+- **Operator UI:** Excel workbook (van) + cart's HTTP server (phone)
+
+### Network in the field
+
+- Excel laptop in the van (not portable to cart)
+- **Wavlink AX6000 #1 in the van**
+- **Wavlink AX6000 #2 in the field**, battery-powered, 50–100 m from van
+- Phone connects to the same WiFi as cart and Excel
+- Cart-to-Excel WiFi is **non-critical during the shoot** — see WiFi
+  windows below.
 
 ### Software
-- **Arduino sketch:** `DJI_Ronin_UnoR4_v2` v13
-  GitHub: `mwindley/DJI-Ronin-RS4-Arduino` (private)
+
+- **Arduino sketch (production):** `DJI_Ronin_UnoR4_v2` on
+  `session-c-uno-luminance` branch
 - **Excel workbook:** `HyperLapse.xlsm`
-  GitHub: `mwindley/HyperLapse-Excel` (private)
-- **Python helper:** `Python/luminance.py` in repo, requires Pillow
+- **Python helper:** `Python/luminance.py` — **slated for retirement**
+  once Session C is complete (replaced by Arduino histogram fetch)
+
+### Camera details (R3) for next session
+
+- **CCAPI base URL:** `http://192.168.1.99:8080/ccapi`
+- **Live view start:** `POST /ccapi/ver100/shooting/liveview` with body
+  `{"liveviewsize":"small","cameradisplay":"on"}`
+- **Histogram fetch:** `GET /ccapi/ver100/shooting/liveview/flipdetail?kind=info`
+  — binary response with `FF 00 01` header + 4-byte size (big-endian) + JSON
+  + `FF FF` end marker. JSON contains `liveviewdata.histogram[0]` = 256
+  ints (Y channel). **RAW-only mode returns ~5.3KB; RAW+JPEG ~4.5KB.**
+  Code now sizes buffer for the RAW-only case.
+- **Live view stop:** `DELETE /ccapi/ver100/shooting/liveview/scroll`
+  (NOT `/liveview` — that returns 405)
+- **Stop call can return 503 (camera busy)** — observed today. Treat as
+  transient; live view typically still gets cleaned up on camera side.
 
 ---
 
-## Module inventory
+## Today's deliverables — what's committed and what's verified
 
-| Module          | Role                                                 |
-|-----------------|------------------------------------------------------|
-| `Sequence`      | Master timing loop, single RunShot handler, replay   |
-| `Camera`        | Canon R3 CCAPI, luminance feedback, mode-driven walk |
-| `Gimbal`        | RS4 Pro control via Arduino HTTP                     |
-| `Cart`          | Cart log retrieval, replay plan generation           |
-| `Astro`         | Sun and Milky Way galactic centre angle calculations |
-| `Utils`         | Shared timing, phase math, Tv lookup, NextTv walker  |
-| `BackupRestore` | Export/Import (in-place overwrite), CheckDeclaration |
-| `Buttons`       | RunButton, CellFormat, AllBorder; BuildControlSheet  |
+### Branches on GitHub (`mwindley/DJI-Ronin-RS4-Arduino`)
 
-Plus: `Control` sheet has its own code module with the
-`Worksheet_BeforeDoubleClick` dispatcher (sheet code, not exportable).
+| Branch | Contents | Status |
+|---|---|---|
+| `main` | Uno R4 v13 production sketch | Stable, behind by Session C work |
+| `session-c-giga` | Giga TX test sketch | Parked — Giga CAN proven, not the path forward |
+| `session-c-uno-timer` | Mode 3 photo timer (CAN-shutter era) | Superseded by `session-c-uno-luminance` |
+| `session-c-uno-luminance` | **Current head** — pin-8 shutter, mode 3 timer, CCAPI luminance, WiFi resilience, RAW-only buffer | All work below committed and pushed |
+| `session-c-liveview-test` | One-shot coexistence test sketch | Archived — not for merge |
 
----
+The `session-c-uno-luminance` branch is the cumulative head of Session C
+work. Two new commits today on top of yesterday's `ffe7dce`:
 
-## Working baseline (end of session B)
+| Commit | Subject |
+|---|---|
+| `a2ccca1` | Session C: bump LUM_RESP_BUF_SIZE 5120 to 6144 for RAW-only payloads |
+| `71f62c2` | Session C: pin-8 owns shutter; CAN shutter retired |
+| `ffe7dce` | (previous head — yesterday's luminance + resilience work) |
 
-System runs end-to-end with:
-- **Single `RunShot` handler** replacing the seven phase-specific handlers
-  (RunPhase1, 2a, 2b, 3, 4, 4a, 4b, 5). Exposure is driven entirely by
-  pure luminance feedback, not by phase timing.
-- **Two modes** decided by clock vs `dataAstroDusk + 30 min`:
-  - **MODE_BRIGHTEN** (afternoon → night): adjustments only ever brighten.
-    Tv slows first toward 20", then ISO climbs toward 1600. Lum-too-bright
-    → do nothing (post fixes it).
-  - **MODE_DARKEN** (night → morning): adjustments only ever darken.
-    ISO drops first toward 100, then Tv speeds up toward 1/5000.
-    Lum-too-dark → do nothing.
-- **Monotone walks per mode**: a knob never reverses during one mode.
-  Eliminates oscillation as a failure mode.
-- **Photo primacy**: TakePhoto fires before any adjustment in the cycle.
-  Adjust failures are caught and logged; the photo always happens.
-- **Bug B clamp**: next-shot scheduling anchored off `g_scheduledTime`,
-  not `Now()`, with resync + TIMING-log on slip.
-- **503 retry hardening**: both CameraGet and CameraPut now retry on
-  503 with body-message parsing per CCAPI spec §3.3.3. Retries only
-  on transient messages ("Device busy", "During shooting or recording",
-  "Out of focus", "Can not write to card"); permanent states give up
-  immediately ("Mode not supported", "Live view not started" etc.).
-- **Kickoff throttled**: luminance kickoff fires every 3rd cycle only,
-  and BEFORE TakePhoto so its CCAPI calls land in the natural idle gap
-  rather than on top of the camera's write window.
+### What's verified (cumulative across Session C)
 
-### Validation results — fast-forward bench runs
+✅ Architectural reframe (Excel out of critical path, cart owns shoot)
+✅ Giga CAN bus (RX + TX) — kept as future-headroom backup
+✅ CCAPI histogram endpoint — works as documented
+✅ Live view + histogram fetch path — clean operation in RAW-only mode
+   with 6KB buffer
+✅ Mode 3 photo timer **end-to-end via pin-8** — Test 2 22-photo and
+   Test 4 311-trigger / 308-card runs (99% delivery)
+✅ Pin-8 single-shot via `/shutter` and `/shutter/pin8` endpoints —
+   photo on card, red LED ✓
+✅ Live view + pin-8 shutter coexistence — proven by Test 4
+✅ Buffer-overflow bug fix validated by 10-min full-op test
+✅ Resilience layer absorbs transient CCAPI failures (~10% transient
+   failure rate at 2s cadence with mode 3, never crossed 3-in-a-row
+   threshold during Test 4)
+✅ Camera WiFi profile holds through full-operation CCAPI traffic
+   (Test 4, but see drop-history note above — single-run negative is
+   not the same as proof)
 
-Indoor 27-shot runs through the brightening sweep showed consistent
-3-second intervals. Tv walked from 1/5000 down to 1/50–1/60 over 22-23
-shots; algorithm correctly idled once lum entered the deadzone band.
-Zero photos missed across multiple runs. One small cadence slip per
-run on average (1-2s), explained.
+### What's NOT verified
 
-### The 3-second cadence floor
+❌ Resilience behaviour under deliberate WiFi drop (transient failures
+   recovered, but a full disconnect/reconnect cycle hasn't been forced)
+❌ Tv/ISO walk — code not written yet
+❌ Excel-side changes — not started
 
-The shoot now runs at a steady 3-second photo interval during the
-fast-Tv stretches (Phase 1 / Phase 5). The cadence rule asks for 2s
-at fast Tv, but `Application.OnTime` has approximately 1-second
-resolution and the loop body work (status + monitor + heartbeat +
-kickoff + adjust + photo) consumes 0.5-1.5s, leaving no headroom for
-Excel to schedule sub-second precisely.
+### What's been retired
 
-This is a hard-floor architectural limit, not a bug. Software
-optimisation has been exhausted on the Excel side. Long-cadence
-performance (Phase 2b/3/4a at 22s, etc.) is unaffected — the 3s floor
-only bites in fast daytime cadence.
-
-**The operator's stated requirement is 2-second cadence: ~7800 photos
-over the overnight shoot drive the image-stabilisation pipeline.
-Small frame-to-frame changes are critical for clean stabilisation.**
-Session C is the work to deliver 2s.
+- CAN-via-Ronin shutter (`cameraShutter()` still exists as a function
+  definition but no execution path calls it; will be removed in a future
+  cleanup commit)
+- Deprivation test toggle (used today, stripped before commit `a2ccca1`)
 
 ---
 
-## Bugs fixed this session (session B)
+## The architecture — two ends and a phone
+
+### Excel (van laptop) — the planning end
+
+What it's good at: tables, cut-and-paste, save copies, what-if edits.
+**The operator's creative workspace.**
+
+Phases:
+- **Pre-shoot:** author cart and gimbal plans from logs; compute astro
+  tables; upload plans to cart
+- **During shoot:** monitor cart via HTTP polls; intervene if needed;
+  raise alarms. **Not on the critical path.**
+- **Post-shoot:** retrieve logs; analyse with pivot tables/charts;
+  plan next shoot
+
+### Cart (Arduino Uno R4) — the hardware reliability end
+
+What it's good at: deterministic timing, hardware loops, CAN, motors.
+**The shoot runtime.**
+
+Owns (post-Session-C day 2):
+- Photo trigger timing (mode 3 via pin-8 — **validated**)
+- Single-shot trigger via pin-8 — **validated**
+- Luminance fetch via CCAPI histogram (validated, RAW-only safe)
+- Resilience under transient CCAPI failure (validated)
+- Luminance feedback decision (next deliverable: Tv/ISO walk)
+- CCAPI Tv/ISO PUT calls with 503 retry (next deliverable)
+- Phase clock + gimbal repointing (later)
+- Gimbal and cart plan execution (Sessions D/E)
+- Shoot-time logging
+
+**Once a plan is loaded and the shoot starts, the cart needs nothing
+from Excel until the shoot ends.** WiFi outage during plateau is harmless.
+Camera WiFi outage during plateau is now also harmless for photo cadence
+(pin-8 keeps firing); only luminance updates freeze.
+
+### Phone (cart's HTTP server) — the field interface
+
+- Prep mode: drive cart, capture cart-log and gimbal-waypoint data
+- Walk-outs at 2am: check status, exposure, alarms
+- **Emergency stop** — first-class requirement
+- Scope is "as is" — no expansion needed for Session C
+
+---
+
+## Guiding principle — overrides everything
+
+**No photo is fatal. A wrong-exposure photo is fixable in post.**
+
+1. **Take the photo, always.** Cadence is sacred.
+2. **Try to get the right exposure.** Luminance feedback walks Tv/ISO.
+3. **If exposure adjustment fails, take the photo anyway.** Post-edit
+   fixes wrong exposure; nothing fixes a missed photo.
+
+Migration ordering:
+- **Critical:** photo trigger autonomous on cart ✅ (done — pin-8)
+- **Nice-to-have:** Tv/ISO + luminance autonomous on cart (luminance done;
+  Tv/ISO walk next)
+- **Convenience:** plan execution autonomous on cart
+
+---
+
+## Operator reality — the lens for all design
+
+- Cart 50–100m from van, day and night
+- Operator walks out with phone. Excel laptop stays in van.
+
+### The operator's overnight
+
+- **Pre-shoot to ~21:00** — up watching the sunset transition (rapid
+  Tv/ISO changes). Alarms armed.
+- **~21:00 to ~05:00** — sleeping. Shoot on plateau (Tv 20" ISO 1600,
+  22s cadence, nothing changes). **Alarms should be silent.** WiFi drop
+  here is harmless. Camera WiFi drop here is now also harmless for
+  cadence (exposure frozen at last good).
+- **~05:00 to ~07:00** — up watching sunrise transition.
+
+### Alarm-quality is the migration lens
+
+Each step kills a class of alarm:
+- Move photo trigger to cart → kills "missed photo" on WiFi drop ✅ (done)
+- Move Tv/ISO + luminance to cart → kills "exposure adjust failed"
+  (luminance done; Tv/ISO walk next)
+- Move plan execution to cart → kills "Excel/Python round-trip"
+
+### WiFi-criticality windows
+
+- **Daytime / fast-Tv stretches:** 2s photos, frequent Tv changes. WiFi
+  drop costs photos today. Post-Session-C: fully autonomous.
+- **Sunset/sunrise transitions (~1 hour each):** rapid Tv/ISO changes
+  via luminance feedback. WiFi drop costs wrong exposures today.
+  Post-Session-C: no impact.
+- **Astronomical night plateau (~10 hours):** nothing changes. Already
+  harmless on WiFi drop.
+
+Total WiFi-critical hours today: ~2. Session C removes that.
+
+---
+
+## Session C — current goal and what's left
+
+### Goal (revised during discussion)
+
+**Move photo trigger + luminance + Tv/ISO control from Excel to the
+Uno R4.** Excel stops calling `TakePhoto`, stops running Python+Pillow,
+stops calling CCAPI directly. Arduino does all of it.
+
+### Why Uno R4, not Giga (key reframe)
+
+CCAPI exposes a histogram directly. Mean luminance = `sum(i*Y[i])/sum(Y[i])`.
+No JPEG decode needed. JPEG decode in MicroPython was the original
+justification for Giga; it no longer applies. Uno R4 has the memory and
+CPU for the simpler path. Giga is preserved as future-headroom backup.
+
+### Session C deliverables — status
+
+| # | Deliverable | Status |
+|---|---|---|
+| 1 | Mode 3 photo timer with /shutter/start, /stop, /interval, /pause, /resume, /status | **Validated end-to-end via pin-8** (Test 4: 311 triggers, 308 photos on card, 99% delivery) |
+| 2 | CCAPI HTTP client + histogram fetch + /luminance endpoint | **Validated in RAW-only mode** with 6KB buffer (Test 4: stable mean=94-95 across ~150 fetches, ~10% transient failures absorbed by resilience layer) |
+| 2b | WiFi resilience (retry on connection failure) | Code complete, transient-failure absorption verified; deliberate drop test still pending |
+| 3 | Tv/ISO walk + CCAPI Tv/ISO PUTs | **Not started — next deliverable** |
+| 4 | Excel-side changes (stop firing, stop fetching, poll cart) | **Not started** |
+
+### Suggested next-session work, in order
+
+1. **Tv/ISO walk + CCAPI PUTs** — port `AdjustExposureByLuminance` and
+   `NextTv` from `Camera.bas` to C. Test with luminance feedback
+   actually driving exposure.
+2. **Deliberate WiFi drop test** — turn off camera WiFi mid-shoot,
+   watch live view marked down → recovery on reconnect. Verify
+   resilience layer behaves as designed.
+3. **Long soak** (30+ min, ideally 60+) of everything together,
+   verified by card-file count. Aim for ~99% delivery to match Test 4.
+4. **Excel-side changes** — Excel polls `/luminance` and `/shutter/status`,
+   no longer fires or fetches itself.
+5. **Optional cleanup commit** — remove now-unused `cameraShutter()`
+   function definition (CAN shutter dead code).
+6. **Update PROJECT_STATE.md** to reflect what Session C completed.
+
+### Out of scope for Session C
+
+- Migration of CCAPI calls to Giga (later session, if ever)
+- Plan execution on cart (Sessions D and E)
+- Phone UI changes (stays as is)
+- Definitive root-cause for R3 WiFi profile drops (monitor in production)
+
+---
+
+## Module inventory (Excel)
+
+| Module | Role | Post-migration |
+|---|---|---|
+| `Sequence` | Master timing loop, single RunShot, replay | Mostly retired |
+| `Camera` | CCAPI, luminance, mode walk | Retired (moves to cart) |
+| `Gimbal` | RS4 Pro via Arduino HTTP | Retired (cart owns) |
+| `Cart` | Cart log retrieval, replay plan | Plan authoring stays |
+| `Astro` | Sun/Milky Way angles | Stays (pre-shoot) |
+| `Utils` | Tv lookup, NextTv walker | Walker moves to cart |
+| `BackupRestore` | Export/Import modules | Stays (dev tool) |
+| `Buttons` | Excel-side UI buttons | Stays |
+
+---
+
+## Bugs fixed in Session B (recap)
 
 | Bug | Description | File |
 |---|---|---|
-| Predictive Tv/ISO tables retired | g_phase2a_steps, g_phase4b_steps, BuildPhase2aSteps all gone. Phase handlers collapsed to one RunShot. | Sequence.bas |
-| NextTv direction sign | Walked Tv toward 1/64000 instead of 20" when feedback wanted "slower". g_tvStrings is slow→fast so the +1 direction had to subtract from the index, not add. | Utils.bas |
-| Bug B — OnTime cadence slip | Next-shot anchored off Now() instead of g_scheduledTime, so any cycle overrun shifted the schedule forward. Now anchored correctly with a Now()+interval clamp + log line on slip. | Sequence.bas |
-| 503 cascade on SetShutterSpeed | Adjust call fired immediately after TakePhoto, hit 503 on every adjusting cycle, retried 3s. Adjust moved to BEFORE TakePhoto with error containment around it; photo primacy preserved via the error handler, not via call ordering. | Sequence.bas |
-| 503 on kickoff GETs | Same root cause as above, on the luminance-fetch CCAPI GETs. CameraGet had no retry logic (asymmetric with CameraPut Bug 7). Added retry with shorter backoff than CameraPut. | Camera.bas |
-| 503 body unparsed | Spec §3.3.3 documents nine 503 messages; only four are transient. Both CameraGet and CameraPut now parse the body's "message" field and use IsBusyRetryable() to decide retry vs give-up. Body message logged on every retry — diagnostic gold for future investigations. | Camera.bas |
-| Kickoff hammering camera mid-write | Kickoff fired after TakePhoto during the camera's write window. Moved BEFORE TakePhoto so it lands in the idle gap; fetches the previous shot's thumbnail, which is fine since luminance is already 1-3 cycles stale anyway. | Sequence.bas |
-| Kickoff every cycle on fast cadence | At 2-3s cycle the camera never got idle time. Throttled to every 3rd cycle (LUM_KICKOFF_EVERY_N). Matches the real-world 3-shot measurement cadence from prior shoots. | Sequence.bas |
-| ImportModules rename collision | VBComponents.Remove is deferred — a subsequent Import in the same run found the name still in use and renamed incoming modules to "Camera1" / "Utils1" / "Buttons1". Rewrote ImportModules to overwrite in place via CodeModule.AddFromString, never touching the VBComponent. | BackupRestore.bas |
+| Predictive Tv/ISO tables retired | Single RunShot handler | Sequence.bas |
+| NextTv direction sign | Walked wrong way | Utils.bas |
+| Bug B — OnTime cadence slip | Anchor off g_scheduledTime + clamp | Sequence.bas |
+| 503 cascade on SetShutterSpeed | Photo primacy via error handler | Sequence.bas |
+| 503 on kickoff GETs | CameraGet retry added | Camera.bas |
+| 503 body unparsed | Parse "message" + IsBusyRetryable | Camera.bas |
+| Kickoff hammering mid-write | Moved before TakePhoto | Sequence.bas |
+| Kickoff every cycle | Throttled every 3rd cycle | Sequence.bas |
+| ImportModules rename collision | Overwrite via CodeModule.AddFromString | BackupRestore.bas |
 
----
-
-## Bugs fixed previously (session A)
-
-| Bug | Description | File |
-|---|---|---|
-| Bug A — MsgBox in GimbalToMilkyWay | Modal dialog blocked photo loop ~18s when GC below horizon | Sequence.bas |
-| Bug C — PollLuminanceCalc kills finished jobs | Timeout check before status check terminated finished-but-unpolled jobs | Camera.bas |
-
-(Plus the eleven bugs from session 2 — see git history.)
+From Session A: Bug A (MsgBox blocked photo loop), Bug C
+(PollLuminanceCalc killed finished jobs).
 
 ---
 
 ## Known issues / observations
 
-1. **3-second cadence floor in fast-Tv stretches** — Excel's
-   `Application.OnTime` resolution + the loop work budget can't deliver
-   2-second photos. This is Session C's headline task.
+1. **R3 WiFi profile drop (recurring, manual recovery).** Camera has
+   dropped its selected WiFi profile three times across two sessions.
+   Root cause not conclusively identified; suspected trigger is
+   repeated failed CCAPI exchanges (which Test 4's buffer fix should
+   reduce in production). Recovery is operator-only: cycle SET1 → SET3
+   in camera wireless menu. **Architecturally de-risked** — pin-8
+   shutter keeps cart shooting through any camera WiFi loss; only
+   luminance updates are affected. Worth instrumenting next time it
+   happens (note time, recent CCAPI traffic pattern, camera state).
 
-2. **Phase 1 first-7-shots drift** — first sequence start has ~5-6s
-   intervals for shots 8-10 before settling. Camera buffer warming up.
-   Not worth optimising.
+2. **CCAPI fetch transient failures (~10% at 2s cadence).** Test 4
+   showed individual fetches occasionally fail (mix of `connect failed`
+   and `response timeout`) — never 3 in a row. Causes likely include
+   mesh handoffs, camera momentary busy, AP burst traffic. The
+   resilience layer handles them. Watch for elevated failure rates;
+   3-in-a-row triggers live-view-down state and retry loop.
 
-3. **GetGimbalStatus 21-second timeout in one run** — Arduino WiFi
-   hiccup. Has 3-second per-call timeout configured. Not yet
-   investigated. Bears watching when the cadence rate increases.
+3. **Card delivery rate at 2s cadence: 99%.** Test 4 produced 311
+   triggers and 308 photos on card. Gap likely end-of-test in-flight
+   triggers. Budget for ~1% loss in production planning at this cadence.
 
-4. **Phase 4a→4b transition int=21s residue** — when fast-forward test
-   compresses the phase boundary, leftover camera write from 20"
-   exposures spills into the fast-Tv phase. In a real shoot the
-   Phase 4 transition takes 25-60 min, plenty of time to drain.
+4. **CCAPI live-view stop can return 503.** Observed today in Test 4.
+   Treat as transient; live view typically still gets cleaned up on
+   camera side. Don't retry aggressively.
 
-5. **CCAPI camera-busy timing investigation deferred** — the 503 body
-   parsing now in place gives us per-call diagnostic data. A proper
-   bench session would fire TakePhoto then poll for a "ready" status
-   at 50ms intervals to build a histogram of how long the camera
-   actually takes to return idle. Would feed WaitForCamera's hardcoded
-   `WRITE_BUFFER = 2#` constant from data instead of guesswork.
+5. **The "trust the counter" lesson stands.** Always verify by card
+   file count. Today: 311 counter vs 308 card. Counter alone would
+   have hidden the 1% gap.
 
----
+6. **Live view DELETE quirk.** `DELETE /ccapi/ver100/shooting/liveview`
+   returns 405 Method Not Allowed. The correct stop path is
+   `DELETE /ccapi/ver100/shooting/liveview/scroll`. Code uses the
+   correct path. Documented for clarity.
 
-## Session B — complete (11 May 2026)
+7. **CAN ID / SOF mis-documentation.** Production sketch uses SDK-spec
+   `0x223 / SOF 0xAA` which works for gimbal motion. Bus capture shows
+   Ronin actually broadcasts on `0x530 / SOF 0x55`. Both sketches
+   mis-label the SDK-spec values as "CONFIRMED RS4 Pro". Cleanup as
+   we touch sketches.
 
-Replaced predictive Tv/ISO step tables with pure luminance feedback,
-folded in Bug B fix, hardened CCAPI 503 handling, and learned the
-fundamental limit of Excel-as-photo-scheduler.
+8. **CCAPI camera-busy timing investigation deferred.** 503 body
+   parsing in place; histogram of camera-busy durations is bench work
+   for later.
 
-### Key architectural learnings
-
-1. **Excel `Application.OnTime` has ~1-second resolution.** Whatever
-   sub-second timing we ask for, it'll fire on the next whole-second
-   tick after Excel is idle. The loop body cost (0.5-1.5s) plus this
-   resolution makes 2-second cadence impossible to deliver reliably.
-
-2. **The R3 returns 503 for nine distinct reasons** per CCAPI §3.3.3,
-   not just "busy writing". Parsing the body message tells us exactly
-   why, and which 503s deserve retries.
-
-3. **Photo primacy beats adjustment timing.** Reordering RunShot so
-   the adjust runs *before* TakePhoto (in the natural idle gap)
-   removed every 503-on-SetShutterSpeed event we'd been retrying
-   through. Wrapping the adjust in `On Error Resume Next` preserves
-   photo primacy without needing to put TakePhoto first.
-
-4. **Luminance staleness doesn't matter.** Lum changes per-minute, not
-   per-second. Throttling kickoff to every 3rd cycle, and fetching
-   the *previous* shot's thumbnail, costs us nothing.
-
-5. **VBA's `VBComponents.Remove` is deferred** — never combine Remove
-   and Import in one run. Use CodeModule.AddFromString in place.
+9. **RAM headroom on Uno R4 WiFi is tighter than the raw spec suggests.**
+   32KB SRAM total, ~21.6KB consumed by globals (66%) after today's
+   work. 10KB buffer attempt caused linker overflow. Plan future
+   memory work conservatively; budget ~5-6KB for new feature work.
 
 ---
 
-## Session C — next: Arduino owns the shutter trigger
+## Session D — Gimbal plan (design refined in Session A)
 
-**Goal:** deliver true 2-second photo cadence by moving the photo timer
-out of Excel and onto the Arduino, which has microsecond-precision
-timing via `millis()` and no scheduler resolution problem.
+(Brief — see prior history for full notes.)
 
-### Hardware path
+- **Sparse plan source:** Excel sheet with rows from GimbalLog (recorded
+  actuals) + Astro table (computed celestial positions), operator-edited.
+- **Action vocabulary:** `goto&hold`, `goto&track`, `goto&tracknextposition`.
+- **Expander:** Python script `expand_plan.py`. Smoothing maths there.
+- **Astro single-sourced in VBA**, dense astro table exported at expansion time.
+- **Per-row time_for_action** set by the expander.
+- **Executor:** generalised `RunCartReplayStep` walking action-prefixed rows.
+- Current `GimbalToSunset/MilkyWay/Sunrise` calls are interim — replaced
+  by plan execution when this lands.
 
-Arduino → CAN bus → Ronin RS4 Pro → Ronin fires the camera shutter.
-
-This adds no new cables. The Ronin already has the camera control
-cable; we're just adding a CAN frame to the existing Arduino-to-Ronin
-bus to tell the Ronin to fire. One less cable through the gimbal
-rotation point compared to a pin-8 shutter cable from Arduino to
-camera directly.
-
-**Validation needed before relying on this:**
-
-- Confirm DJI R SDK's CAN command for "trigger shutter" (R SDK §2.x).
-- Bench test: rapid shutter via CAN while gimbal is sweeping at
-  several speeds. Confirm no missed frames, no Ronin command-queue
-  stalls, no interaction with simultaneous gimbal position commands.
-  Real-world experience says it works but we validate before shipping.
-
-### Software split — minimal version
-
-| Concern | Owner |
-|---|---|
-| Photo trigger timing | Arduino (millis()-based, precise) |
-| Tv / ISO setting via CCAPI | Excel (unchanged) |
-| Thumbnail fetch + luminance | Excel (unchanged) |
-| Plan execution, monitor, log | Excel (unchanged) |
-| Sequence start/stop | Excel commands Arduino |
-| Cadence changes (Tv → 20") | Excel tells Arduino new interval |
-| Shutter inhibit during Tv-change | Excel sets flag, Arduino respects |
-
-### Proposed Arduino endpoints
-
-- `POST /shutter/start?interval_ms=2000` — start firing every N ms
-- `POST /shutter/stop` — stop
-- `POST /shutter/interval?ms=22000` — change cadence
-- `POST /shutter/inhibit?ms=1000` — defer next pulse (wraps SetShutterSpeed)
-- `GET /shutter/status` — last-fire time, interval, inhibit state
-
-### Excel side changes
-
-- `RunShot` no longer calls `TakePhoto`. Arduino does it autonomously.
-- `RunShot` still does: WaitForCamera (CCAPI gating only), inhibit-wrap
-  + AdjustExposureByLuminance, cadence-update-to-Arduino if Tv changed
-  enough to warrant a new interval.
-- The whole `g_scheduledTime` / `g_nextShotTime` / Bug B clamp scaffolding
-  stays for Excel's own loop, but the loop becomes leisurely (3-5s).
-  Photo timing is decoupled from Excel's scheduler entirely.
-
-### Open design questions for Session C
-
-1. **Does Excel need a "photo fired" callback from Arduino?** Probably
-   no — Excel adjusts Tv/ISO at its own pace, trusts Arduino is shooting.
-2. **Inhibit duration.** SetShutterSpeed p95 ~440ms; pair Tv+ISO worst
-   case ~900ms. Inhibit ~1000ms before the PUT, release after returns.
-3. **Should WaitForCamera be deleted?** It exists to prevent CCAPI
-   calls during the camera's write window. 503 retry now handles this.
-   Reconsider whether the explicit gate is still earning its keep.
-4. **What happens at exactly the strategy-switch moment?** Arduino is
-   shooting at 2s, Excel decides to switch to 22s. Arduino must accept
-   the new interval and apply it to the *next* pulse, not retroactively
-   to one mid-fire.
-
-### Also for Session C (validation work, lower priority)
-
-- **Giga R1 CAN bus retry.** Previous Giga attempts failed because the
-  `mbed::CAN` global constructor claims the FDCAN peripheral before
-  `Arduino_CAN.begin()` runs. Documented in `DJI_Ronin_UnoR4_Diag.ino`
-  header. The Uno R4 was the workaround. With this known, retry Giga
-  — its 1 MB RAM could host the luminance pipeline directly (MicroPython
-  on Giga can decode JPEGs), eliminating the Excel/Python round-trip
-  for luminance. Aspirational; not on the critical path.
-- **Validate "Arduino fires camera via Ronin" end-to-end.** Bench session
-  with diag sketch, capture frame timing while gimbal moves, look for
-  interaction effects.
+**Care needed for Session D:** the cart will be doing more work — gimbal
+moves on a precise schedule alongside the photo timer. Watch CAN bus
+contention. Bench-test rapid shutter during gimbal moves before relying
+on it overnight. Pin-8 shutter is independent of CAN, but the cable
+adds tangle risk during gimbal motion.
 
 ---
 
-## Session D — Gimbal plan (design refined during Session A)
-
-(Unchanged — see prior PROJECT_STATE history. Brief:)
-
-**Sparse plan (operator-authored):** Excel sheet with rows copy-pasted
-from GimbalLog (recorded actuals) and the Astro table (computed
-celestial positions). Operator edits offsets and picks an action.
-
-**Action vocabulary:** `goto&hold`, `goto&track`, `goto&tracknextposition`.
-
-**Expander:** Python script `Python/expand_plan.py`, same pattern as
-`luminance.py`. Smoothing maths (catmull-rom or natural cubic spline)
-lives here.
-
-**Astro single-sourced in VBA.** Dense astro table exported at
-expansion time; Python interpolates.
-
-**Per-row `time_for_action`** set by the expander. Big initial moves
-20-30s; per-photo tracking 0.5s; holds emit no command.
-
-**Executor:** generalised version of `RunCartReplayStep` walking
-action-prefixed rows.
-
-The current `GimbalToSunset / GimbalToMilkyWay / GimbalToSunrise`
-calls are **interim placeholders** — replaced by plan execution
-when this lands.
-
-`UpdateGimbalDisplay_FUTURE` in Gimbal.bas is the seed.
-
-**Astronomy info advisory to plan authoring, not commands.**
-
-**Open unblockers for the next Session D session:**
-1. A worked sparse-plan example from a realistic shoot
-2. Confirm column layouts of GimbalLog and Astro table
-3. Real GC arc vs smoothed approximation for Milky Way tracking
-
----
-
-## Session E — Cart plan (design refined during Session A)
+## Session E — Cart plan (design refined in Session A)
 
 Same pattern as Session D, cart movement instead of gimbal pointing.
-Foundation already partly built — StartCartReplay / RunCartReplayStep
-from session 1.
+Foundation partly built — `StartCartReplay` / `RunCartReplayStep`.
 
-**Sparse plan source:** Arduino CartLog from a high-speed rehearsal.
+- **Sparse plan source:** Arduino CartLog from a high-speed rehearsal.
+- **Expansion:** turns at logged distance (no smoothing); speed changes
+  no smoothing; stops linear-smoothed via Arduino's SPEED_DECAY (6-min
+  ramp to zero); expander back-calculates trigger point.
+- **Executor:** same unified walker as gimbal plan.
 
-**Expansion rules:**
-- **Turns:** execute at the distance recorded in the log (no smoothing).
-- **Speed changes:** no smoothing; applied at operator-chosen moment.
-- **Stops:** linear smoothing via Arduino's SPEED_DECAY (6-min ramp
-  to zero). Expander back-calculates the trigger point.
-
-**Executor:** same unified walker as gimbal plan.
-
----
-
-## Important architectural principles (for any future session)
-
-1. **Photos are primary, sacred, never delayed.** Luminance
-   calculations, gimbal moves, settings adjustments all happen
-   "around" the photo schedule. Operator's stated requirement:
-   ~7800 photos over the overnight shoot, 2s cadence in daytime,
-   feeding the image-stabilisation pipeline. Small frame-to-frame
-   changes are critical for clean stabilisation.
-
-2. **Phase boundaries are advisory only.** They mark astronomical
-   events for operator reference and trigger gimbal repointing.
-   Exposure control is luminance feedback, not phase-driven.
-
-3. **Plans (gimbal, cart) are operator-authored from logs.** Code
-   provides info; operator decides creative shape; code executes
-   the plan during the shoot.
-
-4. **R3 + good card is fast.** 14 fps mechanical shutter indefinitely;
-   the camera is never the bottleneck for cadence. The bottleneck is
-   the host scheduler.
-
-5. **Luminance changes per minute, not per second.** Sample sparsely,
-   apply adjustments later. Stale-by-3-shots is fine.
-
-6. **Feedback control is self-limiting per mode.** Tv can't go slower
-   than 20", ISO can't go above 1600, monotone walks. No clamp code
-   needed; the algorithm pins at the floors and stays quiet.
-
-7. **The right job for the right device.** Excel: planning, UI,
-   floating-point math, image processing. Arduino: real-time loops,
-   precise timing, hardware I/O. Don't ask Excel for sub-second
-   timing; don't ask Arduino for Pillow.
-
-8. **503 is information, not just an error.** CCAPI's nine 503
-   messages tell you exactly what state the camera is in. Parse
-   the body, log the message, decide retry intelligently.
+**Care needed:** cart movement is the biggest commitment-of-trust change.
+Plan-load-and-execute path needs real validation. Likely a
+rehearsal-day-before pattern.
 
 ---
 
-## Repo state (end of session B)
+## Architectural principles (for any future session)
 
-Files in good state:
-- `HyperLapse.xlsm` — tracked binary, all Session B changes imported
-- `Modules/*.bas`:
-  - `Sequence.bas` — single RunShot handler, Bug B clamp, kickoff throttle
-  - `Camera.bas` — mode-driven AdjustExposureByLuminance, 503 body parsing
-  - `Utils.bas` — new CalcInterval (ceiling(Tv+1.5)), NextTv walker
-  - `BackupRestore.bas` — ImportModules now overwrites in place
-  - `Astro.bas`, `Cart.bas`, `Gimbal.bas`, `Buttons.bas` — unchanged
-- `Python/luminance.py` — unchanged from session A
-- `.gitattributes`, `.gitignore` — in place
+1. **Photos are primary, sacred, never delayed.** Luminance, gimbal,
+   adjustments all happen "around" the photo schedule. ~7800 photos
+   over the overnight shoot drive the image-stabilisation pipeline.
+2. **No photo is fatal; wrong exposure is fixable in post.** This is
+   the principle that orders the migration.
+3. **Phase boundaries are advisory only.** They mark astronomical
+   events for operator reference. Exposure control is luminance
+   feedback, not phase-driven.
+4. **Plans (gimbal, cart) are operator-authored from logs.** Code
+   provides info; operator decides creative shape; code executes.
+5. **R3 + good card is fast.** Camera is never the bottleneck for
+   cadence. The bottleneck was the host scheduler.
+6. **Luminance changes per minute, not per second.** Sample sparsely;
+   stale-by-3-shots is fine.
+7. **Feedback control is self-limiting per mode.** Monotone walks pin
+   at floors. No clamp code needed.
+8. **The right job for the right device.**
+   - Excel (laptop): planning, authoring, log analysis, post-shoot
+   - Arduino: real-time, CAN, photo timer, motors, HTTP server,
+     CCAPI client, luminance compute
+   - Phone: in-field UI for rehearsal recording
+9. **503 is information, not just an error.** CCAPI's nine 503
+   messages tell you what state the camera is in. Parse and decide.
+10. **Redundancy by design.** Once a shoot starts, the cart should run
+    autonomously through plateau hours regardless of WiFi or Excel.
+    Critical paths must not depend on networked components that can
+    enter unrecoverable states without operator presence.
+11. **Never trust a counter — always verify with the artefact.** Photo
+    counter says nothing about whether photos landed on the card.
+12. **Separate the WiFi-dependent from the WiFi-independent.** Shutter
+    is hardware-direct (pin 8 → cable). CCAPI is for luminance only.
+    A WiFi failure freezes exposure but does not stop the shoot. (New
+    principle, learned Session C day 2.)
 
-Pillow installed in user's Python environment. luminance.py confirmed
-working from command line.
+---
+
+## Repo state (end of session 12 May)
+
+### Arduino repo (`mwindley/DJI-Ronin-RS4-Arduino`)
+
+`main` and feature branches as listed in "Branches on GitHub" above.
+The `session-c-uno-luminance` branch is the cumulative Session C head,
+with two new commits today (`71f62c2` pin-8 architecture, `a2ccca1`
+RAW-only buffer fix). Both pushed to origin.
+
+### Excel repo (`mwindley/HyperLapse-Excel`)
+
+`HyperLapse.xlsm` with end-of-Session-B `.bas` modules. No Excel-side
+changes today. Excel still does everything it did — Session C Excel work
+hasn't started.
 
 ---
 
@@ -394,39 +526,41 @@ working from command line.
 
 When opening the next session, the first message should:
 
-1. Reference this file (upload it).
-2. Upload the current `.bas` files. Run `ExportModules` first to
-   make sure they're current.
-3. State what to work on this session — most likely Session C
-   (Arduino owns the shutter trigger).
-4. For Session C specifically: also upload the current Arduino
-   sketch (`DJI_Ronin_UnoR4_v2.ino`) so the protocol changes can
-   be designed against the real sketch state.
+1. Upload this file (PROJECT_STATE.md)
+2. Upload `.bas` files (`ExportModules` first to ensure current)
+3. Upload current Arduino sketch from `session-c-uno-luminance` branch
+4. State what to work on this session
 
 Claude has no memory between sessions and cannot fetch private GitHub
-repos. Pasting a URL gives Claude nothing — files must be uploaded.
+repos. Files must be uploaded.
 
 ---
 
 ## Suggested next session opening
 
 ```
-Continuing HyperLapse Cart project — picking up Session C.
+Continuing HyperLapse Cart project — Session C day 3.
 
-State: end of session B, 11 May 2026. Session B shipped pure luminance
-feedback, Bug B fix, 503 body-aware retry hardening. Steady 3-second
-cadence achieved indoors but Excel's Application.OnTime resolution is
-the hard floor — 2-second cadence requires Arduino to own the photo
-timer.
+End-state of day 2 (12 May 2026):
+- session-c-uno-luminance branch now has pin-8 shutter ownership
+  (commit 71f62c2) and RAW-only buffer fix (commit a2ccca1). Both
+  validated by Test 4: 311 triggers, 308 photos on card (99%
+  delivery), luminance stable at mean=94-95 across ~150 fetches,
+  resilience absorbed ~10% transient failures, camera survived
+  10 minutes of full operation.
+- Yesterday's Ronin shutter problem resolved by architectural
+  pivot: CAN-via-Ronin retired (near-dead), pin-8 + cable now owns
+  shutter. WiFi-independent. Tangle risk accepted.
+- R3 WiFi profile drop investigation: 3 historical incidents,
+  cause not conclusively identified, mitigated by architecture
+  (pin-8 keeps shooting through any camera WiFi loss). Open
+  hypothesis: pre-buffer-fix CCAPI failure traffic was the
+  trigger family. Operationally accepted as residual risk;
+  recovery is manual (operator cycles SET3 in camera menu).
 
-This session: Session C — move the photo trigger to the Arduino,
-firing the camera via CAN bus to the Ronin. Excel keeps CCAPI work
-(Tv/ISO/luminance) but stops calling TakePhoto. Target: reliable 2s
-cadence for ~7800 overnight photos.
+Next deliverable: Tv/ISO walk + CCAPI PUTs from the Arduino —
+port AdjustExposureByLuminance and NextTv from Excel's Camera.bas.
 
-Pre-work to validate: Arduino-via-Ronin shutter command end-to-end,
-including during gimbal sweeps. Possibly retry Giga R1 with the
-mbed::CAN-vs-Arduino_CAN issue documented in the diag sketch header.
-
-Attached: PROJECT_STATE.md, all .bas files, current Arduino sketch.
+Attached: PROJECT_STATE.md, all .bas files, current Arduino
+sketch from session-c-uno-luminance branch.
 ```
