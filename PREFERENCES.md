@@ -6,6 +6,7 @@ Carry these into every session. Treat as standing instructions.
 
 - **Small steps, assess + discuss before action.** Don't write large code blocks without aligning on approach first.
 - **Stop after asking a question.** No extra prose, no preview of next steps — let the user answer first.
+- **Keep responses short.** Suggestions are welcome but one at a time. Don't stack multiple ideas, long explanations, or "here's the whole architecture" walls into one reply. After a suggestion, stop and let the operator respond.
 - **Never suggest ending the session.** The user decides when to wrap.
 - **Code windows for URLs and commands** so the chat UI shows a copy button. Single-tick inline only for short fragments inside prose.
 - **Windows `cmd` syntax for git/shell commands** (not bash), since the user is on Windows.

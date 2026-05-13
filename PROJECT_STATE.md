@@ -1,6 +1,6 @@
 # HyperLapse Cart — Project State
 
-**Last updated:** 12 May 2026 (end of Session C day 5 — Stage 3 Tv-driven cadence committed, body-read 30× speedup, backoff after fetch failure, photo-drop problem partially solved)
+**Last updated:** 13 May 2026 (end of Session C day 7 — Cart and Gimbal Log/Plan/Execution architecture discussion)
 
 This file is the handoff document between sessions. Upload it with the
 latest `.bas` files and Arduino sketches at the start of the next session.
@@ -11,179 +11,318 @@ sequence, and the WiFiS3 gotchas. Read both at session start.
 
 ---
 
-## ⚠️ Top-of-file context — Session C day 5 outcomes
+## ⚠️ Top-of-file context — Session C day 7 outcomes
 
-### Three things shipped today
+### What we did today
 
-**1. Stage 3: Tv-driven cadence.** Photo interval is now derived from
-camera Tv setting per the production rule `interval = max(2000, ceil(Tv + 1.5s) * 1000)`.
-Removed the standalone `/shutter/interval` endpoint — interval is now a
-read-only consequence of Tv. Updated automatically on `/exposure/init`,
-on each auto-walk that changes Tv, and on manual `/exposure/walk` Tv
-changes. `/exposure/init` JSON gained `interval_ms` field for verification.
+Pure design discussion. No code changes, no tests, no hardware swaps. Focus
+shifted away from CCAPI/optocoupler for a day to architect the cart and
+gimbal motion subsystems: how recon Log → Excel Plan → cart Execution
+should work for both cart-position and gimbal-pointing.
 
-**2. Body-read speedup — 30× faster (real).** Discovered via REQ-PHASES
-instrumentation that fetch bodies were taking ~2000ms to read 500-2700
-bytes over local WiFi. Root cause: `delay(5)` after every empty-buffer
-check in the read loop, accumulating across many small TCP chunks.
-Replaced with `delay(1)` plus an idle-timeout exit (50ms since last
-byte received). Body-read dropped from ~2000ms → ~270ms.
-Total fetch dropped from ~2800ms → ~550-1000ms.
+### Cart Log / Plan / Execution — agreed architecture
 
-**3. Backoff after fetch failure.** When a fetch fails (any reason —
-10s connect timeout, response timeout, etc), the next 2 fetch cycles
-are skipped. Gives the camera time to recover and prevents stacking
-10-second blocks. Tested under stress conditions and confirmed working
-(backoff cycles fire correctly, no double-failures during recovery).
+**Position model (rear-axle reference, bicycle/Ackermann):**
+- Wheelbase L = 490mm (centre-to-centre, measured)
+- Velocity source: rear TIC step count × m_per_step
+- Steering source: servo PWM × linear servo-to-wheel calibration
+- Overdrive treated as known speed-dependent correction (0.95 at slow → 1.00
+  at max), validated once by straight-line test, not measured per-event
+- Front step count NOT logged (real-world says rear doesn't slip on the
+  surfaces this cart sees; the differential absorbs overdrive mismatch
+  internally; front-step logging adds no information until it does)
+- TIC position-control safe ceiling ~130 m/hr; recon at 100, exec at 5 —
+  both well inside
 
-### NOT shipped — photo drops in stress conditions persist
+**Cart Log:**
+- Event-driven (one row per UI change — speed, steering, stop)
+- Add `rear_steps` (int32) to `CartLogEntry`, read via
+  `ticRear.getCurrentPosition()` at the moment of each event
+- Buffer ~64-128 entries in RAM (handful per minute, no SD, no streaming)
+- Existing `/cartlog` poll-and-clear endpoint stays the retrieval path
 
-Five-minute soak at Tv=2" / lens covered / mode darken showed **105/154
-= 68% delivery.** This is despite body-read fix and backoff working as
-designed. Drops are camera-side — pin-8 fires on time (gap=4000ms in
-serial) but camera doesn't capture the image. Concurrent CCAPI traffic
-seems to suppress the camera's pin-8 handler even when traffic is
-finishing well before the next pin-8 due time.
+**Cart Plan (built in Excel from Log):**
+- 5-10 rows typical
+- Movement segments: `(distance_m, steering_deg)` — distance = rear-axle
+  arc length, matches rear step count directly
+- Stops: `(duration_s)`
+- Acceleration overhead measured once (drive a long straight at 5 m/hr,
+  compare clock to distance÷speed); included in time estimates, not modelled
+- Sun alignment via shoot start time
 
-**Important context:** stress conditions are worst case. Real-world
-overnight shooting uses Tv≥6s mostly, where:
-- Photo cadence is 8+ seconds (more headroom for any fetch)
-- Camera has actual scene to process (not idling on a black frame)
-- Light changes drive walks; fetches result in meaningful PUTs
+**Bicycle math placement: Excel only.**
+- Forward integration: Log → (x, y, θ) trace, for the operator to see what
+  they drove during recon
+- Inverse fitting: trace → smooth Plan via single-arc geometry per
+  smoothable section (chord length + heading change → radius → steering
+  angle → arc length)
+- Cart receives Plan in cart-native units (steps to travel, servo PWM to
+  hold) — cart firmware stays dumb, calibration constants live in Excel
 
-The Excel-table production system (no CCAPI fetches at all) had **zero
-drops across 3000 photos over 2 overnight runs.** So the camera+pin-8
-combination is fundamentally reliable; the cart's CCAPI fetches are
-the regression.
+**Cart Execution:**
+- Excel POSTs Plan to `/plan/load` at shoot start
+- `/plan/start` begins the walker
+- Per row: set steering, set speed, watch rear step count, advance when
+  target reached (or duration elapsed for stops)
+- No bicycle integration on cart — just step counting + servo control
 
-### Commits today
+### Gimbal Log / Plan / Execution — agreed architecture
 
-| Commit | Subject |
+**Gimbal Log already exists** — `gimbalLogCapture()` triggered by btn20,
+records (ms, yaw, pitch) waypoints, 64-entry buffer, pulled by Excel via
+`/gimballog`. Used during recon for operator-pointed framing snapshots.
+
+**Three motion regimes during shoot, cleanly separated:**
+
+1. **Driving — Pan Follow mode.** Gimbal hardware tracks cart heading.
+   Cart commands yaw in cart-frame (0, ±90). No θ feed needed during
+   motion. Operator-set yaw values pre-baked into Plan.
+
+2. **Astro tracking at stops.** Cart computes target live from astro
+   formulas + heading anchor + current time. Sun, galactic centre (and
+   later: sunrise, moon if needed). Commands gimbal continuously.
+
+3. **Creative manual pans between waypoints.** Operator-recorded waypoints
+   from the Log are arranged in Plan as a sequence; cart interpolates with
+   **Catmull-Rom cubic spline** between them — flows through every point,
+   tangents inherited from neighbours, no operator-set handles.
+   Bezier-family but with auto-tangents (good-enough flow-through).
+
+**Heading anchor model:**
+- Operator anchors cart heading via iPhone compass at shoot start
+- Bicycle model integrates heading θ during drives (approximate)
+- At every stop, UI shows cart's predicted heading; operator validates /
+  corrects against iPhone compass before astro tracking starts
+- Astro tracking always runs from a fresh anchor — never relies on
+  integrated heading through a drive
+
+**Yaw range is cumulative ±450°, NOT ±180°.** The RS4 Pro can do 720°+
+mechanically; we limit to 900° total travel (−450° to +450°) for pin-8
+cable safety. Operator pre-winds cables worst-case at setup. Plan and
+Execution work in unwrapped cumulative yaw. Current `Gimbal.bas`
+constants `GIMBAL_YAW_MIN/MAX = ±180°` are wrong for our purposes —
+needs change to ±450°.
+
+**Gimbal motion commands:**
+- `setPosControl` does timed easing per call, up to 25.5 sec
+  (uint8_t in 0.1s units) — good for waypoint-to-waypoint short moves
+- `setSpeedControl` does continuous angular velocity, 0.5s valid window,
+  re-issue continuously — best for slow tracking (sun, milky way, slow
+  creative pans). Currently unused from Excel side — Gimbal.bas only
+  calls `setPosControl` via `/move`.
+- Long moves (>25.5s) handled by cart subdividing into segments along
+  the Catmull-Rom curve, OR by using speed control mode
+
+**Astro maths port to cart:**
+- Current Astro.bas is well-factored: ~60 lines of dense maths
+  (sun position, GC position fixed at RA=266.4167°, Dec=−29.0078°,
+  RADecToAltAz, Julian day, GMST/LST). Galactic centre is a constant pair.
+- ~100-150 lines of C on the cart. Uno R4 has hardware FPU, fine.
+- **14mm f/1.8 lens (Sigma 14mm f/1.8 Art-class) is very wide** —
+  104° HFoV. Current ~1° accuracy is plenty; no need for Meeus-grade
+  algorithms. Refraction correction nice-to-have but not required.
+
+**Gimbal Plan visualisation:** XY chart, yaw on X (cumulative −380° to
++70° span, fits 450° window), pitch on Y (0° to 90°, with hard-zone
+dashed line at 80°). Waypoints as dots, Catmull-Rom spline drawn through
+them. Operator authors / inspects the night's gimbal trajectory at a glance.
+
+### Uno R4 vs production — verdict: stays fine, but watch loop budget
+
+The cart firmware additions are modest in memory (a few KB) and
+computation (Catmull-Rom eval, astro recompute every N seconds, plan-row
+walker). None strain the Uno R4 hardware.
+
+The real concern is **loop time** — sacred rule says photos never delayed.
+Current `max_loop_us` instrumentation already exists in the PIN8 log,
+so we measure rather than guess as features land. **Not a reason to
+switch to Giga preemptively.**
+
+### Workfronts created today (see "Open workfronts" section below)
+
+Architecture decisions only — implementation deferred. The following work
+is queued:
+
+1. Cart firmware: add `rear_steps` to `CartLogEntry`, grow buffer,
+   add `/plan/load` and `/plan/start` endpoints, write plan-row walker
+2. Cart firmware: port astro maths from Astro.bas to C (~100-150 lines)
+3. Cart firmware: replace ±180° yaw constants with ±450° cumulative
+4. Cart firmware: wire up `setSpeedControl` for slow continuous gimbal moves
+5. Cart firmware: heading-anchor endpoint, integrate cart-θ during drives
+6. Excel: bicycle integration (Log → trace), arc-fitting (trace → Plan),
+   new Plan sheet schema with cart + gimbal rows interleaved
+7. Excel: Catmull-Rom evaluator for gimbal smoothing (preview only;
+   real evaluation happens on cart at execution)
+8. Excel: Gimbal Plan XY chart (yaw cumulative × pitch with 80° hard zone)
+9. Calibration tests: straight-line (m_per_step + overdrive),
+   circle (servo-to-wheel-angle), S-bend (only if needed)
+10. Acceleration overhead measurement at 5 m/hr
+
+### Files modified today
+
+None. Discussion / design session only.
+
+---
+
+
+
+### What we learned today
+
+**Production edge case identified.** From Excel table, the tightest
+production margin is sunset 18:15-18:24: Tv=0.2"-1.6", interval 2-4s,
+Tv changing every minute. **The most stressed combination is Tv=0.8" +
+interval=2s** — only 1.2s gap between exposure end and next pin-8.
+Luminance fetch needs to be every 30s during this window. Outside this
+10-minute peak luminance window, intervals are generous and drops have
+never been an issue in real-world overnight runs.
+
+**Cart-side electrical signal is pristine.** Added heavy instrumentation:
+- D9 jumpered to D8 for readback (INPUT mode)
+- `[PULSE rise=Xus fall=Yus high=N/M]` per fire — microsecond edge timing
+- PIN8 log enriched with `loops=N max_loop_us=X fire_us=Y` for loop context
+
+Across all tests (Tv=0.8"/2s, 49 fires, 3 drops): every PULSE line shows
+rise=6-9µs, fall=6-9µs, all 28000+ samples HIGH (zero glitches), fire_us
+always 103.76ms. **Dropped fires are statistically indistinguishable from
+captured ones at the Arduino pin.**
+
+**Intervalometer test (200+ fires, 14 min): 100% delivery.** The
+intervalometer plugs in at the cable mid-join, BYPASSING the optocoupler.
+The cart goes through the opto. Cart drops to 75-94% in the same window.
+
+**Conclusion:** The Arduino pin-8 signal is fine. The drops happen
+downstream of the Arduino — most likely in the optocoupler. Without an
+oscilloscope or logic analyser we cannot see the opto's output to confirm.
+
+### Delivery results by test
+
+| Test condition | Result |
 |---|---|
-| `<pending>` | Session C day 5: Stage 3 Tv-driven cadence + body-read fix + backoff |
-| `<pending>` | Session C day 5: phase-timing instrumentation (REQ-PHASES) |
+| Tv=2" + interval=4s, no CCAPI (5 min) | 90% (63/70) |
+| Tv=2" + interval=4s, no CCAPI (20 min) | 75% (242/321) |
+| Tv=0.8" + interval=2s, no CCAPI (~1.6 min, 36 fires) | 78% (28/36) |
+| **Tv=0.8" + interval=2s, no CCAPI** (5 min, 49 fires) | **94% (46/49)** |
+| **Tv=0.8" + interval=2s, WITH CCAPI** (5 min, 165 fires) | **76% (125/165)** |
+| Intervalometer at 4s (14 min) | **100% (214/214)** |
 
-Pending commits — code is in `/home/claude/work/DJI_Ronin_UnoR4_v2.ino`
-ready to be copied into the local repo and committed.
+Note: CCAPI test used current "fetch every 3 photos" rule, which at 2s
+interval = fetch every 6s. **5× more frequent than the 30s production
+target.** True production fetch cadence has not been tested yet.
 
-### Hardware-validated changes
+### Key insight — drops are NOT correlated with cart-side anomalies
 
-| Test | What | Result |
-|---|---|---|
-| Body-read fix | First fetch after fresh boot | total 789ms (was 2804ms), body 69ms (was 2088ms) |
-| Body-read fix | Subsequent warm fetches | total 200-600ms typical |
-| Backoff | Single 10s connect-fail event in 80s run | 28/28 delivery, late PIN8 by 10s once, no drops |
-| Backoff | Multiple failure events in 5-min run | Drops still occurred (105/154) — fetch traffic interferes with camera pin-8 handler even when fetches succeed |
+For each dropped fire, the cart-side log entries show:
+- Same gap (2000-2004ms)
+- Same loops count (~320)
+- Same max_loop_us (~122k)
+- Same fire_us (103.76ms)
+- Same PULSE rise/fall (6-9µs)
+- Same samples (no glitches)
 
----
+As captured fires. The Arduino is doing the right thing every time.
 
-## Pending work for Session C day 6
+### Tomorrow priorities
 
-### Priority 1: Real-world Tv test
+1. **Hardware: replace optocoupler and resistor.**
+   Recommended from Jaycar Australia:
+   - ZD1928 4N25/4N28 optocoupler ×2 ($1.75 each, one as spare)
+   - 220Ω 1/4W resistor pack (or 330Ω for safer LED current)
+   Total: ~$5
+   Stay in the 4N25 family (6N138 needs Vcc on output side — not available).
+   
+2. **Measurement: buy USB logic analyser BEFORE swapping opto.**
+   Recommended: SparkFun TOL-18627 USB Logic Analyzer (24MHz, 8-channel)
+   from Core Electronics, ~$30. Uses open-source PulseView/sigrok.
+   With this we can measure both sides of the opto simultaneously and
+   PROVE the diagnosis before guessing-and-swapping.
 
-The 5-minute stress soak at Tv=2" is *not* representative. Test at
-Tv=8" or Tv=15" (overnight-realistic):
-- Cadence is 10-17s, so fetches occupy <10% of cycle vs ~20% at Tv=2"
-- Camera is processing real scene data
-- Compare delivery rate to determine whether production is OK
+3. **Test true production fetch cadence (time-based 30s).**
+   Current code does "every 3 photos" — must add time-based fetch
+   interval. New code: `LUM_FETCH_INTERVAL_MS = 30000` time-gated, decoupled from photo count.
 
-If production is fine at slow Tv, the only remaining concern is the
-sunset transition window (Tv=2-6s, fetches frequent, walks active).
-That's a smaller part of overnight runs.
+4. **After opto swap: re-run Tv=0.8"+2s test, target 100% delivery.**
 
-### Priority 2: Non-blocking fetch (if needed)
+### Files modified today (in /mnt/user-data/outputs/)
 
-If even at production Tv the drops remain, refactor `ccapiFetchLuminance`
-and `ccapiRequest` into a state machine that polls one phase per loop
-iteration, bounded to <10ms per iteration. Significant surgery — only
-worth doing if the slower-Tv test shows it's needed.
+- `DJI_Ronin_UnoR4_v2.ino` — heavy PIN8 instrumentation
+  - CART_SHUTTER_READBACK = D9
+  - backupShutter() rewritten with PULSE diagnostic
+  - PIN8 log line enriched with loops/max_loop_us/fire_us
+  - diag_loop_count tracking in loop()
+  - T1b live view suppression (one-shot log + silent return)
+  - ANCHOR call at /shutter/start
+  - /debug/poll_camera?on=1 endpoint
+- `photo_delta_check.py` — pagination fixed (page=2,3,4… not 1,2,3)
 
-### Priority 3: /exposure/init retry
+### Cross-reference workflow
 
-Init has no retry — a single GET tv + GET iso. Transient CCAPI failures
-cause `ok:false`. Add ~10 lines: 3 retries with 1s backoff between
-attempts. Low risk, addresses the recurring "init failed, retry"
-workflow drag.
+After each test:
+1. Cart serial captures every PIN8 fire with millis timestamp
+2. Camera CCAPI provides per-file `lastmodifieddate` (second precision)
+3. `photo_delta_check.py` walks all pages of /contents/cfex/102EOSR3
+4. Manual correlation: anchor PIN8 #1 to first captured photo, infer
+   each subsequent fire's expected camera time, find nearest capture
+   within ±1.5s = OK, else DROPPED.
 
-### Priority 4: Excel-side change
-
-Excel currently fires TakePhoto every interval. Change to: Excel polls
-cart endpoints for telemetry but does NOT fire photos. Cart owns timing.
-Excel becomes display/logging, not controller.
-
----
-
-## Architecture summary (carried forward)
-
-### Hardware
-- Canon R3 camera (high-spec, CCAPI over WiFi at 192.168.1.99:8080)
-- DJI Ronin RS4 Pro gimbal (CAN bus, address 0x223 TX / 0x222 RX)
-- Arduino Uno R4 WiFi (192.168.1.97, the cart controller)
-- Pin-8 hardware shutter trigger (the WiFi-independent failsafe)
-- Two Tic stepper controllers + servo (front/rear axles)
-
-### Software layering
-- **Pin-8 photo timer**: highest priority, must never be delayed. Uses
-  `millis()` against `shutter_interval_ms`. Currently fires within
-  4ms of target time.
-- **CCAPI fetch (luminance)**: every 3 photos. Returns mean brightness.
-  Triggers Stage 2 auto-walk if outside deadzone.
-- **CCAPI PUT (Tv/ISO)**: triggered by walk decisions. Used only when
-  needed; deadzone prevents oscillation.
-- **Live view management**: needed for the luminance endpoint to return
-  data. Restart on 3 consecutive conn failures.
-
-### Architectural principles (sacred)
-1. Photos sacred, never delayed.
-2. No photo fatal; wrong exposure fixable in post.
-3. Stage 1 (luminance fetch) and Stage 2 (auto-walk) are inline, not
-   pre-emptive — single thread, no concurrency.
-4. WiFi-dependent (CCAPI) vs WiFi-independent (pin-8, CAN gimbal) cleanly
-   separated. Pin-8 must work when CCAPI is fully down.
-5. Tv + 1.5s cadence rule. Photo interval derived from Tv, not set
-   independently.
+This gives definitive per-fire labels, which let us check whether
+cart-side instrumentation differs between OK and DROPPED fires.
+(Result: it doesn't.)
 
 ---
 
-## Known library quirks (Arduino Uno R4 WiFi / WiFiS3)
+## State of the system
 
-- `WiFiClient::setConnectionTimeout()` is NOT honoured for
-  `client.connect()`. The default 10-second block applies regardless.
-  Workaround: backoff after failure (shipped this session).
-- Tight `delay(5)` in read loops accumulates badly over many small TCP
-  chunks. Use `delay(1)` plus idle-timeout exit (shipped this session).
-- Cart resets clear all state (`lum_fetch_disabled`, `fetch_delay_ms`,
-  mode, init). Every flash or reset means re-running the full setup.
+### What works
+
+- Stage 3 Tv-driven cadence (committed day 5)
+- Body-read 30× speedup (committed day 5)
+- Fetch backoff (committed day 5)
+- REQ-PHASES instrumentation (committed day 5)
+- PIN8 + PULSE instrumentation (today, uncommitted)
+- Cart-vs-camera cross-reference (today, uncommitted)
+- Intervalometer fallback (always worked, never modified)
+
+### What's tested at production edge
+
+- Photo cadence at Tv=0.8" + 2s: 94% no-CCAPI, 76% with-CCAPI-at-6s
+- Pin-8 electrical output: pristine on every fire
+- Camera + cable + intervalometer: 100% reliable
+
+### What's NOT tested
+
+- Fetch interval at true production 30s cadence
+- Tv=0.8" + 2s with new opto + 30s fetch
+- Anything beyond 5-20 minute soaks
+- Sunrise transition (only sunset table reviewed)
+
+### Hardware uncertainty
+
+- Existing opto is sealed/wrapped — cannot inspect resistor value or model
+- Cart-side signal verified perfect via D9 readback
+- Intervalometer bypasses opto and gets 100% — opto strongly suspected
+- No measurement of opto OUTPUT signal yet (needs scope or logic analyser)
 
 ---
 
-## Standard test setup sequence (use every session)
+## Working preferences (carry forward)
 
-See `PREFERENCES.md` for the full ordered checklist. Briefly:
-
-1. CCAPI alive: `http://192.168.1.99:8080/ccapi`
-2. Init (verify `ok:true` AND `interval_ms`): `http://192.168.1.97/exposure/init`
-3. Mode: `http://192.168.1.97/exposure/target?mode=darken`
-4. Fetch delay (default 0): `http://192.168.1.97/debug/fetchdelay?ms=0`
-5. Delete card images
-6. Confirm camera state
-7. Start: `http://192.168.1.97/shutter/start`
-8. Stop: `http://192.168.1.97/shutter/stop`
-9. Report `photos_taken=N`, card count, anomalies.
+- Windows cmd syntax (not bash)
+- Small steps, ask ONE question at a time, wait for confirmation
+- Code boxes for commands and URLs (copy button matters)
+- Oscilloscope approach — instrument, don't guess
+- Photos are sacred; wrong exposure is fixable in post
+- Pin-8 must work when CCAPI is down
+- Tv+1.5s cadence rule
+- Real-world Excel table is authoritative for production scenarios
+- See PREFERENCES.md for full agreement
 
 ---
 
-## Diagnostic instrumentation in current build
+## Open questions for tomorrow
 
-- `PIN8 #N gap=Xms target=Yms` — every photo fire
-- `FETCH start since_photo=Xms delay_target=Yms` — fetch begins
-- `FETCH end ok=Y/N elapsed=Xms` — fetch completes
-- `REQ-PHASES connect=Xms send=Yms wait=Zms hdrs=Ams body=Bms stop=Cms total=Tms bytes=N` — sub-phase timing for every HTTP request
-- `LOOP-LONG elapsed=Xms` — any loop iteration over 100ms
-- `[lum] fetch FAIL — backoff for N cycles` — backoff engaged
-- `[lum] fetch skipped (backoff, N cycles left)` — backoff in progress
-- `PUT-Tv start/end` and `PUT-ISO start/end` with timing
-
-Debug endpoints:
-- `http://192.168.1.97/debug/fetch?on=0|1` — disable/enable fetches
-- `http://192.168.1.97/debug/fetchdelay?ms=N` — fetch start delay
+1. Should we order opto + analyser before next session? (User intends to.)
+2. Order priority: analyser first (measure before fix) or opto first (fix and verify)?
+3. After opto swap, should luminance fetch interval be made time-based
+   (30s) and decoupled from photo count?
+4. Do we want a "stage 4" milestone covering hardware reliability fix,
+   time-based fetch interval, and production-envelope soak test?
