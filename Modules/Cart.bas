@@ -67,6 +67,8 @@ Public Sub GetCartLog()
         ws.Cells(1, 2).value = "Type"
         ws.Cells(1, 3).value = "Value"
         ws.Cells(1, 4).value = "Description"
+        ws.Cells(1, 5).value = "RearSteps"      ' day-8: TIC rear position at event
+        ws.Cells(1, 6).value = "FrontSteps"     ' day-8: TIC front position at event
     End If
     
     Dim nextRow As Long
@@ -90,6 +92,13 @@ Public Sub GetCartLog()
                 ws.Cells(nextRow, 3).value = CDbl(fields(2))  ' value
                 ' Add human-readable description
                 ws.Cells(nextRow, 4).value = EventDescription(fields(1), CDbl(fields(2)))
+                ' Day-8: capture rear_steps and front_steps if present (5-column format)
+                If UBound(fields) >= 3 Then
+                    ws.Cells(nextRow, 5).value = CDbl(fields(3))  ' rear_steps
+                End If
+                If UBound(fields) >= 4 Then
+                    ws.Cells(nextRow, 6).value = CDbl(fields(4))  ' front_steps
+                End If
                 nextRow = nextRow + 1
                 newRows = newRows + 1
             End If
@@ -98,7 +107,7 @@ Public Sub GetCartLog()
     
     ' Format timestamp column
     ws.Columns(1).NumberFormat = "@"  ' Text — keep HH:MM:SS as string
-    ws.Columns("A:D").AutoFit
+    ws.Columns("A:F").AutoFit
     
     LogEvent "CART", "GetCartLog: " & newRows & " events retrieved"
     Exit Sub

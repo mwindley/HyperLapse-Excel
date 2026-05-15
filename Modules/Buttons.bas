@@ -137,15 +137,16 @@ Public Sub BuildControlSheet()
     
     ' Button definitions: label text + named-range name.
     ' Order here = vertical layout order on the sheet.
-    Dim btns(0 To 7, 0 To 1) As String
-    btns(0, 0) = "System Check":      btns(0, 1) = "btnSystemCheck"
-    btns(1, 0) = "Init Shoot":        btns(1, 1) = "btnInitShoot"
-    btns(2, 0) = "Start Sequence":    btns(2, 1) = "btnStartSequence"
-    btns(3, 0) = "Stop Sequence":     btns(3, 1) = "btnStopSequence"
-    btns(4, 0) = "Get Sunset Time":   btns(4, 1) = "btnGetSunsetTime"
-    btns(5, 0) = "Generate GC Table": btns(5, 1) = "btnGenerateGCTable"
-    btns(6, 0) = "Export Modules":    btns(6, 1) = "btnExportModules"
-    btns(7, 0) = "Import Modules":    btns(7, 1) = "btnImportModules"
+    Dim btns(0 To 8, 0 To 1) As String
+    btns(0, 0) = "System Check":       btns(0, 1) = "btnSystemCheck"
+    btns(1, 0) = "Init Shoot":         btns(1, 1) = "btnInitShoot"
+    btns(2, 0) = "Start Sequence":     btns(2, 1) = "btnStartSequence"
+    btns(3, 0) = "Stop Sequence":      btns(3, 1) = "btnStopSequence"
+    btns(4, 0) = "Get Sunset Time":    btns(4, 1) = "btnGetSunsetTime"
+    btns(5, 0) = "Generate GC Table":  btns(5, 1) = "btnGenerateGCTable"
+    btns(6, 0) = "Integrate Bicycle":  btns(6, 1) = "btnIntegrateBicycle"
+    btns(7, 0) = "Export Modules":     btns(7, 1) = "btnExportModules"
+    btns(8, 0) = "Import Modules":     btns(8, 1) = "btnImportModules"
     
     ' Find or (re)create the sheet
     Dim ws As Worksheet

@@ -8,7 +8,8 @@ Carry these into every session. Treat as standing instructions.
 - **Stop after asking a question.** No extra prose, no preview of next steps — let the user answer first.
 - **Keep responses short.** Suggestions are welcome but one at a time. Don't stack multiple ideas, long explanations, or "here's the whole architecture" walls into one reply. After a suggestion, stop and let the operator respond.
 - **Never suggest ending the session.** The user decides when to wrap.
-- **Code windows for URLs and commands** so the chat UI shows a copy button. Single-tick inline only for short fragments inside prose.
+- **Bare URLs as clickable links — IN CHAT, NOT IN FILES.** When the operator asks to run a test or send a command, present the URL(s) directly in the chat reply, on their own line, as bare URLs (no code box, no markdown link). Do NOT put test URLs in a file and ask the operator to consult it — that requires extra clicks and breaks flow. Bring URLs to the chat screen, one per line, where the operator is already looking. Files are for capture/archive, not for live test execution. This rule is firm: even when there's a test plan or URL sheet file already saved, repeat the URL(s) in chat at the moment they're needed. Code boxes wrap URLs in backticks and break click-through, so always bare URL on its own line. Inline single-tick is fine only for very short fragments inside prose, never for a URL meant for the operator to actually visit.
+- **Code windows for shell commands** so the chat UI shows a copy button. Single-tick inline only for short fragments inside prose.
 - **Windows `cmd` syntax for git/shell commands** (not bash), since the user is on Windows.
 
 ## Diagnostic philosophy — "oscilloscope approach"
@@ -16,6 +17,29 @@ Carry these into every session. Treat as standing instructions.
 When chasing a bug, **instrument first, theorise second**. Add timestamp logs at every phase boundary, run, read the actual numbers. Don't trust intuitions about where time goes. Each new mystery gets its own instrumentation pass (REQ-PHASES, LOOP-LONG, PIN8 gap, FETCH elapsed, PUT timing). Logs are cheap; wrong assumptions are expensive.
 
 Specifically: when a fetch or operation has unexpected duration, break it into sub-phases with millisecond timing. Real-world example this session: REQ-PHASES revealed the 2.8s fetch was 2.0s body read + 0.5s wait + 0.3s misc, NOT what we'd assumed.
+
+## Investigation discipline — measure, drill, then simplify
+
+A general rule that sits alongside the oscilloscope approach:
+
+1. **Measure first.** Instrument before guessing. See the actual numbers.
+2. **Drill to the bottom of the cause.** Don't stop at the apparent symptom. Isolate the actual mechanism (which library call, which TCP phase, which memory region, which mechanical effect). One layer at a time, with measurements at each.
+3. **Then come back up and simplify.** The fix should be elegant and minimal. Don't stack workarounds. Once the cause is understood, the right fix is usually small.
+
+4. **Willing to AVOID an edge condition rather than SOLVE it — if the cost of avoiding is low and the risk of avoiding is acceptable.** Not every bug needs a code fix. Sometimes "don't go there" is the right answer:
+   - Bound the problem space rather than handle every case
+   - Operator-in-the-loop instead of autonomous recovery
+   - Conservative limits instead of dynamic adjustment
+   - "Close all UI tabs during plan execution" instead of fixing WiFi saturation
+
+   The bar for avoidance: the avoidance must be **cheap to apply consistently** (low operator friction) AND **low-risk if forgotten** (graceful degradation, not catastrophic). When both hold, avoid. When either fails, solve.
+
+   Worked examples already embedded in the architecture:
+   - "Photos sacred, never delayed; wrong exposure fixable in post" — avoid the perfectionist exposure-fix branch that risks the loop.
+   - "Pin-8 must work when CCAPI is unreachable" — avoid the failure mode entirely by having a hardware fallback path.
+   - "Distance tolerance is large; turn-at-spot and stop-before-hazard are not" — avoid the calibration depth for distance; operator-supervise the few hard cases.
+
+The order matters. **Don't decide avoid-vs-solve until you've measured and drilled.** Otherwise you're guessing whether avoidance is safe.
 
 ## Architectural principles (sacred)
 
