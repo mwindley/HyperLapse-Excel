@@ -1,30 +1,739 @@
 # HyperLapse Cart — Project State
 
-**Last updated:** 22 May 2026 (Session C day 15 — #36d Step D
-built and verified end-to-end. Sketch then BRANCHED for v1/v2
-production split: `DJI_Ronin_UnoR4_v1prod.ino` (v1, all-WiFi,
-frozen except bug fix) and `DJI_Ronin_Giga_v2dev.ino` (v2,
-Giga + wired Ethernet to camera, dev). v2 hardware chosen:
-Giga R1 (on hand) + Arduino Ethernet Shield 2 (~$51 AUD).
-v2 architecture: wired Ethernet point-to-point cart↔camera,
-camera WiFi disabled, external WiFi for operator UI only.
-v2 removes the only unacceptable failure mode (external AP
-in camera comms path) and unlocks TABLE-mode camera
-nudging that was impossible in v1. Excel + UI HTTP endpoint
-surface shared across v1 and v2. #22 Giga migration
-absorbed into v2 build. Step 4 of #36d permanently closed.
-v1 sketch current at /mnt/user-data/outputs/.)
+**Last updated:** 23 May 2026 (Session C day 16 — three-screen UI
+v2 foundation delivered. Server-side routing on `?screen=cart|gimbal
+|exec`, shared header with logo row + 4-tab bar, day palette baked
+in. **Cart Recon: full build** — status line (voltage · motor state),
+Last/Now waypoint rows, steering/speed/motor/action button rows,
+turning-circle notes panel. New `'W'` CartLog event carries the
+recon-session waypoint number; new `cart_motor_state` software flag
+(DE-E/STOP/ENRG) wired through cartStop/cartDeadStop/cartSetSpeed/
+cartEnergise/cartDeenergise; `/status` extended with v[10] motor
+state, v[11] waypoint count, v[12] mm-since-last-waypoint; new btn22
+Mark wpt handler with confirm. Operator verified end-to-end
+(+5/+5/+5 cumulative steering, Last/Now roll-over, d-distance ticks,
+Clear logs zeroes back to "—"). **Gimbal Recon: full build,
+client-side state** — live readout `Ry · Cy · p` (Ry=Cy until BNO
+integration); 4 prior slots + Current row block; type rows
+PF/Lock/Move/Track sun + Sunrise/Sunset/MW; conditional sub-controls
+(keyframe for astro, R/C frame for PF+Move, yaw Δ / pitch Δ for
+astro, measured-variance line); label field; Show astro / Snap var
+(TODO stubs pending Excel astro push) / Next action row. Per-type
+pose handling: PF/Lock/Move capture pose AND write to cart gimbalLog
+via /btn20; astro and Track sun are intent-only with no pose, no
+gimbalLog write. Newest at slot c3 (just above Current), older
+pushed up and off the top; Clear button on Current for mini-edit
+without baking. iOS auto-zoom fixed (inputs at font-size:16px).
+**JS escape-quote bug caught and fixed mid-build** — broken `\\'s`
+inside an alert() string threw a syntax error and killed the entire
+script (live readout stuck on dashes). New build lesson recorded
+in PREFERENCES. **Execution screen: placeholder only** — header +
+tabs work, body says "Coming next". Deferred until #5a segment
+dispatcher + speed transition types + ±100mm nudge endpoint +
+PAUSE/RESUME backend are built. Sketch 4843 → 5140 lines (+297 net);
+SRAM globals +9 bytes. **Day 16 hygiene:** UI_DESIGN_SUMMARY.md
+moved to ARCHIVE/ (superseded by UI_DESIGN_v2.md + Day 16 build);
+GIMBAL_VIZ.md §3 / §9 / §10 annotated with superseded-by pointers.
+**Earlier Day 15 below.** Day-15 part 7: #48 bus fault localised
+via addr2line. Crash is in `WiFiClient::read` /
+`Stream::readStringUntil` inside `ccapiStopLiveview()`'s
+HTTP DELETE. Sometimes preempted by CAN RX ISR (3 of 4 dumps),
+sometimes not (1 of 4). Stack measurement showed 1024/1024 used
+in normal idle operation (stack is only 1 KB). Fix attempt 1
+(char-buffer reads in ccapiRequest) ruled out — WiFi library
+allocates Strings internally. Fix attempt 2 (`enablePush(false)`
++ delay before DELETE) removed CAN ISR from the crash stack but
+crash persisted from a second mechanism. **Resolution: minimal
+/stop handler.** The `ccapiStopLiveview()` call was housekeeping
+(politely close camera liveview session); not required for
+correctness because `ccapiStartLiveview()` already handles
+"Already started" 503 from stale sessions. Removed from /stop
+handler. /stop now does only local flag writes + serial log.
+Verified across two full /start → photos → /stop cycles, both
+clean, both started fresh liveview on next /start. #48 closed
+for v1. v1 sketch current at /mnt/user-data/outputs/.)
 
 This file is the handoff document between sessions. Upload it with the
 latest `.bas` files and Arduino sketches at the start of the next session.
 
-Also upload `PREFERENCES.md`, `GIMBAL_VIZ.md`, `WORKFRONTS.md`, and
-`EXPOSURE_FALLBACK.md` — working agreement, gimbal visualisation
-design, open task list, exposure fallback design (with reference
-table as Appendix A).
+Also upload `PREFERENCES.md`, `GIMBAL_VIZ.md`, `WORKFRONTS.md`,
+`EXPOSURE_FALLBACK.md`, and `UI_DESIGN_v2.md` — working agreement,
+gimbal visualisation design (with Day-16 superseded-by annotations),
+open task list, exposure fallback design (with reference table as
+Appendix A), and the current authoritative UI spec. The Day-10
+`UI_DESIGN_SUMMARY.md` is in ARCHIVE/ as of Day 16 — superseded by
+UI_DESIGN_v2 + the Day-16 build.
 
 Older session detail (days 5–11) lives in `PROJECT_STATE_old_ver1.md`.
 This file keeps only what the next session needs to read to start work.
+
+---
+
+## Day-16 session — three-screen UI v2 foundation
+
+Build session. Server-side three-screen UI delivered, two screens
+real (Cart Recon, Gimbal Recon), one placeholder (Execution). The
+authoritative spec is `UI_DESIGN_v2.md` (Day 15 part 10).
+
+### What was built
+
+**Routing.** Single `else` block in path dispatcher parses
+`?screen=cart|gimbal|exec` (default `cart`). Three HTML bodies
+between a shared head + header + tab bar.
+
+**Shared header.** Logo row (RS4 + R3 SVG icons reused from old UI)
++ 4-tab grid (Cart / Gimbal / Exec / Day). Active tab marked with
+2px maroon bottom border. Day palette baked in CSS — warm grey on
+warm grey, muted slate-blue buttons, maroon action, warm tan warn.
+Night palette deferred to Execution screen build.
+
+**Cart Recon screen.**
+
+- Status line (monospace, centred): voltage · motor state
+- Last row: most-recent waypoint display, empty "—" until first bake
+- Now row: live preview, ticks distance from cart-log-start or last
+  waypoint
+- Steering row: L5 / L1 / CTR / R1 / R5 (existing btn1–5)
+- Speed row: −10 / −1 / DEC / +1 / +10 (existing btn6–10)
+- Motor row: STOP / DE-E (confirm) / ENRG. DEAD removed from this
+  screen per v2 spec (no longer needed when only Cart-Recon work is
+  happening; the Execution screen will get its own quick-stop).
+- Action row: ● Cart log / Mark wpt (new, with confirm) / Clear logs
+- Notes panel: turning-circle table (#10b) preserved
+
+**Sketch additions for Cart Recon:**
+
+- `cart_motor_state` (1 byte): software flag with values
+  MOTOR_DEENERGISED / MOTOR_STOPPED / MOTOR_RUNNING. Hooks into
+  cartStop, cartDeadStop, cartSetSpeed, cartEnergise, cartDeenergise.
+  Decay completion already calls cartStop() so it's covered.
+- `cart_waypoint_count` (4 bytes): increments per Mark wpt bake;
+  reset by btn19 log-start / btn21 Clear logs / /cartlog/clear.
+- `cart_last_waypoint_steps` (4 bytes): `ticRear.getCurrentPosition()`
+  at last bake; reset paths same as above. The Now-row distance
+  reads `(cur_steps − cart_last_waypoint_steps) / 565` mm
+  (565 steps/mm from planMmToSteps calibration).
+- New `'W'` event in CartLog, value = `cart_waypoint_count`. Other
+  event types unchanged.
+- New btn22 (Mark wpt) handler with confirm dialog in the UI.
+- `/status` payload extended:
+  - v[10] = motor state (0=DE-E, 1=STOP, 2=ENRG)
+  - v[11] = waypoint count (recon-session local)
+  - v[12] = mm since last waypoint (or cart-log-start if no W yet)
+
+**Operator verification end-to-end.**
+
+- ENRG → −10 m/hr → drive → STOP → status row showed "21.8v · STOP"
+- L5 / L5 / L5 → Now row showed cumulative +15° steering correctly
+- Mark wpt → confirm → Last rolled to #1, Now reset
+- Three more bakes → Last showed #3 with d 8 (real mm covered
+  between bake and stop, not noise)
+- Clear logs → Last back to "—"
+
+**Gimbal Recon screen.**
+
+- Live readout line: `live · Ry · Cy · p` (monospace, centred).
+  Ry = Cy until BNO085 integration lands (architecture: when BNO
+  arrives, Ry will add cart_heading to gimbal yaw).
+- Four prior slots (c0…c3) showing the four most recent baked rows.
+  Newest sits in slot c3 (just above Current row), older pushed up
+  toward c0 and off the top. Empty rows show grey.
+- Current row block (highlighted maroon border, 5th row visually)
+  with Clear button for mini-edit without baking.
+- Type rows:
+  - Operator-authored: PF / Lock / Move / Track sun
+  - Astro: Sunrise / Sunset / MW
+- Conditional sub-controls per type:
+  - Keyframe (rise/mid/end): astro types only
+  - R/C frame toggle (Ry/Cy): PF + Move only
+  - Yaw Δ / pitch Δ offset inputs (numeric): astro types only
+  - Measured-variance display line: astro types only
+- Label field: free-text single-line input, 24-char limit.
+- Action row: Show astro (TODO stub) / Snap var (TODO stub) /
+  Next (with confirm).
+
+**Per-type pose handling:**
+
+| Type | Captures pose? | Writes to cart gimbalLog? |
+|---|---|---|
+| PF | yes | yes (via existing /btn20 path) |
+| Lock | yes | yes |
+| Move | yes | yes |
+| Track sun | no | no (intent-only) |
+| Sunrise | no | no |
+| Sunset | no | no |
+| MW | no | no |
+
+Astro and Track sun rows carry intent (type + keyframe + offsets +
+label) but no pose — actual pointing is computed at execution time
+from astro maths.
+
+**Client-side state.** Captured row list lives in browser memory only.
+Reload kills type/label/keyframe/offset data. The cart gimbalLog
+buffer still records yaw+pitch for pose-types via /btn20 so Excel
+still receives those raw entries via /gimballog. Logged as #49
+follow-up: persist the rich list to cart RAM before relying on this
+in production.
+
+**Show astro / Snap var.** Both pop a "not yet implemented" alert.
+Mechanism is Path A from Day-16 design discussion: Excel pushes
+today's astro yaw/pitch positions (sunrise/sunset/MW × rise/mid/end =
+9 yaw/pitch pairs, ~50 bytes) to cart in a new settings field.
+Cart commands gimbal to stored position when Show astro tapped.
+Logged as #50.
+
+**JS escape-quote bug caught and fixed mid-build.** First Gimbal
+Recon flash showed dashes in the live readout and never updated.
+Operator pulled the served HTML; inspection found
+`'... today\\'s ...'` in an alert() string — the `\\'` produced a
+literal backslash followed by a string-closing apostrophe, which
+threw a syntax error and killed the entire script (live polling
+included). Fix: rewrote without the apostrophe. **Build lesson
+recorded in PREFERENCES** about C++ string literals containing JS
+strings: each level of escaping multiplies, easy to over-escape into
+broken JS. The fact that the bug surfaced in a stub-alert function
+(showAstro), not in any real logic, made the symptom (no live
+readout) look completely unrelated to the bug location.
+
+**Execution screen.** Header + tabs work, body is "Coming next"
+placeholder. Deferred because its prerequisites aren't built:
+
+- Gimbal plan plumbing (segments aren't pushed yet)
+- Segment dispatcher + speed transition types (Day-15 Part 9 — design
+  only)
+- ±100mm nudge endpoint (Day-15 Part 9 — design only)
+- PAUSE/RESUME endpoint (Day-15 Part 8 — design only)
+- BNO085 (#40 build phase) for anchor cluster
+- Excel astro push (#50) for full chart
+
+Building Execution tonight would have been ~70% stubs. Better to
+build the firmware backend first, then the screen has real things
+to show.
+
+### Day-16 hygiene actions
+
+- `UI_DESIGN_SUMMARY.md` (Day 10) moved to `ARCHIVE/`. It's
+  superseded by `UI_DESIGN_v2.md` plus the Day-16 build, and already
+  self-flagged its heading-architecture section as superseded by
+  Day-13 #40.
+- `GIMBAL_VIZ.md` §3 (Gimbal UI on cart), §9 (Cart/Gimbal Plan
+  coupling), §10 (Open design questions) annotated with
+  superseded-by callouts. §3 → UI_DESIGN_v2 Gimbal Recon. §9 →
+  WORKFRONTS Day-15 Part 8 + Part 9. §10 → per-question status
+  notes inline (most resolved by Day-13 #40 and Day-15 Part 8/9).
+- Sections 1, 2, 4, 5, 6, 7, 8 of GIMBAL_VIZ.md remain authoritative
+  reference (workflow, Plan/Execution split, segment types, SDK
+  constraints, astro maths, velocity bands, Catmull-Rom).
+
+### Memory snapshot (post-build, awaiting Verify confirmation)
+
+- SRAM globals: +9 bytes from new state vars (1 + 4 + 4)
+- Flash: +~3 KB estimated from new HTML strings (verify post-flash)
+- Sketch 4843 → 5140 lines (+297 net)
+
+### Files modified this session
+
+- `DJI_Ronin_UnoR4_v1prod.ino` — three-screen UI replacement of
+  the `else` block, new state vars, new btn22 handler, /status
+  payload extension
+- `GIMBAL_VIZ.md` — superseded-by annotations on §3 / §9 / §10
+- `UI_DESIGN_SUMMARY.md` — moved to ARCHIVE/ (no content change)
+
+### Mental model corrections recorded
+
+- **Cart-side state is the source of truth for production data.**
+  Cart Recon waypoint tracking (counter + steps anchor + W events)
+  is cart-side and survives page reloads / tab switches via /status.
+  Gimbal Recon rich-row state is client-side only and does NOT
+  survive reload. Acceptable for this build (recon is a continuous
+  session, operator doesn't reload mid-recon), but a real gap for
+  production — #49 closes it.
+- **Per-type behaviour matters in UI design.** The first Gimbal
+  Recon build wrote /btn20 (gimbalLogCapture) on every Next-bake
+  including astro types. Realised mid-session that astro rows have
+  no meaningful pose to capture; gated /btn20 on `poseT[cur.type]`.
+  Same pattern likely repeats in #50 Excel-side: astro rows
+  shouldn't carry pose, just type + keyframe + offset + label.
+- **Tab switching = full page reload, by design.** Server-side
+  routing means each tab tap is a fresh HTTP fetch. Cart state
+  reconstructs from /status; client state does not. This is
+  acceptable because nothing important on Cart or Gimbal Recon
+  lives only in client state — Cart Recon all server-side, Gimbal
+  Recon known-ephemeral with the #49 follow-up.
+
+### Path back into this work
+
+A future session can re-enter the UI build by:
+1. Reading UI_DESIGN_v2.md + this Day-16 entry alongside the sketch
+2. Picking up at #49 (Gimbal rich-row persistence) — smallest path
+   to make Gimbal Recon production-usable
+3. OR picking up at #5a (segment dispatcher + transition types) —
+   unlocks the Execution screen build
+
+---
+
+
+
+### Day-15 part 7: #48 bus fault localised via addr2line
+
+Measured the actual crash, drilled to the cause. Did NOT speculate.
+
+**Method:** captured fresh crash dump from current build, ran
+`arm-none-eabi-addr2line` on the PC + LR + stack values against the
+sketch's `.elf` file.
+
+Build paths used:
+- elf: `C:\Users\mauri\AppData\Local\arduino\sketches\
+  F4FFB483BA32955ACC96AEEBF10EBF23\DJI_Ronin_UnoR4_v1prod.ino.elf`
+- addr2line: `C:\Users\mauri\AppData\Local\Arduino15\packages\
+  arduino\tools\arm-none-eabi-gcc\7-2017q4\bin\
+  arm-none-eabi-addr2line.exe`
+
+**Resolved call stack at crash (top-down, partial):**
+
+```
+PC = 0x0000f21a → WiFiClient::read(uint8_t*, uint32_t)
+                  FifoBuffer.h:82
+LR = 0x0000ed7a → FifoBuffer::available()
+       0x0000ec7e → WiFiClient::read()
+       0x00016742 → Stream::timedRead()
+       0x00016770 → Stream::readStringUntil('\n')
+       0x00005c10 → ccapiRequest    line 2341 (status-line read)
+       0x0001684e → arduino::String constructor
+       0x0000623a → ccapiStopLiveview  line 2489
+       0x00008abe → loop, /shutter/stop handler  line 4003
+       ...
+       0x000131c8 → can_rx_isr                  ← CAN interrupt!
+       0x00012c14 → r_can_call_callback
+       0x0000c88a → R7FA4M1_CAN::onCanCallback
+       0x00015efe → CanMsgRingbuffer::enqueue    line 54
+```
+
+**Concrete mechanism (measured, not guessed):**
+
+A CAN RX interrupt fires while the WiFi blocking-read path is
+constructing a `String` object on the heap (allocating memory for
+the status-line buffer). The ISR calls into `CanMsgRingbuffer::enqueue`,
+which executes `_buf[_head] = msg;` — a struct copy into an array
+slot indexed by `_head`.
+
+**The bus fault address `0x200259d2` is OUTSIDE Uno R4 SRAM.**
+Uno R4 SRAM range is `0x20000000` to `0x20007FFF` (32 KB).
+`0x200259d2` is ~150 KB above the start of SRAM, in unmapped memory.
+The previous crash address `0x20025961` is in the same out-of-range
+region.
+
+**SRAM layout from `.map` file (measured, not estimated):**
+
+```
+0x20000000  __data_start__       (start of SRAM, initialised globals)
+0x200002c8  __bss_start__        (uninitialised globals)
+0x20005854  __bss_end__          (end of globals; 0x5854 = 22,612 bytes)
+0x20005858  __HeapBase           (heap start, 4-byte aligned)
+0x20007b00  __HeapLimit          (heap top / stack low limit)
+0x20007b00  __StackLimit         (stack grows down from above)
+0x20007f00  __StackTop           (top of usable SRAM)
+                                 (vector table above)
+```
+
+- Globals: 22.5 KB (matches 68.9% of 32 KB from Verify output)
+- Heap region: 0x20005858–0x20007b00 = **8,872 bytes**
+- Stack region: 0x20007b00–0x20007f00 = **1,024 bytes** (only 1 KB!)
+- Total usable: 31.75 KB
+
+**Bit-flip observation (specific finding):**
+
+Compare the fault addresses to nearby valid heap addresses:
+- Fault 1: `0x20025961` vs valid heap `0x20005961` → **differ only in bit 17**
+- Fault 2: `0x200259d2` vs valid heap `0x200059d2` → **differ only in bit 17**
+
+Both faults land at structured offsets — a valid heap pointer with one
+specific bit flipped (bit 17 = +0x20000). This is NOT random garbage;
+it's a specific corruption pattern. The valid-region addresses
+(`0x20005961`, `0x200059d2`) sit just inside the **heap region**
+(0x20005858+).
+
+So either:
+- A heap pointer is having bit 17 corrupted somewhere (cosmic ray
+  unlikely; more probably a structured bug — a memcpy with wrong
+  offset, an array index overflow, a register clobber in an ISR
+  prologue/epilogue, or a hardware bus glitch)
+- Two heap accesses are racing and OR-ing together (CAN ISR + main
+  thread both touching the same memory)
+- Some address-arithmetic path adds 0x20000 spuriously
+
+So either:
+- `_buf` (the ringbuffer's internal array pointer) is corrupted
+- `_head` (the ringbuffer's index) is corrupted to a huge value
+- The ringbuffer instance itself is in a memory region the linker
+  didn't allocate
+
+Either way, **the CAN ringbuffer's instance variables have been
+overwritten** by the time the ISR fires. The fault is a heap/state
+corruption symptom, not a bug in the `/stop` handler itself.
+
+**Plausible mechanism (NOT yet proven, requires further drilling):**
+- SRAM globals at 68.9% leaves only ~10 KB for heap + stack
+- Only **1 KB of stack** — deep call chains (WiFi → Stream → String
+  ctor + ISR preempt onto same stack) are tight
+- WiFi `readStringUntil` allocates dynamic Strings continuously
+  during reads; heap growth + fragmentation over a long shoot
+- Heap grows toward stack; if either overruns the other, or grows
+  into the CAN ringbuffer's static allocation region, the
+  ringbuffer's `_head` or `_buf` gets trampled
+- Day-7's failed `CART_LOG_MAX = 128` bump (.stack_dummy overlapped
+  .heap) is documented evidence that the SRAM ceiling is already
+  uncomfortably close
+
+**What we KNOW (evidence):**
+- Crash is in CAN ISR enqueue, reading via WiFi when it fires
+- Crash address is outside valid SRAM
+- Two separate crashes hit nearly identical out-of-range addresses
+- The /stop handler path is identical to fetch path; difference
+  must be cumulative state, not handler logic
+- 62-photo run vs 87-photo run vs 104-photo run (which DIDN'T crash)
+  suggests probabilistic exposure to the corruption window — but
+  this is observation, not proof of a memory-pressure mechanism
+
+**What we DON'T know (requires further work):**
+- Whether the heap is actually growing without bound
+- Where the CAN ringbuffer lives in SRAM (map file would tell us)
+- Whether disabling CAN push-subscribe before /stop would mask
+  the bug (it would, but doesn't fix the underlying corruption)
+
+**Fix candidates (none chosen yet):**
+1. Stop CAN push-subscribe before /stop; gimbal stops sending; ISR
+   stops firing during teardown. Doesn't fix the corruption, just
+   avoids the trigger.
+2. Disable CAN RX interrupts around blocking WiFi reads. Same.
+3. Drive `client.readStringUntil` and friends with explicit char-at-
+   a-time reads to avoid heap allocations. Investigate.
+4. Migrate to Giga R1 (v2 / #47). 1 MB SRAM removes the memory
+   pressure entirely.
+
+Updated #48 in WORKFRONTS with this evidence.
+
+**Update — fix attempt 1 (char-buffer reads) failed.** Replaced
+`String statusLine = client.readStringUntil('\n')` and the header
+read loop in `ccapiRequest()` with a 48-byte stack-local buffer + char-
+at-a-time reads. Goal: remove our code's contribution to heap
+allocation in the WiFi read path. **Crashed again. Same crash
+signature.** addr2line on the new dump showed the String
+constructor is STILL in the stack — but inside the WiFiS3 library's
+`ModemClass::buf_read`, not our code. The WiFi driver allocates
+Strings internally on every `client.read()`. Removing String use in
+ccapiRequest didn't help because the library does the same allocation
+one frame deeper. We can't avoid this without rewriting WiFiS3.
+
+**Update — regression test against pre-cleanup version.**
+Operator uploaded a much older v3 sketch (~Day-14 era, pre-part-3 —
+still had `findTableRowForTv`, `lum_fetch_skip_remaining`, the old
+String-based reads, all the things later sessions retired). Flashed
+and tested /stop. **Did NOT crash on that run.** 31 photos delivered,
+clean `[lum] live view stopped status=503` log. Initially suggested
+today's changes destabilised /stop.
+
+**Update — back-out + retest revealed it's NOT a code-state issue.**
+Reverted today's part-7 work (stack instrumentation removed,
+char-buffer change reverted) — restored end-of-part-6 sketch (4843
+lines). Re-ran the /stop test. **Crashed again** with same signature.
+So the v3 "clean" run was just lucky timing; the bug is **intermittent
+across runs of identical code**.
+
+**Revised understanding (end of part 7):**
+
+- /stop crash is a **race condition** between CAN RX ISR and WiFi
+  blocking-read path. Whether it manifests depends on millisecond-
+  level timing of when /stop arrives relative to CAN message bursts.
+- The String-in-WiFi-library finding from fix-attempt-1 means heap
+  pressure isn't the only mechanism — even without our String use,
+  the library still allocates inside the read path.
+- The stack-overflow hypothesis from the painted-stack measurement
+  (1024/1024 used at idle) is real and concerning, but doesn't
+  fully explain the crash by itself either — v3 with even more
+  String use should crash MORE often if stack overflow were the
+  sole cause, but didn't crash on the one test we did.
+- Honest position: **mechanism partially understood, root cause
+  not isolated. Multiple possible contributors. Intermittent.**
+
+**Restated fix candidate ranking after evidence:**
+1. **Stop CAN push-subscribe before /stop** — best masking option.
+   Closes the race window completely by silencing the ISR during
+   teardown. Doesn't require understanding root cause.
+2. **Disable CAN RX interrupts around the DELETE** — same idea, even
+   narrower window.
+3. **Avoid /stop entirely** — current workaround. Power-cycle to end
+   shoots. Production-safe but operator-friction.
+4. **Giga R1 (v2 / #47)** — different platform, removes the SRAM
+   constraint and likely the race timing too. Long-term.
+5. ~~Char-buffer reads in ccapiRequest~~ — **ruled out by experiment**.
+   Doesn't fix the underlying race; library still allocates Strings.
+
+WORKFRONTS #48 entry updated with revised understanding.
+
+**Fix attempt 2 — `enablePush(false)` + delay before /stop teardown.**
+Added 2 lines before `ccapiStopLiveview()`: disable CAN push subscribe
+to silence the gimbal, then 50ms delay to let the bus quiet. Goal: close
+the ISR-vs-WiFi-read race window by removing the ISR side.
+**Result: still crashed**, but with a different stack signature. addr2line
+showed the CAN ISR was NO LONGER in the crash stack — `can_rx_isr`,
+`r_can_call_callback`, `CanMsgRingbuffer::enqueue` all gone. Crash was
+still in `WiFiClient::read` / `Stream::readStringUntil` during the DELETE,
+but without the CAN ISR overlay. Fault address `0x810076c3` — high bit
+set, no longer the heap-pointer + bit-flip pattern seen earlier.
+**Useful diagnostic finding:** at least two distinct corruption mechanisms
+contribute to the /stop crash. Silencing CAN closes one. Something else
+remains. Reverted (we can re-add if we have a reason).
+
+**Final resolution: minimal /stop handler.** Operator observation:
+"/stop never crashed in 14 days of operation, only today" combined with
+"1 crash in 5 stops is 1 too many" reframed the problem. We had been
+trying to fix the crashing code. The simpler path: **don't call it.**
+
+Audited what /stop actually does. Five steps:
+1. Set `shutter_mode = 0` (stop PIN8 firing) — local, can't fail
+2. Set `shutter_paused = false` — local, can't fail
+3. `enablePush(false)` — single CAN frame, non-blocking
+4. `ccapiStopLiveview()` — HTTP DELETE to camera, **the crashing call**
+5. Serial summary print — can't fail
+
+Step 4 is housekeeping. Camera times out liveview sessions on its own;
+`ccapiStartLiveview()` already handles "Already started" 503 for stale
+sessions. So step 4 was never required for correctness.
+
+Minimal /stop applied — only steps 1, 2, 5 retained. Tested through
+two full cycles:
+- Cycle 1: /start → 29 photos → /stop → clean exit, no crash
+- Cycle 2: /start → camera POST /liveview returned 200 ("[lum] live
+  view started" — fresh session, camera had timed out the old one
+  during the ~20s gap) → 7 photos → /stop → clean exit
+
+**#48 closed for v1.** Crashing code removed from hot path. The
+underlying bug in WiFiS3 / Stream / String / CAN ISR interaction is
+still there, but cart no longer touches it. v2 (Giga + Ethernet) will
+revisit, since that platform may resolve the root cause incidentally.
+
+Trade-off documented inline in the /stop handler: skipped DELETE
+means the camera session lingers a few seconds longer; no operational
+impact observed.
+
+---
+
+### Day-15 part 6: more dead-var cleanup + canFlip removal + memory snapshot
+
+Two more sketch trims following the part-5 pattern:
+
+**1. #36d cleanup completed.** Traced the original WORKFRONTS
+"dead state vars" list var-by-var:
+- `lum_fetch_skip_remaining` — dead (branch unreachable, nothing ever
+  set it non-zero). Removed, plus its check block in the fetch-service
+  loop and two stale comments.
+- `lum_consecutive_conn_fails` + `LUM_FAIL_THRESHOLD` — NOT dead. They
+  are the liveview-died detector; 3 connection-level fails invalidates
+  `lum_liveview_started` for fresh re-POST. Also exposed in
+  `/exposure/state`. KEEP.
+- `lum_in_outage` — NOT dead. Log-spam suppression flag. KEEP.
+- WORKFRONTS line "all sitting at 0 / dead-branch" was wrong about these;
+  cleanup item rewritten with verified status of each candidate.
+
+**2. canFlip preconditions removed.** `tryFlipToTableMode` previously
+required `exp_anchor_set && exp_tv_ceiling_sec != 0 && current_tv != ""`.
+These existed to feed the retired `findTableRowForTv()` call. Decision
+basis: the execute UI (planned, separate workfront) prevents
+uninitialised cart starts upstream, so the gates protected against a
+case that can't happen at runtime. Also aligns with photos-sacred +
+autonomous-cart framing: if CCAPI fails, reaching TABLE is the right
+move regardless of init state. Removed. Sketch 4862 → 4843 lines after
+both trims.
+
+**Verification:** ran the standard sequence end-to-end. 62 photos
+delivered cleanly through the LIVE phase before operator hit
+`/shutter/stop` and the known #48 bus fault recurred (same crash
+signature, photos #1–#62 all delivered). canFlip change unaffected
+during the LIVE phase. FLIP path itself not exercised this run (no
+WiFi outage), but the only code change touched the LIVE→TABLE entry
+function and the rest of LIVE behaviour was unchanged.
+
+**Memory snapshot (post all Day-15 trims):**
+- Flash: 135,316 / 262,144 bytes = **51.6%** (Day-15 baseline 50%,
+  ~+1.5% net for the session)
+- SRAM globals: 22,588 / 32,768 bytes = **68.9%** (Day-15 baseline 68%,
+  essentially unchanged)
+- Local-variable headroom: 10,180 bytes
+
+Flash has plenty of room. SRAM globals at 69% is the binding constraint
+for new features. Day-7's failed `CART_LOG_MAX = 128` bump (.stack_dummy
+overlapped .heap) is the historical evidence that the SRAM ceiling
+is real, not theoretical. Future features that touch this budget:
+#30 (cart log buffer size), #40 (BNO085 ring buffer), `/plan/load`
+JSON parsing at scale. Giga R1 (1 MB SRAM) absorbs this via #47.
+
+**Open observation — /shutter/stop bus fault reproduced.** Same crash
+as part 5, same stack-region address. Hardware damage previously
+attributed to the bus fault is itself unmeasured (see Day-15 part 5
+notes — cause of transceiver death is "unknown" per the PREFERENCES
+no-guessing rule). The fault itself however is reproducible, occurs
+exclusively in the `/stop` handler, and is the basis for the #48
+workaround (avoid the endpoint, power-cycle to end shoots).
+
+---
+
+### Day-15 part 5: dead-var cleanup + /shutter/stop bus fault
+
+Two small dead identifiers removed from v1 sketch: `FETCH_FAIL_BACKOFF_CYCLES`
+(constant, no reads) and `MODE_FLIP_THRESHOLD` (define, never referenced
+— `PROBE_COUNT` is the live equivalent). Sketch −15 lines. Re-test ran
+clean through full cycle: 87 photos delivered across LIVE → PROBING →
+TABLE → Step D → LIVE. Same shape as part-3 verification.
+
+**Open observation — bus fault on `/shutter/stop` after #87.** Photo
+fetch succeeded normally (#87, fetch ok=Y, lum=0, in_deadzone), then
+operator hit `/shutter/stop` → cart entered the stop handler →
+firmware bus fault, address `0x20025961` (SRAM region), PC `0x0000f1ca`.
+Stack dump in transcript. Crash is in the stop path, photos #1–#87
+were all clean.
+
+- Previous test (Day-15 part 3) reached `/stop` fine and reported
+  `photos_taken=104`. Same code path, different outcome.
+- The dead-var edit removed only a `static const = 0` and a `#define`
+  that was never referenced. Neither could plausibly change runtime
+  behaviour. Edit is not suspected.
+- Most likely: stochastic memory-state issue (heap fragmentation,
+  stack growth into something, WiFi-stack interaction). Not
+  investigated this session — operator's call to move on; photos
+  were delivered.
+
+**Crash has real cost (discovered later this session).** Subsequent
+bench work showed the CAN transceiver was fried by this crash. CAN
+TX errors climbing in bursts of 6, bus impedance measurements
+ruled out wiring (terminators sane, 65Ω in parallel as expected).
+Swapping the SN65HVD230 transceiver fixed the gimbal comms. So the
+`/shutter/stop` bus fault is not just a cosmetic end-of-shoot annoyance
+— it can damage hardware downstream. Promotes this from "note it
+and move on" to a real workfront. New entry in WORKFRONTS as
+**#48 /shutter/stop bus fault**: reproduce, localise (add Serial
+checkpoints inside the stop handler), fix.
+
+If this recurs, the investigation order would be: reproduce → check
+whether `/stop`-specific or any-shutdown → look at `0x20025961`
+relative to known heap/static layout → add `Serial.print` checkpoints
+inside the stop handler to localise.
+
+---
+
+### Day-15 part 4: Turning-circle measurements (#20 / #29)
+
+Real-world measurement of cart turning diameter at six servo
+offsets. SCX6 chassis on actual ground, walked through full circles
+and tape-measured. Standalone calibration drive (no plan execution
+yet).
+
+| Servo offset (°) | Diameter (m) | Radius (m) |
+|---|---|---|
+| 5  | 18.0 | 9.00 |
+| 10 | 10.0 | 5.00 |
+| 15 |  7.5 | 3.75 |
+| 20 |  5.6 | 2.80 |
+| 25 |  4.8 | 2.40 |
+| 30 |  4.2 | 2.10 |
+
+**Bicycle-model fit attempted, declined.** Pure bicycle model
+`R = L/tan(δ_wheel)` with linear servo→wheel linkage doesn't fit:
+the "Ackermann constant" `R × δ_servo_rad` climbs from 0.785 at 5°
+to 1.100 at 30° (40% increase). Possible causes: non-linear linkage
+at extremes, rear-wheel scrub on tight turns, suspension geometry
+shift under load. The model also has structural ambiguity from
+radius-only measurements — wheelbase L and servo-ratio k can't be
+separated without an independent measurement (e.g. static ruler or
+front-wheel goniometer).
+
+**Decision per principle #15 (Visualisation > Manipulation):** the
+table above IS the calibration. Use it directly as a lookup for
+operator turn advice (#29a) — "want a 5m diameter turn? set servo
+to ~25°". No fitted physical model needed for that. BicycleModel.bas
+still earns its keep for CartLog→(x,y) trace integration; cm-accuracy
+isn't the goal there either, eyeball-correct is enough.
+
+**Measurement tolerances:** SCX6 has long-travel suspension; chassis
+pitches and rolls under turn loads, tyres scrub on tight turns,
+outdoor measurements honestly ±0.5m. The 40% climb in the Ackermann
+constant is partly real non-linearity and partly noise; we cannot
+separate them from this data alone, and don't need to.
+
+**Tightest achievable turn: ~4.2m diameter at max servo (30°).**
+Useful for shoot-planning sanity (any waypoint pair requiring tighter
+than 4m radius needs the operator to drive a multi-leg manoeuvre).
+
+---
+
+### Day-15 part 3: v1 TABLE-mode simplification
+
+Follow-on from the Part 2 v1/v2 split. With Step 4 (per-cycle
+PUTs from TABLE) permanently closed for v1, the table-row
+lookup that produced `exp_delta_t_rel` at flip had no consumer
+— and neither did the `last_table_tv` / `last_table_iso`
+snapshots, which only existed to support change-detection for
+the never-built per-cycle PUT. Retired the lot, plus the
+function and endpoint that fed them.
+
+**Code removed from v1 sketch:**
+- State vars: `exp_delta_t_rel`, `last_table_tv[8]`, `last_table_iso`
+- Function: `findTableRowForTv()` (~30 lines + comment block)
+- Endpoint: `/debug/match` (~60 lines)
+- Block inside `tryFlipToTableMode`: matchedTrel/matchedIdx
+  locals, the call to `findTableRowForTv`, the Δt_rel
+  assignment, the `last_table_*` snapshot writes, and the
+  matched/no-match Serial logs
+- Δt_rel discard line + reset in the Step D recovery branch
+- 3 fields from `/exposure/state` JSON response
+- Header + state-block comments rewritten to describe v1's
+  actual capability (no table lookups, no Δt_rel) rather
+  than the original Day-13 design
+
+**Preserved (still earning their keep):**
+- `exposure_mode` flag and EXP_MODE_LIVE / EXP_MODE_TABLE
+- `tryFlipToTableMode()` (now simpler — just flips and logs)
+- All three TABLE-mode CCAPI gates (fetch arm, fetch service,
+  PROBING entry) — Day-15 rule still applies
+- Step D scheduler, recovery branch, liveview invalidation
+- `last_mode_change_ms` (for `/exposure/state` reporting)
+
+**Held back (separate decision needed):** the `canFlip`
+precondition in `tryFlipToTableMode` still requires
+`exp_anchor_set && exp_tv_ceiling_sec != 0 && current_tv != ""`.
+With table lookups gone, those preconditions are arguably
+stale — removing them would let TABLE engage on a cold-start
+cart that never completed `/exposure/init`. Behaviour change,
+not pure cleanup. Flagged but not actioned.
+
+**End-to-end verification (this session, 22 May):**
+
+| Phase | Photos | Behaviour |
+|---|---|---|
+| LIVE start | #1–#9 | clean 2s cadence, fetches ok=Y |
+| Discovery | #10 | 10s CCAPI connect-fail → PROBING |
+| PROBING probes | #11–#17 | 3 ping fails, ~1s each |
+| FLIP | between #17/#18 | clean log, no Δt_rel or match output |
+| TABLE | #18–#77 | ~60 photos clean 2s cadence, zero CCAPI |
+| Step D probe | between #77/#78 | ping ok, recovery → LIVE |
+| LIVE post-recovery | #78–#104 | liveview restart, fetches ok=Y, in_deadzone |
+
+**Photos delivered: 104/104.** FLIP log line confirmed clean
+at the wire: `[#36d] FLIP LIVE -> TABLE (via probe) event=sunset
+trel_now=-11703 current_tv=1/5000 current_iso=100` — no orphan
+fields. `/exposure/state` JSON confirmed clean (no `delta_t_rel`,
+`last_table_tv`, `last_table_iso`).
+
+**Files modified this session:**
+- `DJI_Ronin_UnoR4_v1prod.ino` — −143 lines (4986 → 4843)
+
+**Mental model:** with Step 4 closed, TABLE mode is now
+exactly what it operationally needed to be all along: a
+"don't talk to the camera, just keep photos firing, ping
+every 60s" state. The Day-13 design carried Δt_rel and table
+lookups in anticipation of Step 4; closing Step 4 lets us
+collapse the state to match the actual behaviour. Less code,
+same delivery, same robustness.
 
 ---
 
@@ -727,7 +1436,6 @@ stubs for reference:
 - PIN8 + PULSE instrumentation
 - Cart-vs-camera cross-reference workflow
 - Intervalometer fallback (always reliable)
-- Existing cart UI (btn1–21, /cartlog, /gimballog)
 - Plan endpoints `/plan/load`, `/plan/start`, `/plan/stop`,
   `/plan/status` (Day 9)
 - ±450° cumulative yaw via Settings envelope (Day 12)
@@ -735,6 +1443,15 @@ stubs for reference:
 - Time anchor on cart for sunset+sunrise (Day 12)
 - TABLE → LIVE recovery within a shoot via 60s ping probe
   (Day 15) — Step D complete; TABLE no longer one-way per shoot
+- **Three-screen UI v2 foundation (Day 16):**
+  - Cart Recon screen — full production build, operator-verified
+    end-to-end. Status line, Last/Now waypoint rows, all button
+    rows, Mark wpt + W event in CartLog, /status v[10]/v[11]/v[12].
+  - Gimbal Recon screen — full UI build with client-side state.
+    Live readout, 4 prior slots + Current row, type/keyframe/frame/
+    offset/label authoring, pose-vs-intent type handling,
+    /btn20 gated on pose types only. NOT production-ready until
+    #49 (rich-row persistence) lands.
 
 ### What's tested
 
@@ -743,7 +1460,12 @@ stubs for reference:
 - LIVE → TABLE on CCAPI outage: 14/14 delivery (Day 14)
 - LIVE → TABLE → LIVE full cycle with WiFi off/on: 64/64
   delivery (Day 15)
-- Sketch utilisation: 50% flash, 68% globals on Uno R4 WiFi
+- /shutter/stop minimal handler: 2/2 clean cycles (Day 15 part 7)
+- Cart Recon waypoint workflow: ENRG → drive → multiple +5 steers
+  → Mark wpt #1/#2/#3 → Last rolls correctly → Clear logs zeroes
+  (Day 16 operator-verified)
+- Sketch utilisation: ~51.6% flash, ~68.9% globals on Uno R4 WiFi
+  (Day 15 part 6; Day 16 adds +9 bytes globals, verify post-flash)
 - URL payload size envelope: 1.5 KB (verified via /debug/urlsize)
 - BNO085 first-light: tracks within ±3° of iPhone compass across
   all four quadrants (Day 12 bench, not yet on production sketch)
@@ -754,9 +1476,15 @@ stubs for reference:
   (Stage 4 milestone)
 - ANY of the cart Plan/Execution architecture under real load
   (endpoints exist, not exercised against a real plan)
-- ANY gimbal Plan execution (design only, see GIMBAL_VIZ.md)
-- BNO085 integration in production sketch (#40 design just
-  resolved this session)
+- ANY gimbal Plan execution (design only, see GIMBAL_VIZ.md §§4–8
+  and UI_DESIGN_v2.md Execution screen)
+- BNO085 integration in production sketch (#40 design resolved
+  Day 13; build phase pending)
+- Gimbal Recon rich-row persistence across page reloads (#49)
+- Show astro / Snap var on Gimbal Recon (#50 — Excel astro push)
+- Execution screen — placeholder only, build deferred until
+  backend (segment dispatcher, ±100mm nudge, PAUSE/RESUME, BNO,
+  Excel astro push) lands
 
 ### Hardware notes
 
@@ -768,6 +1496,55 @@ stubs for reference:
 - Cart: Arduino Uno R4 WiFi at 192.168.1.97. Adequate for
   everything built so far (Architectural principle #14: Giga
   migration only when Uno is the specific blocker).
+
+---
+
+## Git repository structure
+
+Two separate repos on the operator's local machine, each pushed
+to its own GitHub remote. Captured Day 15 part 10 for future
+session reference — Claude should know which files live where
+before suggesting commit commands.
+
+**Repo 1 — sketch (firmware):**
+- Local path: `C:\Users\mauri\OneDrive\Documents\Github\DJI-Ronin-RS4-Arduino`
+- Remote: `https://github.com/mwindley/DJI-Ronin-RS4-Arduino.git`
+- Branch: `session-c-uno-luminance` (long-lived working branch
+  carrying Day-12 onward). Master not yet caught up.
+- Contains: all Arduino sketches (`DJI_Ronin_UnoR4_v1prod.ino`,
+  `DJI_Ronin_UnoR4_v3.ino`, plus bench-test sketches like
+  `BNO085_BenchTest`, `DropTest`, `I2C_Scanner`).
+- The production v1 sketch path inside the repo:
+  `DJI_Ronin_UnoR4_v1prod\DJI_Ronin_UnoR4_v1prod.ino`
+
+**Repo 2 — Excel + docs:**
+- Local path: `C:\Users\mauri\OneDrive\Documents\Github\HyperLapse-Excel`
+- Remote: `https://github.com/mwindley/HyperLapse-Excel.git`
+- Branch: `master`
+- Contains: `HyperLapse.xlsm`, VBA modules (`Modules/*.bas`),
+  Python scripts (`Python/*.py`), all design/state docs
+  (`PROJECT_STATE.md`, `WORKFRONTS.md`, `PREFERENCES.md`,
+  `UI_DESIGN_v2.md`, `UI_DESIGN_SUMMARY.md`, `GIMBAL_VIZ.md`,
+  `EXPOSURE_FALLBACK.md`, `SHOPPING.md`, `TURN_TEST_RESULTS.md`,
+  etc.), CSV reference data, ARCHIVE folder.
+
+**Workflow:** Claude generates outputs to `/mnt/user-data/outputs/`
+in the chat session. Operator downloads each file, then cuts from
+`Downloads` and pastes into the relevant local repo folder before
+running git commands. Sketch files go to repo 1, all .md / docs go
+to repo 2.
+
+**Implication for commit suggestions:** a single session often
+produces changes to both repos (a sketch change AND a doc update).
+That means **two separate commits**, one per repo. Cannot combine
+into one. Future sessions: always check which repo a file belongs
+to before suggesting `git add` paths.
+
+**Other workfronts in the operator's local sketch repo** (not
+ours to commit unless we worked on them): bench-test sketches,
+v3 sketch (the pre-branch-point reference), other accumulated
+work. When committing, stage only the files actually touched this
+session — leave the rest as the operator's WIP.
 
 ---
 

@@ -76,6 +76,19 @@ Two views of the same data.
 
 ## 3. Gimbal UI on cart (new — to be implemented)
 
+> **SUPERSEDED Day 16 (23 May 2026).** This section's design (Way #
+> dropdown + ±10°/±1° yaw/pitch nudge buttons + manual-mode capture
+> btn) is no longer the design. Current authoritative spec is
+> `UI_DESIGN_v2.md` Gimbal Recon screen, built into v1prod sketch
+> Day 16. Key reversals: no Way # dropdown (gimbal rows are
+> many-to-many with cart waypoints, stitched in Excel via timestamps);
+> no nudge buttons (DJI push-mode replaces software pointing); five
+> visible slots (3 priors + Last + Current) instead of a paginated
+> list; type vocabulary now PF/Lock/Move/Track sun/Sunrise/Sunset/MW
+> with conditional sub-controls (keyframe, R/C frame, yaw Δ / pitch Δ,
+> label). Reserved Extra 1 / Extra 2 dropped. Section retained here
+> for historical context of the design journey.
+
 Served at a different URL from the existing cart UI (suggestion: `/gimbal`).
 Shares Arduino backend, separate page.
 
@@ -371,6 +384,16 @@ an ease style. "Ease 60s = 2.7 frames, abrupt halt" or "Ease 5min =
 
 ## 9. Cart Plan / Gimbal Plan coupling
 
+> **PARTIALLY SUPERSEDED Day 15 (22 May 2026).** Day-15 Part 8 + Part 9
+> in `WORKFRONTS.md` extended the coupling model: gimbal events anchor
+> to cart waypoints (cart distance) rather than wall-clock time, except
+> astro targets which remain wall-clock-fired. Per-segment frame tag
+> (earth_frame vs chassis_frame, from Day-13 #40) determines whether
+> the gimbal_yaw_correction scalar applies. PAUSE / ±100mm nudge
+> behaviour spans both cart and gimbal segments per Part 8/9. The
+> "shared clock" framing below is still correct in spirit but Day-15
+> is the authoritative coupling spec.
+
 Cart Plan and Gimbal Plan are conceptually parallel but technically
 interleaved. The execution stream POSTed to cart contains both types
 of segments on a single timeline.
@@ -390,21 +413,36 @@ cart waypoint arrives").
 
 ## 10. Open design questions
 
+> **STATUS UPDATE Day 16 (23 May 2026).** Status of each question is
+> annotated inline below. Most resolved by Day-13 #40 design and
+> Day-15 Part 8/9 design.
+
 These were raised today and deferred:
 
 1. **Chart sampling strategy** — fixed Δt, per-segment, or adaptive
    by curvature? Probably per-segment (each row chooses based on type).
+   *Status: still open — chart not built yet (Execution screen pending).*
 2. **Velocity → colour gradient curve** — linear, log, or banded?
    Banded matches the green/amber/red proposal cleanly.
+   *Status: RESOLVED — banded per §7 (blue/green/amber/red), confirmed
+   in UI_DESIGN_v2 Execution chart spec.*
 3. **Exposure-table coupling** — Plan-time → Tv lookup → Tv-dependent
    blur threshold. Implementation detail of the warning logic.
+   *Status: still open — defer until chart is built.*
 4. **Two reserved per-row inputs** in the gimbal UI — TBD.
+   *Status: DROPPED Day 15 part 10 — Extra 1 / Extra 2 not in v2 design.*
 5. **Heading anchor mechanics** — defer until Plan authoring is
    working; one-shot anchor at shoot start may be enough.
+   *Status: RESOLVED Day 13 #40 — per-row anchor flag + gimbal_yaw_correction
+   scalar updated at anchor events only. BNO085 build phase pending.*
 6. **Re-bake on shoot delay** — if shoot starts later than authored,
    astro tracks shift. Mitigation: re-author or re-bake. Manual for now.
+   *Status: still open — accepted as manual workflow until automated need
+   appears.*
 7. **Stream size on Uno R4** — ~50 segments per night × ~32 bytes each
    = 1.6 KB, fits comfortably in SRAM. Larger plans → flash or chunked.
+   *Status: still active constraint — see WORKFRONTS open design decisions
+   on /plan/load stream format (JSON vs binary).*
 
 ---
 

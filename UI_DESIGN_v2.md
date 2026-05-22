@@ -2,8 +2,38 @@
 
 **Captured:** 22 May 2026 (Session C day 15 part 10).
 **Supersedes:** `UI_DESIGN_SUMMARY.md` (Day 10) where they conflict.
-**Status:** Design locked at flavour-level. Ready for build, with
-per-screen tweaks expected during operator-acceptance testing.
+**Status:** Design locked at flavour-level. Cart Recon + Gimbal Recon
+**built into v1prod sketch Day 16 (23 May 2026)**, operator-verified
+on iPhone SE 3 over WiFi. Execution screen still placeholder pending
+backend (segment dispatcher, ±100mm nudge, PAUSE/RESUME, BNO, Excel
+astro push). Per-screen tweaks expected during operator-acceptance
+testing.
+
+**Day-16 build deviations from spec** (changes captured here so the
+spec stays the canonical reference):
+- Cart Recon status row is just `voltage · motor state` — turn/speed/
+  distance are entirely in the Last/Now rows as the spec said. No
+  conflict, confirming.
+- Gimbal Recon captured rows are **client-side only** in this build.
+  Reload kills type/label/keyframe/offset. Logged as #49 follow-up.
+- Gimbal Recon `Ry = Cy` until BNO085 integration lands (#40 build
+  phase). Live readout shows the same value for both for now.
+- Gimbal Recon "Show astro" and "Snap var" are TODO alert stubs.
+  Excel astro push not built (#50). Mechanism resolved: Path A —
+  Excel pushes today's astro yaw/pitch positions at plan load.
+- Day/Night toggle is present but a no-op on Recon screens (spec
+  said "daytime-only activities"). Will wire up when Execution
+  screen is built.
+- Per-type pose handling refinement (added during build): PF/Lock/
+  Move capture pose AND write to cart gimbalLog via /btn20; astro
+  and Track sun are intent-only with no pose, no gimbalLog write.
+
+**Build lesson recorded in PREFERENCES (Day 16):** JS embedded in
+`client.println("...")` C++ strings has two layers of escape — easy
+to over-escape into a syntax error that kills the entire script
+silently. A typo in a stub `alert()` for an unused button broke
+the unrelated live-readout poll loop. Test served HTML in a browser
+dev console at least once per substantial UI change.
 
 This document captures the second-pass design of the cart web UI,
 worked through across day-15 part 10 in detail. The first-pass

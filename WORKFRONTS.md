@@ -1,6 +1,6 @@
 # HyperLapse Cart — Open Workfronts
 
-**As of:** Session C day 15, 22 May 2026
+**As of:** Session C day 16, 23 May 2026
 
 This file lists work surfaced but not yet executed. Each item
 references which session/day raised it. Prioritise per shoot
@@ -54,6 +54,69 @@ running — wired Ethernet is structurally cleaner.
 outage cases acceptably; v2 explores improvements.
 
 ---
+
+## Day 16 update (added 23 May 2026)
+
+Build session — three-screen UI v2 foundation delivered. Two screens
+real (Cart Recon, Gimbal Recon), one placeholder (Execution). See
+PROJECT_STATE Day-16 entry for full detail.
+
+**Headline:** UI_DESIGN_v2.md spec moved from design to running
+firmware. Cart Recon operator-verified end-to-end. Gimbal Recon UI
+fully laid out but captured rows are client-side only — production
+gap closed by new follow-up #49.
+
+**Sketch additions (v1prod):**
+- Server-side `?screen=cart|gimbal|exec` routing in the catch-all
+  HTML `else` block. Shared header (logo row + 4-tab bar) on every
+  screen. Day palette baked in CSS.
+- New state vars: `cart_motor_state` (1B), `cart_waypoint_count` (4B),
+  `cart_last_waypoint_steps` (4B). +9 bytes SRAM globals.
+- Hooks added: cartStop/cartDeadStop/cartSetSpeed/cartEnergise/
+  cartDeenergise all set `cart_motor_state` correctly. Decay completion
+  already calls cartStop() so covered.
+- New `'W'` event in CartLog (value = waypoint number).
+- New btn22 (Mark wpt) handler with confirm.
+- `/status` extended: v[10] motor state (0=DE-E, 1=STOP, 2=ENRG),
+  v[11] waypoint count, v[12] mm-since-last-waypoint.
+- Reset paths: btn19 log-start, btn21 Clear logs, /cartlog/clear all
+  zero the waypoint counter and reseat the rear_steps anchor.
+
+**New follow-ups:**
+- **#49** Gimbal Recon rich-row persistence (cart-side struct
+  extension + /gimballog/push endpoint). Smallest path to make
+  Gimbal Recon production-usable.
+- **#50** Excel astro position push to cart. Unlocks Show astro
+  and Snap var on Gimbal Recon.
+
+**JS escape-quote build lesson** added to PREFERENCES. Broken
+`\\'s` in a stub-alert string killed the entire script (live readout
+stuck on dashes). Each level of C++ → HTML → JS escape multiplies;
+easy to over-escape into a parser error far from the affected feature.
+
+**Hygiene:**
+- `UI_DESIGN_SUMMARY.md` (Day 10) moved to `ARCHIVE/` — superseded
+  by UI_DESIGN_v2 + Day-16 build.
+- `GIMBAL_VIZ.md` §3 / §9 / §10 annotated with superseded-by
+  callouts. Sections 1, 2, 4, 5, 6, 7, 8 remain authoritative
+  reference.
+
+**Closed / promoted this session:**
+- #10a Gimbal UI page — DELIVERED as Gimbal Recon screen (one URL
+  with ?screen= routing, not a separate URL as Day-8 had proposed).
+  Production-readiness pending #49.
+- #29 Mark Waypoint button — DELIVERED (btn22 + `'W'` CartLog event).
+- Old design assumptions in GIMBAL_VIZ.md §3 (Way# dropdown, yaw/pitch
+  nudge buttons, Extra 1/2 reserved fields) — formally retired.
+
+**Not changed this session:**
+- All execution-related workfronts (#5a dispatcher, ±100mm nudge,
+  PAUSE/RESUME, #40 BNO build) remain open. Execution screen
+  remains a placeholder pending these.
+
+---
+
+
 
 ## Day 15 update (added 22 May 2026)
 
@@ -664,15 +727,33 @@ need an update? Verify before extending Excel side.
 
 ## Open workfronts — cart UI
 
-**#10a Gimbal UI page.** Separate URL on cart web server
-(suggestion `/gimbal`), parallel to existing `/` cart UI.
-Field-side Plan-row editor. See GIMBAL_VIZ.md §3 for layout.
+**#10a Gimbal UI page — DELIVERED Day 16.** Implemented as Gimbal
+Recon screen on the unified UI (one URL, server-side
+`?screen=cart|gimbal|exec` routing, not a separate URL as Day-8
+proposed). Spec: UI_DESIGN_v2.md (Day-15 Part 10). GIMBAL_VIZ.md §3
+annotated as superseded by this delivery.
+
+Built:
+- Live readout `Ry · Cy · p` (Ry=Cy until BNO integration)
+- 4 prior captured-row slots + Current row block (newest at slot
+  closest to buttons)
+- Type rows: PF / Lock / Move / Track sun (operator-authored);
+  Sunrise / Sunset / MW (astro)
+- Conditional sub-controls: keyframe (rise/mid/end) for astro,
+  R/C frame toggle for PF+Move, yaw Δ / pitch Δ for astro,
+  measured-variance line for astro
+- Label field, Clear button on Current row
+- Action row: Show astro / Snap var (TODO stubs — see #50) / Next
+- Per-type pose handling: PF/Lock/Move capture pose AND write to
+  cart gimbalLog via /btn20; astro and Track sun are intent-only
+  with no pose, no gimbalLog write
+
+Production-readiness pending #49 (rich-row persistence).
 
 **#10b Notes / hints panel on cart UI (CLOSED Day-15 part 7).**
-Built — multi-line text panel rendered below the Cart/Gimbal/
-Clear-logs row on the main cart UI. Dark-on-light styling
-(dark grey background, monospace, `white-space: pre` for
-preserved column alignment).
+Built — multi-line text panel rendered below the action buttons
+on Cart Recon screen. Day-16 build preserved the content (turning-
+circle table) and moved it under the new Cart Recon screen.
 
 Current content:
 - Turning-circle table (servo 5°/10°/15°/20°/25°/30° → diameter
@@ -684,7 +765,65 @@ needed — #48 was resolved separately in Day-15 part 7 by making
 /stop a no-op for housekeeping.
 
 Add further tips by inserting `client.println` lines inside the
-`<div>` block (around line 4788 in v1prod sketch).
+notes `<div>` block (Cart Recon body in v1prod sketch).
+
+**#49 Gimbal Recon rich-row persistence (NEW Day 16).** Gimbal Recon
+captured rows live client-side only as built; reload kills type/
+label/keyframe/offset data. Cart-side struct extension + push
+endpoint required before Gimbal Recon is production-usable.
+
+*Scope:*
+- Extend `GimbalLogEntry` struct with: type (1B enum), kf (1B enum),
+  fr (1B enum), offY (float), offP (float), label (12-char fixed
+  array — avoids heap fragmentation, #48 contributor)
+- New endpoint `/gimballog/push?rows=...` accepting query-encoded
+  rich rows; clears existing gimbalLog and replaces
+- Gimbal Recon JS calls /gimballog/push on every Next-bake (or on
+  a new explicit "Push to cart" button) instead of /btn20
+- /gimballog Excel-pull endpoint returns the rich CSV; Excel parser
+  updates for new columns
+
+*Costs:* ~+600 bytes SRAM globals (struct grows, ~30B × ~20 slots).
+68.9% → ~70.7% — still well clear of the ceiling that bit Day 7's
+CART_LOG_MAX bump.
+
+*Risks:* heap fragmentation from String labels — fixed-size char
+array mitigates. Excel parser change requires coordinated update.
+
+*Verification path:* author 5 mixed-type rows, reload page, captured
+list reconstructs from /gimballog; pull from separate tab confirms
+all rich fields; pose-types still write yaw/pitch, intent-types
+carry zero pose.
+
+**#50 Excel astro position push to cart (NEW Day 16).** Unlocks the
+Show astro and Snap var buttons on Gimbal Recon.
+
+*Architecture (Path A chosen Day 16):* Excel pre-computes today's
+astro positions and pushes to cart in a new settings field. Cart
+stores ~9 yaw/pitch pairs (sunrise/sunset/MW × rise/mid/end
+keyframes ≈ 50 bytes). On Show astro tap with type+keyframe context,
+cart commands gimbal to stored position.
+
+Path B (cart computes astro on-the-fly via ported `GetSunGimbalAngles`)
+was considered and rejected — duplicates Excel logic, larger flash
+hit, conflicts with day-8 architecture "astro pre-baked in Excel,
+cart sees cubic coefficients only."
+
+*Scope:*
+- Excel side: button to "Push astro to cart" that calls
+  `GetSunGimbalAngles` / `GetGCGimbalAngles` (Astro.bas, already
+  built) at 9 (event, keyframe, time) combinations for today, posts
+  to new cart endpoint `/settings/astropos?...`
+- Cart side: settings struct gains the 9 yaw/pitch pairs; new
+  endpoint receives and stores
+- New endpoint `/gimbal/showastro?type=sunset&kf=mid` drives gimbal
+  to stored position
+- Snap var endpoint reads current Cy/p vs stored astro position and
+  returns the delta; UI auto-fills the yaw Δ / pitch Δ fields
+
+*Status:* design only, not built. Astro positions stale if shoot is
+delayed past authoring time — acceptable artistic latitude per
+GIMBAL_VIZ.md §1 principle.
 
 ---
 
@@ -958,3 +1097,11 @@ Full detail in `WORKFRONTS_old_ver1.md`.
 - **"Stage 4 milestone bundle"** — Day 12 reduced to soak only.
 - **"Logic-analyser-first vs opto-first ordering"** — Day 12
   resolved (analyser-first was correct).
+- **#10a Gimbal UI page** — Day 16 DELIVERED as Gimbal Recon
+  screen on unified UI (one URL with ?screen= routing). Spec
+  UI_DESIGN_v2.md. GIMBAL_VIZ.md §3 superseded. Production-
+  readiness pending #49.
+- **#29 Mark Waypoint button** — Day 16 DELIVERED as btn22 on
+  Cart Recon screen. Writes new `'W'` event into CartLog with
+  recon-session waypoint number as value. Operator-verified
+  end-to-end.
