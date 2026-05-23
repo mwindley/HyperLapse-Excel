@@ -176,6 +176,16 @@ Retained as production-grade defensive checks:
   internally inconsistent by ~10%. Empirically chosen constants.
   Not a practical problem at hyperlapse pixel tolerances. Could be
   reconciled by remeasuring on a known-distance track.
+- **NEW #54 Gimbal slew overshoot** (Day 17, second session). Observed
+  during showastro tests: large-angle slews (e.g. home → 120° pan)
+  with default `time_for_action = 0x14` (2s) physically overshoot
+  target then correct. The DJI motor controller over-tunes for the
+  load when forced to move fast. Fix options:
+  (a) bump time_for_action to a slower fixed value (e.g. 0x40 = 6.4s)
+  (b) compute slew time from angular distance like panoIssueSlew
+      already does (line 2206 of sketch, `dur_ms = dmax / slew_dps × 1000`)
+  Option (b) is consistent with existing code and the more durable
+  fix. Apply to showastro / showastrooffset / /move endpoints.
 
 **Build lessons added to PREFERENCES (Day 17):**
 - A prior crashed Claude session can leave uncommitted edits in the
@@ -1036,30 +1046,49 @@ Show astro and Snap var buttons on Gimbal Recon.
 
 *Architecture (Path A chosen Day 16):* Excel pre-computes today's
 astro positions and pushes to cart in a new settings field. Cart
-stores ~9 yaw/pitch pairs (sunrise/sunset/MW × rise/mid/end
-keyframes ≈ 50 bytes). On Show astro tap with type+keyframe context,
-cart commands gimbal to stored position.
+stores 7 yaw/pitch pairs (sun rise/set, moon rise/set, MW rise/
+mid/end ≈ 56 bytes + 1 mask byte). On Show astro tap with
+type+keyframe context, cart commands gimbal to stored position.
 
 Path B (cart computes astro on-the-fly via ported `GetSunGimbalAngles`)
 was considered and rejected — duplicates Excel logic, larger flash
 hit, conflicts with day-8 architecture "astro pre-baked in Excel,
 cart sees cubic coefficients only."
 
-*Scope:*
+*Scope (final after Day 17 build):*
 - Excel side: button to "Push astro to cart" that calls
-  `GetSunGimbalAngles` / `GetGCGimbalAngles` (Astro.bas, already
-  built) at 9 (event, keyframe, time) combinations for today, posts
-  to new cart endpoint `/settings/astropos?...`
-- Cart side: settings struct gains the 9 yaw/pitch pairs; new
-  endpoint receives and stores
-- New endpoint `/gimbal/showastro?type=sunset&kf=mid` drives gimbal
-  to stored position
-- Snap var endpoint reads current Cy/p vs stored astro position and
-  returns the delta; UI auto-fills the yaw Δ / pitch Δ fields
+  `GetSunGimbalAngles` / `GetGCGimbalAngles` for sun + MW (already
+  built in Astro.bas), and new moon astro maths (see #55), posts
+  to cart endpoint `/settings/astropos?...`
+- Cart side ✅ BUILT Day 17 (second session). 10 globals + mask,
+  `/settings/astropos` GET/POST, `/gimbal/showastro?type=...&kf=...`,
+  `/gimbal/snapvar?type=...&kf=...`, `/gimbal/showastrooffset?...`
+  (workflow B for typed-offset verification, not in UI)
+- UI side ✅ BUILT Day 17 (second session). Show astro / Snap var
+  buttons wired; Sunrise/Sunset/Moonrise/Moonset/MW type buttons;
+  keyframe sub-row appears for MW only.
 
-*Status:* design only, not built. Astro positions stale if shoot is
-delayed past authoring time — acceptable artistic latitude per
-GIMBAL_VIZ.md §1 principle.
+*Cart vocabulary:*
+- types: sun, moon, mw
+- keyframes: sun/moon → rise|set; mw → rise|mid|end
+- URL params: sry/srp (sun rise), ssy/ssp (sun set),
+  mnry/mnrp (moon rise), mnsy/mnsp (moon set),
+  mry/mrp (mw rise), mmy/mmp (mw mid), mey/mep (mw end)
+
+*Dispatch-order bug found and fixed Day 17:* original
+`path.startsWith("/gimbal/showastro")` matched both showastro AND
+showastrooffset (prefix collision). Changed to
+`path == "/gimbal/showastro" || path.startsWith("/gimbal/showastro?")`.
+
+*Status:* cart side ✅ done. Excel side pending — see #55 for
+moon maths, #50-Excel for push button.
+
+**#55 Moon astronomy maths in Excel (NEW Day 17).** Cart side
+(#50) reserved storage for moon rise/set positions. Excel side
+needs `GetMoonAzimuth` / `GetMoonAltitude` / `GetMoonGimbalAngles`
+in Astro.bas, mirroring the existing sun/GC implementations.
+Without this, cart's moon slots stay unpopulated and Show astro
+for Moonrise/Moonset returns "slot not pushed."
 
 ---
 
