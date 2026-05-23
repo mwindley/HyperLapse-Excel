@@ -1090,6 +1090,96 @@ in Astro.bas, mirroring the existing sun/GC implementations.
 Without this, cart's moon slots stay unpopulated and Show astro
 for Moonrise/Moonset returns "slot not pushed."
 
+**#56 Morning astronomical dawn missing in Excel (NEW Day 17).**
+Excel's `GetSunsetTime` API call pulls evening twilight times
+(civil/nautical/astronomical dusk) and stores in named ranges
+dataCivilDusk / dataNauticalDusk / dataAstroDusk. The morning
+equivalents (`civil_twilight_begin`, etc.) are also in the API
+response but not stored. Needed for MW rise/mid/end computation
+(dark window end). Easy fix: extend the parser loop in
+GetSunsetTime and add `dataCivilDawn` / `dataNauticalDawn` /
+`dataAstroDawn` named ranges.
+
+Note: the existing "phase 1-5" scheme in CalculatePhaseTimes is
+internal scaffolding (sunset-anchored offsets, not astronomy);
+don't treat it as authoritative twilight data.
+
+**#57 Shoot-date anchor for Excel astro (NEW Day 17).** Today
+Excel computes everything from `Now()` / today's calendar date.
+That's wrong for the operator's actual workflow:
+- Shoots typically run dusk-to-dawn crossing midnight. The
+  "dawn" of the shoot is the NEXT calendar day's sunrise.
+  CalculatePhaseTimes uses today's sunrise instead, which is
+  morning-already-past â€” useless.
+- Operator often prepares the shoot earlier (different date),
+  potentially without internet. Today's flow requires running
+  Get Sunset Time on the day of the shoot.
+
+Fix: add `dataShootDate` named range (defaults to today, operator
+can edit). All astro reads/computes anchor on that date. API
+calls (when available) cache values per-date. Local astro
+(Astro.bas) already takes atTime parameter so works correctly
+once given the right date.
+
+This was uncovered during Day-17 push-astro testing: Push Astro
+to Cart found MW core never above horizon in tonight's dark
+window because dataPhase4aStart was computed from today's
+sunrise (this morning), making the For-loop window go
+backwards (dusk 18:44 â†’ "dawn" 05:37 same calendar day).
+
+Workaround for early Day-17 testing: in PushAstroToCart, detect
+when sunrise < dusk and add 24h locally. Real fix is #57.
+
+**#58 Track-path cubic segments stuck at N=2 by SRAM (NEW Day 17).**
+Cart's TRACK_SEGS_MAX is 2 due to RAM pressure on Uno R4. With
+N=2 the MW core fit has 20Â° yaw / 2.75Â° pitch worst-case error
+near zenith. With N=4 the error drops to ~9Â° yaw / 0.85Â° pitch
+(zenith-segment only; other segments <0.5Â°). N=4 doesn't link
+because the toolchain reserves an 8 KB heap region that pins
+the global ceiling.
+
+Same SRAM ceiling also blocks: the `/debug/trackplan?idx=N`
+read-back endpoint (removed); the Track runtime block (1 Hz
+plan-runner check, cubic eval, setPosControl) â€” a self-contained
+~80 lines in `loop()` that won't link.
+
+Excel side has freeze logic implemented (in FitAndPushTrackPath,
+samples with pitch > 80Â° use constant yaw rather than fitting
+through nonsense). Push pipeline + cubic storage + /debug/trackeval
+all working at N=2.
+
+Path forward (any of):
+- Halve lum_resp_buf (4096 â†’ 2048) to free 2 KB. Risk: luminance
+  HTTP responses can hit 4.5 KB; truncation may break the
+  "histogram":[[ scan. Verify with sample R3 responses first.
+- Use slice-by-16 CRC32 (64-byte table) instead of slice-by-8
+  (1024-byte table). Saves 960 bytes. Touches CRC code path.
+- Shrink other globals (CartLogEntry, GimbalLogEntry buffers).
+- Migrate to Giga R1 (#47) which has 1 MB SRAM â€” no contention.
+
+Acceptance at N=2: yaw error projects to ~7 pixels at 14mm in
+worst case (yaw error Ã— cos(pitch)). Below visible threshold
+for current shoots. Real fix needed before Track runtime block
+can be added.
+
+**#59 Track runtime integration in cart plan-runner (NEW Day 17).**
+Blocked on #58 (SRAM). When SRAM cleanup lands, add a 1 Hz block
+in `loop()` that:
+- Computes shoot_time = millis() - track_plan_anchor_ms
+- Linear-scans track_plan[0..count-1] for the active interval
+  (one where ts_ms <= shoot_time < te_ms)
+- If active: picks that interval's object cubic from track_<obj>,
+  evaluates at t=(now - tp->t0_ms)/1000, applies offY/offP, calls
+  setPosControl with the result
+- Mode FULL: yaw = cubic + offY, pitch = cubic + offP
+- Mode YAW:  yaw = cubic + offY, pitch = offP (fixed)
+- Today setPosControl is called with world-frame yaw direct (Ry=Cy
+  shortcut). When #40 BNO lands the conversion becomes
+  `cart_yaw = world_yaw - cart_real_heading`.
+
+Code drafted Day 17 but reverted after failing to link. See
+git history (or this WORKFRONTS entry) for the block.
+
 ---
 
 ## Open workfronts — WiFi / RF link
