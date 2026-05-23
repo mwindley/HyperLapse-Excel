@@ -1,6 +1,6 @@
 # HyperLapse Cart — Open Workfronts
 
-**As of:** Session C day 16, 23 May 2026
+**As of:** Session C day 17, 23 May 2026
 
 This file lists work surfaced but not yet executed. Each item
 references which session/day raised it. Prioritise per shoot
@@ -52,6 +52,213 @@ running — wired Ethernet is structurally cleaner.
 
 #36d Step 4 is closed by this framing. v1 already handles the
 outage cases acceptably; v2 explores improvements.
+
+---
+
+## Day 17 update (added 23 May 2026)
+
+Diagnostic + build session. **Plan execution fully validated end-to-end
+across all designed segment types and stop styles.** Five bugs found
+and fixed via instrumentation; full diagnosis narrative in PROJECT_STATE
+Day-17 entry.
+
+**Headline.** All test banks green. The cart now executes any authored
+plan correctly:
+
+- MOVE segments at any speed, distance-ended, with steering
+- MOVE-to-MOVE transitions (tr=M smooth merge)
+- STOP segments (decel, emergency-halt, or 6-min decay) with operator-
+  authored hold duration counting from genuine rest
+- Operator-ended STOP segments
+- `/plan/stop` mid-segment (clean abort)
+- `/btn11` and `/btn12` mid-plan (stop cart without aborting plan)
+- `/plan/nudge ±100mm` extending / shrinking / past-zero
+
+**Bugs fixed (chronological):**
+
+1. **Bogus rear-Tic delta negation** in `planTick`, `planStatusCSV`,
+   `/plan/nudge`. Three `delta = -delta;` lines, justified by a stale
+   "rear Tic wired physically reversed" comment, made segment-complete
+   fire on the wrong sign. Forward MOVE segments would never complete.
+   Inserted by an uncommitted edit from a prior Claude session that
+   crashed before testing. Removed; verified empirically with
+   `/debug/tic` that both Tics count positive on cart-forward.
+2. **I²C "cliff"** — `planTick` was reading `ticRear.getCurrentPosition()`
+   every main-loop iteration. Sustained high-rate I²C polling caused
+   both Tics to simultaneously NACK on the bus (Wire err=2) after a
+   variable run time (7s / 17s / 128s observed). Once cliffed, Tic
+   comms dead for the rest of run; cart kept moving on last commanded
+   velocity. Throttled `planTick` to 100ms cadence; cliff did not
+   recur. Root cause not characterised — workfront #52.
+3. **STOP-segment duration timer counted from segment entry.** A 5s
+   STOP after 30 m/hr cruise actually held only ~1.5s at rest because
+   the Tic STOP_DECEL ramp ate 3.5s of the window. Added an "at-rest
+   gate" in `planTick` END_DURATION polling both Tic velocities every
+   250ms; counts duration only from the moment both reach 0.
+4. **Stop-style dispatcher (TR_S / TR_E / TR_D) pointless.** Each
+   stop case did `cartStop()` then immediately
+   `cartSetSpeed(speed_mhr)` — Tic accepted the latest target and
+   ignored the first. No actual stop happened. Rewrote dispatcher
+   with corrected M/S/E/D semantics: M for MOVE-to-MOVE, S/E/D for
+   STOP segments. STOP variants only initiate deceleration; the
+   at-rest gate handles the duration counting. All three converge
+   to "wait at 0 then count" — they differ only in HOW the cart
+   reaches 0.
+5. **Decay-loop unsigned-subtraction underflow.** When
+   `cartStartDecay()` is called from `planTick` (which runs at the
+   top of `cartLoop`), `cart_decay_start` is set to a `millis()`
+   later than `now` captured at the top of cartLoop. The next
+   `elapsed = now - cart_decay_start` underflows, fires the
+   decay-complete branch, calls `cartStop()` on the same iteration.
+   Result: decay-style stop instantly turned into emergency-style
+   stop. Fixed by guarding `elapsed` against negative-then-wrapped
+   values.
+
+**Authoring vocabulary, post-Day-17 (canonical):**
+
+| Tag | Used on | What it does |
+|---|---|---|
+| **M** (merge) | MOVE | Slam target speed; Tic accel/decel handles ramp. Default for MOVE. |
+| **S** (decel stop) | STOP | `cartSetSpeed(0)`; Tic STOP_DECEL ramps to rest (~5s from 30 m/hr). Then hold for `duration_ms`. Default for STOP. |
+| **E** (emergency) | STOP | `cartDeadStop()`; Tic haltAndHold for instant lock (~30ms). Then hold. |
+| **D** (decay) | STOP | `cartStartDecay()`; linear ramp from current speed to 0 over `cart_decay_ms` (6 min production). Then hold. |
+
+Authoring format unchanged: `s,VAL,steer,speed,end[,tr]` where the
+optional 6th field is the transition tag.
+
+**New endpoints:**
+- `/debug/decaytime` and `/debug/decaytime?ms=N` — get/set the global
+  `cart_decay_ms` (default 360000 / 6 min, clamped 1s–10min)
+
+**New globals (kept in production):**
+- `cart_decay_ms` (replaces `const CART_DECAY_MS`)
+- `plantick_dist_last_ms` (100ms read throttle)
+- At-rest gate state in `planTick` END_DURATION (per-segment statics)
+
+**Diagnostic instrumentation removed at end of session:**
+- PTICK 500ms probe in `planTick` END_DIST
+- PROBE 100ms sampler in `cartLoop` (post-stop)
+- DUR elapsed-since-rest probe
+- TR_DECAY pre/post-startDecay diagnostic prints
+- `stop_probe_*`, `plantick_probe_last_ms` globals
+
+Retained as production-grade defensive checks:
+- `getLastError()` after Tic position read in `planTick`, logs only
+  on non-zero error code — surfaces a cliff event immediately without
+  per-tick noise
+
+**Workfront status changes:**
+- **#5a Segment dispatcher** — DONE. M for MOVE, S/E/D for STOP all
+  verified end-to-end.
+- **#5a-related: ±100mm nudge** — DONE. `/plan/nudge?d=±N` working,
+  with past-zero segment-complete fallthrough.
+- **#48 (was bus fault on shutter)** — unrelated to Day-17 bugs,
+  not revisited.
+- **NEW #51 Remove Day-17 diagnostics** — DONE this session.
+- **NEW #52 Investigate I²C cliff mechanism** — open. Avoidance
+  fix (100ms throttle) sufficient; root cause not characterised.
+  Park unless cliff recurs at lower read rates. If revisited:
+  scope SDA/SCL signal integrity, check pull-up strength, consider
+  external 10 kΩ pull-ups per Pololu's published troubleshooting.
+
+**Build lessons added to PREFERENCES (Day 17):**
+- A prior crashed Claude session can leave uncommitted edits in the
+  working tree. `git diff` against the latest commit before treating
+  local sketch as authoritative.
+- A code comment that explains a counterintuitive behaviour is
+  high-risk signal, not high-trust signal. Verify empirically before
+  reasoning from it.
+- I²C cliffs are quiet — no exception, no watchdog. Standardise
+  `getLastError()` checks for any code touching Tic comms.
+- `millis()` captured at the top of a cartLoop iteration is stale by
+  the time inner code completes. Sub-blocks may set their own
+  timestamps later in the same iteration; guard subtraction.
+- A "stop" command followed by an immediate "set speed" is identical
+  to "set speed" alone — the Tic accepts the latest target. To
+  actually stop and hold, there must be an in-between gate that
+  waits for rest.
+
+---
+
+## Day-17 plan-execution test bank — results recorded
+
+Below is a record of what was tested and verified. Future regression
+tests should re-run these.
+
+### Test bank A — segment end conditions
+
+A1 (MOVE with END_DURATION) skipped — parser puts MOVE val into
+dist_mm, not duration_ms. Combination not designed for. The valid
+end conditions per type are MOVE→END_DIST, STOP→END_DURATION or
+END_OPERATOR.
+
+**A2 (STOP with END_DURATION).** ✓ Verified.
+- Plan: `n=4&s1=m,200,0,20,d&s2=s,5000,0,0,t&s3=m,200,0,20,d&s4=s,0,0,0,o`
+- Result: SEG 2 entered at 20 m/hr cruise, at-rest reached t+3545ms,
+  5s hold counted from rest, SEG 3 entered, cart re-accelerated to
+  20 m/hr cleanly. Total SEG 2 wall-clock: ~8.5s for "5-second STOP".
+
+**A3 (STOP with END_OPERATOR).** ✓ Verified as part of every other
+test (the trailing `s,0,0,0,o` segment).
+
+### Test bank B — STOP segment transition tags
+
+5-segment plan: MOVE 250mm @ 30 m/hr → STOP 5s (variant) → MOVE
+250mm @ 30 m/hr → STOP 5s (variant) → STOP operator-end.
+
+**B-S (default decel stop).** ✓ At-rest at t+5408ms / t+5306ms.
+Cart re-accelerated from full rest, drove SEG 3 cleanly. Re-stopped
+in SEG 4.
+
+**B-E (emergency stop, cartDeadStop).** ✓ At-rest at t+31ms / t+32ms.
+Cart re-accelerated from dead halt without issue.
+
+**B-D (decay stop).** ✓ With `cart_decay_ms=60000` (1 min) for
+test convenience. Cart maintained 30 m/hr at SEG 2 entry, then
+linearly decayed over 60s to 0. At-rest at t+60144ms. 5s hold then
+SEG 2 complete. Production default 360000ms (6 min) restored at
+end of session.
+
+### Test bank C — stop primitives mid-plan
+
+**C1 (`/plan/stop`).** ✓ Abort fires planAbort → cartStop. Cart
+decelerates via Tic STOP_DECEL ramp. Plan state → IDLE.
+
+**C2 (`/btn11` cartStop mid-MOVE).** ✓ Cart decelerates and stops
+(~5.4s). Plan state stays RUNNING — segment-complete via END_DIST
+will not fire because cart isn't moving. Operator must follow with
+`/plan/stop` to clean up. UX implication recorded for Execution
+screen design.
+
+**C3 (`/btn12` cartDeadStop mid-MOVE).** ✓ Sharp halt within ~50ms.
+Plan stays RUNNING (same as C2). Cart locked at last position
+(Tic haltAndHold prevents drift).
+
+### Test bank D — `/plan/nudge`
+
+**D1 (`+100mm`).** ✓ Plan: `m,250,0,30,d`. During cruise, nudged
++100mm at delta=68499. `[Plan] NUDGE seg=1 delta_mm=100
+new_dist_mm=350 steps=70299/197750`. Target updated to 197750,
+cart continued, SEG 1 completed at delta=197824.
+
+**D2 (`-100mm` with plenty left).** ✓ Plan: `m,250,0,30,d`.
+Nudged -100mm at delta=50099. Target shrank to 84750. SEG 1
+completed at delta≥84750. Cart drove ~150mm total.
+
+**D3 (`-100mm` past zero).** ✓ Plan: `m,250,0,30,d`. Waited until
+delta=106849 (~189mm covered). Nudged -100mm. Handler logged:
+`NUDGE past zero — segment complete`. SEG 2 entered immediately.
+
+**D4 (nudge on STOP segment).** ✓ Plan with STOP+duration. Nudge
+request returned `ERROR: nudge only valid mid-MOVE`. Rejected
+cleanly.
+
+### Test bank E — multi-segment with steering
+
+**E1 (S-curve plan).** ✓ Plan: `m,300,-5,20,d` → `m,300,5,20,d`
+→ STOP. SEG 1 with steer=-5, SEG 2 with steer=+5, all completed.
+Steering ramps at 1°/sec (existing behaviour) so the -5 → +5
+transition takes ~10s.
 
 ---
 

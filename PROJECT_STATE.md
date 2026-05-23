@@ -1,9 +1,106 @@
 # HyperLapse Cart — Project State
 
-**Last updated:** 23 May 2026 (Session C day 16 — three-screen UI
-v2 foundation delivered. Server-side routing on `?screen=cart|gimbal
-|exec`, shared header with logo row + 4-tab bar, day palette baked
-in. **Cart Recon: full build** — status line (voltage · motor state),
+**Last updated:** 23 May 2026 (Session C day 17 — **plan execution fully
+characterised and verified end-to-end across all segment types and stop
+styles**. The full day arc: started with a 3-segment plan that wouldn't
+execute correctly; ended with a complete authoring vocabulary working as
+designed and a clean production sketch.
+
+Bugs found and fixed today, all via instrumentation-first diagnosis:
+
+1. **Bogus rear-Tic delta negation** in `planTick`, `planStatusCSV`, and
+   `/plan/nudge`. A `delta = -delta;` line, justified by a "rear Tic
+   wired physically reversed" comment, made segment-complete check the
+   wrong sign. Forward MOVE segments would never complete. Negations
+   were not in the Day-15 v1prod branch point — added in uncommitted
+   edits from a prior Claude session that crashed before testing.
+   Verified empirically with `/debug/tic` after a manual forward drive:
+   both Tics report positive position on cart-forward (~1% apart, the
+   overdrive ratio). Removed; rear-Tic counts in the natural direction.
+
+2. **I²C "cliff"** during plan execution. `planTick` was reading
+   `ticRear.getCurrentPosition()` every main-loop iteration. After a
+   variable run time (observed 7s, 17s, 128s across multiple tests),
+   both Tics simultaneously NACK on the bus (Wire error code 2) and
+   stop responding for the rest of the run. Cart kept moving on the
+   last commanded velocity (Tic motors audibly unchanged). Throttled
+   the read to 100ms cadence; cliff did not recur in any test
+   thereafter. Mechanism not characterised — workfront #52, parked
+   under avoidance.
+
+3. **STOP-segment duration timer counted from segment entry, not
+   from at-rest.** A 5-second STOP after a 30 m/hr cruise actually held
+   only ~1.5 seconds at rest because the Tic STOP_DECEL ramp ate 3.5s
+   of the window. Added an "at-rest gate" in `planTick` END_DURATION
+   that polls both Tic velocities every 250ms; counts duration only
+   from the moment both reach 0. Verified: 30 m/hr → SEG STOP(5s)
+   takes 5.3s decel + 5s hold = 10.3s, cart genuinely still for the
+   full 5s.
+
+4. **Stop-style dispatcher (TR_S / TR_E / TR_D) pointless as written.**
+   Each "stop" case did `cartStop()` THEN immediately
+   `cartSetSpeed(speed_mhr)` — Tic got two velocity targets in
+   microseconds and ignored the first. No actual stop happened.
+   Rewrote dispatcher with revised semantics:
+   - **M** (merge) — MOVE-only. Slam target speed; Tic accel/decel
+     handles ramp. Default for MOVE.
+   - **S** (decel) — STOP-only. `cartSetSpeed(0)`, Tic STOP_DECEL ramp
+     to rest. Then hold via at-rest gate. Default for STOP.
+   - **E** (emergency) — STOP-only. `cartDeadStop()` (Tic haltAndHold)
+     for instant halt. Then hold.
+   - **D** (decay) — STOP-only. `cartStartDecay()` arms linear ramp
+     from current speed to 0 over `cart_decay_ms` (6 min production).
+     Distance is derived, not specified. Then hold.
+
+5. **Decay-loop wrap-around bug** that hid bug #4's true fix. When
+   `cartStartDecay()` is called from inside `planTick` (which runs at
+   the top of `cartLoop`), `cart_decay_start = millis()` is set AFTER
+   `now = millis()` was captured at the top of cartLoop. The next
+   line, `elapsed = now - cart_decay_start`, then underflows
+   unsigned: tiny-negative becomes ~4 billion. `elapsed >=
+   cart_decay_ms` becomes true on the same loop pass, triggering
+   `cartStop()` — instant termination of the decay we just armed.
+   Fixed with `if ((long)(now - cart_decay_start) < 0) elapsed = 0;`
+   to handle the same-iteration decay-arm case. Verified: 60s decay
+   ran linearly to zero, factor untouched until ramp complete.
+
+Test-bank validation (all green):
+- Bank A2 — STOP segment with END_DURATION (5s hold, true rest)
+- Bank B-S — decelerated stop (~5.3s decel from 30 m/hr)
+- Bank B-E — emergency stop (~30ms halt via haltAndHold)
+- Bank B-D — decay stop (60s linear ramp from 30 m/hr to 0)
+- Bank C1 — `/plan/stop` mid-MOVE (aborts plan, ramps cart down)
+- Bank C2 — `/btn11` mid-MOVE (stops cart, plan stays RUNNING)
+- Bank C3 — `/btn12` mid-MOVE (instant halt, plan stays RUNNING)
+- Bank D1 — `/plan/nudge?d=100` extends current segment by 100mm
+- Bank D2 — `/plan/nudge?d=-100` with plenty left, target shrinks
+- Bank D3 — `/plan/nudge?d=-100` past zero, segment immediate complete
+- Bank D4 — nudge on STOP segment rejected
+- Bank E1 — multi-segment plan with steering (+5°, -5°, S-curve)
+
+New sketch infrastructure (kept in production):
+- `cart_decay_ms` (global, default 360000 / 6 min) replaces the prior
+  `const CART_DECAY_MS`. Adjustable via `/debug/decaytime?ms=N`.
+- `plantick_dist_last_ms` (100ms throttle for planTick END_DIST read).
+- At-rest gate state in planTick END_DURATION (per-segment statics).
+- `getLastError()` check after each Tic read in END_DIST — logs
+  only on non-zero so a Tic comms collapse surfaces immediately
+  without per-tick noise.
+
+Diagnostic instrumentation removed from sketch at end of session:
+- PTICK every-500ms probe block
+- Post-stop PROBE every-100ms sampler
+- DUR elapsed-since-rest 500ms probe
+- TR_DECAY pre/post-startDecay diagnostic prints
+- `stop_probe_until_ms`, `stop_probe_last_sample_ms`,
+  `plantick_probe_last_ms` globals
+
+Sketch 5140 → 5553 lines (+413 net, all production code, no diagnostics).
+
+**Earlier Day 16 below.** Three-screen UI v2 foundation delivered.
+Server-side routing on `?screen=cart|gimbal|exec`, shared header with
+logo row + 4-tab bar, day palette baked in. **Cart Recon: full build**
+— status line (voltage · motor state),
 Last/Now waypoint rows, steering/speed/motor/action button rows,
 turning-circle notes panel. New `'W'` CartLog event carries the
 recon-session waypoint number; new `cart_motor_state` software flag
@@ -69,7 +166,196 @@ This file keeps only what the next session needs to read to start work.
 
 ---
 
-## Day-16 session — three-screen UI v2 foundation
+## Day-17 session — first successful plan execution (two bugs fixed)
+
+Build + diagnostic session. The first attempt to run a multi-segment
+plan end-to-end surfaced two faults. Both diagnosed via instrumentation
+(oscilloscope approach — see PREFERENCES), then fixed. End-to-end
+verification on the third clean test of the day.
+
+### Bug 1 — bogus rear-Tic position negation
+
+**Symptom.** Plan starts cleanly, SEG 1 dispatched, cart drives at
+30 m/hr, but segment never completes. Cart drives past the planned
+distance and continues until forcibly stopped.
+
+**Diagnosis path.** Added PTICK probe to `planTick` printing `rear.pos`,
+computed `delta`, and `target` every 500ms. Trace showed `rear.pos`
+climbing positive (3 → 196 → 638 → ... → 628274) on cart-forward, but
+the computed `delta` was negative the same magnitude (−628274), never
+reaching the positive `target` (565000 steps = 1000mm). Cause: a
+`delta = -delta;` line in `planTick`, mirrored in `planStatusCSV` and
+`/plan/nudge`, with a comment claiming the rear Tic was "wired physically
+reversed." Git blame against the Day-15 v1prod branch point showed
+those negations were not in the original code; they had been added in
+**uncommitted** edits before this session — from a prior Claude session
+that crashed before testing the change.
+
+**Verification before fix.** Ran a manual forward drive in Cart Recon
+(no plan), then `/debug/tic`. Both Tics reported positive position
+(rear=877,431; front=886,988; ~1% apart, the overdrive ratio). Confirmed
+both motors count positive on cart-forward — no opposite-direction
+quirk at the position-readback level. Whatever Tic-config inversion
+gives the two motors their opposite physical rotation (to drive the
+cart forward) is invisible at the library level; `getCurrentPosition`
+returns positive numbers from both.
+
+**Fix.** Removed the three `delta = -delta;` lines (planTick:2084,
+planStatusCSV:2458, /plan/nudge:5049). Kept the legitimate
+`if (speed_mhr < 0) delta = -delta;` lines below them — those handle
+plan-authored reverse-direction MOVE segments and remain correct.
+Updated comments to record the correct direction observation.
+
+### Bug 2 — I²C "cliff" (Tic comms collapse) during plan execution
+
+**Symptom.** During plan execution, after a variable run time, both
+Tic controllers simultaneously stop ACKing on the I²C bus. From that
+moment on every `getCurrentPosition()` / `getCurrentVelocity()` returns
+0, every `getLastError()` returns 2 (Wire library: address-NACK), and
+all subsequent stop commands (`/plan/stop`, `/btn11`, `/btn12`, etc.)
+cannot reach the Tics. The Tics themselves continue executing the last
+velocity command they received, so the cart runs at full commanded
+speed until power-killed manually. Tic motors keep singing at the same
+pitch through the cliff — confirms motor command unchanged, only Uno→Tic
+comms dead.
+
+**Diagnosis path.** PTICK probe extended with `getLastError()` after
+each Tic read. Trace showed clean `(e0)` reads while cart accelerated
+to commanded speed; reads then continued cleanly during cruise with
+`rear.vel` and `front.vel` locked at the bit-exact commanded values
+(`49913765` / `51724110`); at the cliff instant **all three reads
+(rear.pos, rear.vel, front.vel) flipped from e0 to e2 simultaneously**.
+Cliff timing across three runs: t+128s, t+7s, t+17s — highly
+intermittent, not load-bound, not time-bound.
+
+Read-rate inspection of the sketch showed `planTick()` calls
+`ticRear.getCurrentPosition()` every main-loop iteration. With no
+blocking work in the loop that's hundreds of I²C transactions per
+second, all addressed at the rear Tic. Cart Recon (which works fine
+indefinitely) only reads via `/status` every 3 seconds — orders of
+magnitude lower.
+
+**Hypothesis (not proven, but consistent).** Sustained high-rate I²C
+polling against the Tic at the rates `planTick` was running it
+eventually corrupts the bus or wedges the slave-side state machine,
+producing the sudden simultaneous NACK on both addresses. No deeper
+mechanism investigation done; the avoidance fix below proved sufficient.
+
+**Fix.** Throttled `planTick`'s END_DIST read to 100ms cadence. At
+30 m/hr the cart covers 8.3mm in 100ms; at 50 m/hr 13.9mm. Worst-case
+segment-complete overshoot is ~14mm against multi-hundred-mm segments
+— well within shoot tolerance and below the documented turning-circle
+measurement noise. Other Tic reads (Cart Recon `/status`, cart log
+captures, voltage poll every 2s, debug endpoints) were already
+appropriately throttled.
+
+### Validation run
+
+Third end-to-end test of the day after both fixes applied:
+
+```
+/plan/load?n=3&s1=m,1000,0,30,d&s2=m,500,0,50,d&s3=s,0,0,0,o
+/plan/start
+```
+
+Observed:
+- SEG 1 (MOVE 1000mm @ 30 m/hr) dispatched, cart accelerated to commanded
+  speed via Tic ramp, delta climbed cleanly toward 565000 steps target
+- SEG 1 complete at t+115.3s (theory: 120s, actual is slightly under
+  due to the initial accel ramp covering part of the distance)
+- SEG 2 (MOVE 500mm @ 50 m/hr) entered, `plan_seg_start_rear=565349`
+  (captured correctly from SEG 1 end). Velocity ramped 30 → 50 m/hr
+  smoothly via `tr=M`. Delta climbed to target 282500
+- SEG 2 complete at t+34.2s after SEG 2 entry (theory 36s)
+- SEG 3 (STOP, end=operator) entered. Cart halted as part of plan
+  execution
+
+No cliff (e2) anywhere in the run. Plan ran to STOP as authored.
+
+### Files modified this session
+
+- `DJI_Ronin_UnoR4_v1prod.ino`:
+  - Removed three `delta = -delta;` lines (Bug 1)
+  - Added 100ms throttle to `planTick` END_DIST (Bug 2 avoidance)
+  - Replaced `CART_DECAY_MS` constant with mutable `cart_decay_ms`
+    (default 360000 / 6 min for production); added
+    `/debug/decaytime?ms=N` for testing
+  - Rewrote `planSegmentEnter` dispatcher with corrected M/S/E/D
+    semantics (Bug 4)
+  - Added at-rest gate in `planTick` END_DURATION (Bug 3)
+  - Fixed decay-loop unsigned-subtraction underflow (Bug 5)
+  - Added `getLastError()` check after rear-pos read in END_DIST —
+    logs only on non-zero error code
+  - Added probe instrumentation for diagnosis, then removed all of
+    it at end of session (PTICK probe, PROBE in cartLoop, DUR probe,
+    TR_DECAY probe)
+
+### Test-bank validation results
+
+| Bank | Test | Result |
+|---|---|---|
+| A2 | STOP segment with END_DURATION (5s) | ✓ at-rest gate working |
+| B-S | Decelerated stop (Tic STOP_DECEL ramp) | ✓ ~5.3s decel + hold |
+| B-E | Emergency stop (cartDeadStop) | ✓ ~30ms halt + hold |
+| B-D | Decay stop (linear ramp over cart_decay_ms) | ✓ 60s linear ramp |
+| C1 | `/plan/stop` mid-MOVE | ✓ abort + ramp |
+| C2 | `/btn11` mid-MOVE | ✓ stop, plan stays RUNNING |
+| C3 | `/btn12` mid-MOVE | ✓ instant halt, plan stays RUNNING |
+| D1 | `/plan/nudge?d=100` | ✓ target extends |
+| D2 | `/plan/nudge?d=-100` (left in seg) | ✓ target shrinks |
+| D3 | `/plan/nudge?d=-100` past zero | ✓ immediate segment complete |
+| D4 | nudge on STOP segment | ✓ rejected cleanly |
+| E1 | Multi-segment with steering | ✓ steering per-segment works |
+
+### Mental model corrections recorded
+
+- **A prior crashed Claude session can leave uncommitted edits in the
+  working tree.** Today's Bug 1 came in via the prior-Claude
+  edits. The protective practice is to verify a planTick-style change
+  by checking against the latest committed version with `git diff` (or
+  recent-commit `git show`) before treating the local file as
+  authoritative.
+- **A "comment that explains a counterintuitive thing" is high-risk
+  signal, not high-trust signal.** The "rear Tic wired physically
+  reversed" comment was the rationalisation, not the truth. Verifying
+  comment claims empirically (manual drive + `/debug/tic`) was a
+  one-minute test that should have happened earlier.
+- **I²C cliffs are quiet.** No exception, no Serial diagnostic, no
+  watchdog reset — just a flip from e0 to e2 and 28+ seconds of
+  successful zero-returns from the library that look like "Tic is
+  fine, at rest." Without `getLastError()` instrumentation the
+  failure mode is invisible. The new on-error-only print in
+  `planTick` END_DIST is the standardised check going forward.
+- **`millis()` captured at the top of a loop iteration is stale by
+  the time inner code completes.** Bug 5 (decay underflow) is the
+  worked example. When passing `now` down to sub-blocks that may
+  themselves call `millis()`, guard against the timestamp ordering
+  not matching code-execution order.
+- **A "stop" command followed by an immediate "set speed" is
+  identical to "set speed" alone** — the Tic accepts the latest
+  target and discards the earlier one. Apparently "stop then go"
+  needs an in-between gate (the at-rest check) for any actual stop
+  to happen. Bug 4 is the worked example.
+
+### Path back into this work
+
+Plan execution is now production-quality. Outstanding work in this area:
+
+- **Workfront #52 — I²C cliff root cause.** Avoidance fix (100ms
+  throttle) is sufficient for now. If the cliff recurs at lower read
+  rates, scope the SDA/SCL lines and check pull-up strength.
+- **Workfront #51 — was "remove Day-17 diagnostics."** Done this
+  session at end. Close.
+- Execution screen UI (the placeholder from Day 16) now has a working
+  backend; can be wired up when ready. Subscreen design needs the
+  Plan state, segment-progress readout, ±100mm buttons, and PAUSE
+  semantics decisions captured in WORKFRONTS Day-15 Part 8.
+
+---
+
+
+
+
 
 Build session. Server-side three-screen UI delivered, two screens
 real (Cart Recon, Gimbal Recon), one placeholder (Execution). The
