@@ -1,12 +1,65 @@
 # HyperLapse Cart — Project State
 
-**Last updated:** 23 May 2026 (Session C day 17 — **plan execution fully
-characterised and verified end-to-end across all segment types and stop
-styles**. The full day arc: started with a 3-segment plan that wouldn't
-execute correctly; ended with a complete authoring vocabulary working as
-designed and a clean production sketch.
+**Last updated:** 23 May 2026 (Session C day 17, **second half** —
+workfront #52 (I²C cliff) properly diagnosed and resolved by removing
+the cause, not coping with it. Earlier in the day the cliff was
+"avoided" by throttling planTick's Tic position reads from per-loop
+to 100ms. Extended-run testing later in the day showed the cliff still
+fires at 100ms cadence (just slower to arrive — ~3 min instead of 7s)
+and even at 1Hz polling. Throttling alone is not enough.
 
-Bugs found and fixed today, all via instrumentation-first diagnosis:
+Pololu's own documentation (0J71/4.6) identifies the failure class:
+weak pull-ups (Tic's internal ~40 kΩ) + long wires + standard I²C
+clock = bus failures at sustained read load. Recommended fixes: add
+external ~10 kΩ pull-ups, or slow the I²C clock. Hardware fix flagged
+as a future workfront.
+
+Architectural resolution: **time-based open-loop segment completion**.
+Operator observation that re-framed the problem: "Tic is accurate for
+ticks; if we tell Tic 'go velocity V', it does; if we tell Tic 'count
+of ticks', it does. Why are we measuring?" The position-poll loop was
+asking the Tic something it already knew and would do faithfully.
+
+New MOVE-segment behaviour:
+- Segment enter: commanded velocity sent (one write, no read)
+- During segment: ZERO I²C reads. Completion estimated by
+  `elapsed_ms >= dist_mm × 3600 / |speed_mhr|`.
+- Segment complete: dispatcher transitions to next segment normally.
+
+The cliff cause is gone for MOVE segments. STOP-segment at-rest gate
+still polls Tic velocity at 250ms, but only during the bounded ~5s
+decel window (~20 reads per STOP) — well below cliff threshold.
+
+Measured open-loop tolerance:
+- Standalone MOVE @ 30 m/hr × 250mm: ~-7 mm (3% short; accel ramp
+  underrun dominates)
+- tr=M merge @ 20 m/hr × 250mm: ~+14 mm (5% long; velocity calibration
+  mismatch dominates — CART_SPEED_SCALE × 1.77 µm/step empirical
+  consts are internally inconsistent by ~10%)
+- Error does NOT scale with segment length; it's per-event, not
+  per-mm
+- Camera tolerance with 14mm lens at 5m subject ≈ 2 mm/px → ±15mm
+  error is ~7 px shift, invisible in motion. Acceptable.
+
+Defensive additions kept in production:
+- `Wire.setClock(50000)` in setup — Pololu-recommended slower I²C
+  clock; can't hurt and might help long-term stability
+- (Hardware: external 10 kΩ pull-ups on SDA/SCL still TBD)
+
+Test re-validation: A2 (STOP+duration), C1 (`/plan/stop` mid-MOVE),
+D1 (`/plan/nudge`), E1 (multi-segment with steering), B-S (decel
+stop with intermediate STOP+duration) — all re-tested with the new
+architecture, all pass cleanly with no CLIFF events.
+
+Diagnostic instrumentation removed at end of session (PTICK throttle
+machinery, `/debug/plantickthrottle` endpoint, CLIFF? print, GATE
+diagnostic, SEG_DONE measurement print, `plantick_*` globals).
+
+Sketch 5553 → 5561 lines (+8 net; the cleanup roughly offset by
+verbose comments documenting the architecture pivot).
+
+**Earlier Day 17 (first half) below.** Five bugs found and fixed via
+instrumentation-first diagnosis:
 
 1. **Bogus rear-Tic delta negation** in `planTick`, `planStatusCSV`, and
    `/plan/nudge`. A `delta = -delta;` line, justified by a "rear Tic

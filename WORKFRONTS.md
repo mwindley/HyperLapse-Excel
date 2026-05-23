@@ -155,11 +155,27 @@ Retained as production-grade defensive checks:
 - **#48 (was bus fault on shutter)** — unrelated to Day-17 bugs,
   not revisited.
 - **NEW #51 Remove Day-17 diagnostics** — DONE this session.
-- **NEW #52 Investigate I²C cliff mechanism** — open. Avoidance
-  fix (100ms throttle) sufficient; root cause not characterised.
-  Park unless cliff recurs at lower read rates. If revisited:
-  scope SDA/SCL signal integrity, check pull-up strength, consider
-  external 10 kΩ pull-ups per Pololu's published troubleshooting.
+- **NEW #52 I²C cliff** — partially resolved second-session.
+  Original avoidance (100ms throttle on planTick) extended cliff
+  onset from ~7s to ~3min but did not eliminate it; 1 Hz polling
+  pushed cliff out to ~11min but still hit. Throttling alone never
+  enough. Per Pololu docs (0J71/4.6): cause class is weak pull-ups
+  + long wires + standard clock. Two interventions applied:
+  (1) Architectural — MOVE segment completion is now time-based
+  open-loop. Zero Tic reads during a MOVE segment. Cliff cause
+  removed for the long-running case. STOP at-rest gate still polls
+  velocity at 250ms but only during the bounded ~5s decel window
+  (~20 reads per STOP, well below threshold).
+  (2) Defensive — `Wire.setClock(50000)` added in setup (Pololu
+  recommendation for marginal pull-ups).
+  **Still open:** hardware fix (external 10 kΩ pull-ups on SDA/SCL
+  per Pololu) — flagged as future work, no urgency now that the
+  problem is sidestepped.
+- **NEW #53 Calibration mismatch** — `CART_SPEED_SCALE = 58` (m/hr
+  → Tic velocity) and `565 steps/mm` distance calibration are
+  internally inconsistent by ~10%. Empirically chosen constants.
+  Not a practical problem at hyperlapse pixel tolerances. Could be
+  reconciled by remeasuring on a known-distance track.
 
 **Build lessons added to PREFERENCES (Day 17):**
 - A prior crashed Claude session can leave uncommitted edits in the
@@ -177,6 +193,19 @@ Retained as production-grade defensive checks:
   to "set speed" alone — the Tic accepts the latest target. To
   actually stop and hold, there must be an in-between gate that
   waits for rest.
+- **If the slave is reliable in doing what you commanded, don't keep
+  asking what it's doing.** The cliff symptom was caused by polling
+  the Tic for its position 10× per second — asking something the Tic
+  already knows and will execute faithfully. Replacing the poll with
+  a time-based estimate (commanded velocity × elapsed time) was
+  enough to remove the cliff cause entirely. Bigger lesson: when a
+  measurement-based feedback loop hits a hardware-bus problem, first
+  ask whether the measurement is necessary at all.
+- **Position-poll != real-world feedback.** Asking the Tic where the
+  cart is doesn't measure the cart — it measures the Tic's internal
+  step counter, which equals reality only when nothing slips. Open-
+  loop estimation makes the same assumption. No accuracy is lost by
+  removing the poll.
 
 ---
 
