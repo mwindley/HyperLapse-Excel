@@ -1,6 +1,6 @@
 # HyperLapse Cart — Open Workfronts
 
-**As of:** Session C day 17, 23 May 2026
+**As of:** Session C day 18 (second half), 24 May 2026
 
 This file lists work surfaced but not yet executed. Each item
 references which session/day raised it. Prioritise per shoot
@@ -219,7 +219,183 @@ Retained as production-grade defensive checks:
 
 ---
 
-## Day-17 plan-execution test bank — results recorded
+## Day 18 update (added 24 May 2026)
+
+Giga capability validation (Steps 1, 2, 4, 5 of GIGA_MIGRATION_STRATEGY)
+PLUS Step 7 v2 sketch port complete. Step 3 (CAN) paused on cooked
+transceiver. Sketch went from 0 → 5667 lines in DJI_Ronin_Giga_v2.ino,
+section-by-section verbatim port from v1prod with Giga deltas applied.
+
+**Capability tests passed (Day 18 first half):**
+- **Step 1** Blink + Serial on Giga (COM12, 115200, LED + Serial.println).
+- **Step 2** WiFi on Rosedale at 192.168.1.116 after one-time
+  WiFiFirmwareUpdater run.
+- **Step 4** I²C Tic 14+15 at default speed on Wire (D20/D21) with
+  external 4.7 kΩ pull-ups. Pololu Tic library compiles + runs
+  unchanged.
+- **Step 5** CCAPI alive check + shutter trigger. Required two fixes
+  vs v1prod (see workfront #61 below): explicit `\r\n` on outbound
+  headers + Wire pin selection.
+- **Step 5b** Full CCAPI dynamic-range validation. Tv GET (522 bytes,
+  current `0\"3`, 60 abilities), ISO GET (253 bytes), liveview start,
+  luminance flipdetail. 5162-byte response parsed via FF 00 01 +
+  size:4 BE + JSON + FF FF framing. Mean luminance 144→247 (bright)
+  →16 (dark). Full headroom confirmed; 8 KB LUM_RESP_BUF_SIZE on
+  Giga handles the live histogram cleanly.
+
+**Step 3 paused.** SN65HVD230 transceiver killed by reversed
+3.3V/GND wiring. CAN-only test sketch (DJI_Giga_Step3_CAN.ino)
+ready to flash once new transceiver arrives (~5 days).
+
+**Step 7 sketch port (Day 18 second half) — DJI_Ronin_Giga_v2.ino.**
+
+Five open design questions resolved up-front via GIGA_DESIGN.md:
+
+1. **IP addressing during parallel.** Giga 192.168.1.95 on Rosedale
+   (DHCP-reserved by MAC). Uno stays on .97 until retirement.
+   Excel `dataArduinoIP` flips at cutover.
+2. **UI vs camera traffic.** Operator UI + Excel polling on WiFi
+   STA port 80. W5500 wired Ethernet (when arrives) for CCAPI only.
+3. **Shutter pin.** Pin-8 → D7 on Giga. 200ms HIGH pulse discipline
+   verbatim. Sacred; fires on shutter_mode==3 regardless of CCAPI.
+4. **Buffer sizes.** CartLog 64→128, GimbalLog 24→128. Operator's
+   20-50m recon × ~50 events leaves comfortable headroom.
+5. **String allocation.** snprintf for hot paths (/status,
+   /heartbeat, /cameramsg); String OK for cold paths.
+
+Port structure: 8 sections, 5667 lines total. Compiles + runs with
+STUB_CAN defined. All 57 v1prod endpoints ported. Full 3-screen
+browser UI verbatim. Path ordering verified for every startsWith
+chain (showastrooffset before showastro, movewatchdump before
+movewatch, /shutter/* before /shutter, /cartlog/clear before
+/cartlog, etc.).
+
+Section breakdown with Giga deltas:
+- §1 (~370): WiFi.h not WiFiS3.h; STUB_CAN/BNO/W5500 stubs;
+  LUM_HTTP_TIMEOUT_MS 10000→2000; buffer 4096→8192.
+- §2 (~510): Appendix A formula plumbing — no Giga changes.
+- §3 (~460): Buffer sizes bumped per resolved Q4 above.
+- §4 (~500): drainCANRx + sendFrame wrapped in `#ifndef STUB_CAN`.
+  All commands callable; frames built and silently dropped at the
+  sendFrame stub. Pano state machine + movewatch sampler.
+- §5 (~655): ccapiRequest with `\r\n` on outbound headers (Q1
+  resolved via build lesson #1). Binary-frame luminance parse.
+- §6 (~935): Plan executor with #52 time-based completion, at-rest
+  gate, pano helpers, pin-D7 backupShutter.
+- §7 (~200): setup + loop. `Wire.setClock` REMOVED (blocks Giga
+  per Day-18 finding). CAN.begin wrapped. **delay(1) at bottom of
+  loop()** per discipline #2.
+- §8 (~1860): handleHttpRequest body split 8a-8h:
+  - 8a skeleton + status/heartbeat/cameramsg/interval
+  - 8b move/home/gimbal pano/shutter/btn1-22
+  - 8c exposure/* + settings/astropos/trackpath/trackplan
+  - 8d cartlog/gimballog (+ /clear, /push variants)
+  - 8e plan/load/start/stop/status/nudge
+  - 8f gimbal/showastro/snapvar/showastrooffset
+  - 8g 17 debug endpoints (4 early-return + 13 chain)
+  - 8h browser UI catch-all (3 screens, all SVG icons, polling JS)
+
+**Workfront state changes:**
+
+- **#47 (Giga R1 migration) — Step 7 port complete.** Sketch ready
+  to flash. Smoke test against Excel still pending. Real-gimbal
+  validation pending CAN transceiver arrival.
+- **NEW #60 Step 3 transceiver hardware** — bench setup blocked by
+  cooked SN65HVD230. New transceiver in transit (~5 days). DJI_Giga_
+  Step3_CAN.ino sketch ready to flash on arrival. Compiles cleanly;
+  only hardware blocks the test.
+- **NEW #61 v2 build discipline (mbed-os failure modes)** — design
+  doc. Seven risks identified from v1prod patterns that may break
+  on Giga: long blocking calls, String allocation in hot paths,
+  ISR/network collision, no-yield loops, PROGMEM no-op, millis
+  rollover (already handled), no EEPROM. Six defensive disciplines
+  applied during Step 7 port: bounded timeouts ≤2s, delay(1)
+  bottom-of-loop, snprintf for hot paths, CAN RX in ring buffer
+  never network code, document F() no-op, multi-hour soak test
+  before declaring done. Most folded into the sketch; multi-hour
+  soak test still pending (see #63).
+- **NEW #62 Excel Camera.bas dead-code cleanup** — design doc.
+  Cart firmware has owned the per-photo exposure walk since #36b
+  (Day 12). Excel's Camera.bas luminance pipeline + per-photo CCAPI
+  walk is vestigial. Low risk, not blocking. Defer to Giga Excel
+  port pass when every HTTP endpoint is being repointed anyway.
+- **NEW #63 Multi-hour soak test of Giga v2 sketch** — close-out
+  test for #61 build discipline. Run a representative shoot
+  envelope (sunset → sunrise) against the flashed sketch with
+  Excel driving plan execution. Watch for blocking-call stalls,
+  heap fragmentation, mbed-os scheduler starvation, silent
+  WiFi disconnects. Pass criterion: photo cadence within tolerance
+  for the full duration with no LOOP-LONG spam and no
+  reconnects. Blocks on flash + smoke test landing first.
+- **NEW #64 Phase-time terminology cleanup.**
+  `dataPhase2aStart` / `2bStart` / `3Start` / `4aStart` / `4bStart`
+  / `5Start` are jargon from a prior session — not real astronomical
+  terms. They approximate real events (golden hour, civil dusk,
+  nautical dusk, astronomical dawn, civil dawn, sunrise) but the
+  offsets drift seasonally and don't match the standard
+  astrophotography vocabulary. Astro.bas can compute the real
+  events directly via `FindSunCrossing` at the appropriate
+  altitudes (-6° civil, -12° nautical, -18° astronomical). Replace
+  named ranges with real-event names, retire `CalculatePhaseTimes`.
+  Defer to Giga Excel port pass (same window as #62) — every
+  consumer of `dataPhaseXStart` will be reviewed anyway. Not
+  blocking.
+- **NEW #65 mbed WiFi accept() semantics — sketch fix landed.**
+  Day-18 smoke test exposed that Giga's mbed WiFi
+  `wifiServer.available()` is semantically `accept()` — returns
+  the client object as soon as the TCP three-way handshake
+  completes, BEFORE the HTTP request body arrives. v1prod's
+  Uno-WiFiS3 pattern (single-shot `if (client.available())`)
+  saw `req_len=0` always, fell through every if/else, landed in
+  the UI catch-all. Root-caused via ArduinoCore-mbed issue #766
+  (JAndrassy: "available() here works like Ethernet library's
+  accept()"). Fix: replaced single check with a
+  `while (client.connected()) { if (client.available()) ... else
+  delay(1); }` bounded at 2 seconds. Confirmed working: /status,
+  /heartbeat, /settings/astropos, /exposure/load all round-trip
+  cleanly. Documented as Day-18 build lesson #5. CLOSED.
+- **NEW #66 Empty-connection diagnostic cost.** Side-effect of
+  the #65 fix: any TCP socket that lands but never sends a
+  request (browser speculative pre-connect, port scan, stale
+  Excel WinHttp socket) costs ~3000ms wall-clock (2s wait + 1s
+  client.stop tear-down). Cosmetic only — real Excel polling
+  is unaffected and pin-D7 cadence is still guaranteed by the
+  sacred-pin discipline. Long-term: investigate non-blocking
+  accept + pending-client state machine (per ArduinoCore-mbed
+  #76 / #281 idiom — `sock->set_blocking(false)` + persistent
+  client state). Not blocking #63 soak test; revisit if
+  empty-connection rate becomes significant.
+
+**Build lessons from Day 18 (also in PREFERENCES):**
+
+1. **Giga mbed WiFi needs `\r\n` on outbound HTTP headers.** Canon
+   CCAPI rejects bare-LF with 400 + empty body. WiFiS3 was lenient;
+   mbed is strict per RFC. Use `print("...\r\n")` not `println`
+   for headers.
+2. **Giga has three I²C buses.** Pins near AREF are Wire1
+   (silkscreen reads SDA1/SCL1); default Wire is on D20/D21 at the
+   other end of the digital header. Wire1 instance vs Wire: read
+   the pin diagram.
+3. **External pull-ups on Wire are MANDATORY.** Giga doesn't apply
+   internal pull-ups for Wire. 4.7 kΩ to 3V3 — confirmed working.
+4. **`Wire.setClock()` blocks on Giga.** Don't call it. Default
+   100 kHz works fine with proper pull-ups.
+5. **mbed `wifiServer.available()` is `accept()`, not data-ready.**
+   Returns the client object as soon as TCP handshake completes,
+   BEFORE the HTTP request body arrives. v1prod's single-shot
+   `if (client.available())` check saw `req_len=0` always.
+   Canonical mbed pattern is a `while (client.connected())` loop
+   that waits for `client.available()` with `delay(1)` between
+   checks, bounded at 2 seconds. v1prod's Uno-WiFiS3 pattern is
+   NOT portable to mbed. Documented in #65.
+
+Sketch line count after port: 5667 (vs v1prod 6275). Denser, same
+features. All v1prod functionality reachable; CAN/BNO/W5500 paths
+covered by stubs until hardware arrives.
+
+---
+
+
 
 Below is a record of what was tested and verified. Future regression
 tests should re-run these.
@@ -1083,26 +1259,49 @@ showastrooffset (prefix collision). Changed to
 *Status:* cart side ✅ done. Excel side pending — see #55 for
 moon maths, #50-Excel for push button.
 
-**#55 Moon astronomy maths in Excel (NEW Day 17).** Cart side
-(#50) reserved storage for moon rise/set positions. Excel side
-needs `GetMoonAzimuth` / `GetMoonAltitude` / `GetMoonGimbalAngles`
-in Astro.bas, mirroring the existing sun/GC implementations.
-Without this, cart's moon slots stay unpopulated and Show astro
-for Moonrise/Moonset returns "slot not pushed."
+**#55 Moon astronomy maths in Excel — CLOSED Day 18.** Full
+sun-equivalent treatment delivered: local Schlyter low-precision
+ephemeris in Astro.bas (GetMoonPosition + public wrappers),
+FindMoonCrossing/BisectMoonAltitude root finder, AstroPush.bas
+populates mnry/mnrp/mnsy/mnsp on /settings/astropos and adds
+moon as third object to /settings/trackpath. Window selection
+handles all four cases: rise+set in envelope, rise-only,
+set-only (moon up at sunset), neither. Validated against
+timeanddate.com for Adelaide 25-May-2026: local moonset 01:07
+vs timeanddate 01:09 — 2-minute agreement (~0.5° at moon's
+apparent motion), well inside 14mm FOV tolerance.
 
-**#56 Morning astronomical dawn missing in Excel (NEW Day 17).**
-Excel's `GetSunsetTime` API call pulls evening twilight times
-(civil/nautical/astronomical dusk) and stores in named ranges
-dataCivilDusk / dataNauticalDusk / dataAstroDusk. The morning
-equivalents (`civil_twilight_begin`, etc.) are also in the API
-response but not stored. Needed for MW rise/mid/end computation
-(dark window end). Easy fix: extend the parser loop in
-GetSunsetTime and add `dataCivilDawn` / `dataNauticalDawn` /
-`dataAstroDawn` named ranges.
+**Note on data source:** initially planned to use api.sunrisesunset.io
+for moon rise/set times. Cross-check vs timeanddate.com Day 18
+revealed the API was 64 minutes off (reported 02:11 vs
+correct 01:09). Local maths in Astro.bas was 2 min off.
+Local wins on both accuracy and offline operation — API path
+dropped from the design entirely. Zero internet dependency
+for any astronomical computation now (closes part of #57).
+
+End-to-end test (Day 18): PushAstroToCart returned mask=11
+(sun_rise + sun_set + moon_set) with moon_set yaw 274.90° /
+pitch -0.50° — matches timeanddate's 275° azimuth within 0.1°.
+PushTrackPathsToCart pushed sun (4 segs) + moon (4 segs) + MW
+(4 segs) successfully.
+
+**#56 Morning astronomical dawn missing in Excel — PARTIAL Day 18.**
+Sun computation moved fully local Day 18. Astro.bas
+FindSunCrossing(date, targetAlt, dir) computes all 8 sun
+crossings — sunrise/sunset/civil dawn/civil dusk/nautical
+dawn/nautical dusk/astro dawn/astro dusk. GetSunsetTime now
+populates dataSunsetTime/SunriseTime/CivilDawn/CivilDusk/
+NauticalDusk/AstroDusk. Still missing on Settings sheet:
+dataNauticalDawn, dataAstroDawn (need named ranges added).
+Tonight (Day 18) MW push worked using the existing
+sunrise-90min proxy via the +24h workaround. Real fix wants
+the morning twilight ranges populated AND the dark-window
+end-of-dark logic to use dataAstroDawn (tomorrow's) instead
+of dataPhase4aStart. Defer to next pass.
 
 Note: the existing "phase 1-5" scheme in CalculatePhaseTimes is
 internal scaffolding (sunset-anchored offsets, not astronomy);
-don't treat it as authoritative twilight data.
+don't treat it as authoritative twilight data. See #64.
 
 **#57 Shoot-date anchor for Excel astro (NEW Day 17).** Today
 Excel computes everything from `Now()` / today's calendar date.

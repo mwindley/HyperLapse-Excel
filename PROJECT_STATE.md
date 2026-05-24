@@ -1,6 +1,588 @@
 # HyperLapse Cart — Project State
 
-**Last updated:** 23 May 2026 (Session C day 17, **second half** —
+## Session bootstrap — files to load
+
+At the start of every new Claude session, upload these so the
+assistant has full project context:
+
+- PROJECT_STATE.md           — current state, day-by-day narrative
+- WORKFRONTS.md              — open + closed workfronts, traceability
+- PREFERENCES.md             — working style, build lessons, standing rules
+- GIGA_MIGRATION_STRATEGY.md — #47 v2 migration plan (7-step capability demo)
+- DJI_Ronin_UnoR4_v1prod.ino — current production sketch (v1)
+- GIGA_PIN_PLAN.md           — Giga pin assignments + collisions
+
+Optional / on-demand:
+- DJI_Ronin_Giga_v2dev.ino   — v2 dev sketch (once step 6 starts)
+- DJI_Giga_Step3_CAN.ino     — Step 3 CAN-only test sketch (paused)
+- DJI_Giga_Step4_I2C.ino     — Step 4 I²C/Tic test sketch (passed)
+- DJI_Giga_Step5_CCAPI.ino   — Step 5 CCAPI test sketch (passed)
+- WORKFRONTS_old_ver1.md     — archived day 6-11 workfront narrative
+- UI_DESIGN_v2.md            — three-screen UI spec
+- GIMBAL_VIZ.md              — gimbal plan + visualisation reference
+- EXPOSURE_FALLBACK.md       — table-mode + fallback reference
+
+Note: Claude has no cross-session memory. These files ARE the memory.
+
+---
+
+**Last updated:** 24 May 2026 (Session C day 18, full session.
+First half: Giga capability demonstrations (Steps 1, 2, 4, 5
+of GIGA_MIGRATION_STRATEGY) all passed end-to-end. Step 3
+(CAN) paused on cooked SN65HVD230 transceiver. Step 7 v2
+sketch port completed section-by-section across 8 sections,
+~5700 lines.
+Second half: sketch flashed and smoke-tested. mbed WiFi
+accept() semantic bug found and fixed (#65). Excel ↔ Giga
+round-trip validated end-to-end. Workfront #55 (moon astro)
+closed: full sun-equivalent treatment delivered, validated
+against timeanddate.com to within 2 minutes, zero internet
+dependency.
+
+**Steps passed today:**
+- **Step 1** Blink + Serial. Giga R1 selected on COM12, LED blink
+  + Serial.println("alive") at 115200 working.
+- **Step 2** WiFi + HTTP server. After running the one-time
+  WiFiFirmwareUpdater example (Giga ships without WiFi firmware
+  on its onboard storage), SimpleWebServer connected to Rosedale
+  at 192.168.1.116, browser hit OK.
+- **Step 4** I²C / Pololu Tic. Both Tics responded at addresses
+  14 and 15 on the Wire bus (pins 20/21). energize / setVelocity
+  2000000 / read velocity / setVelocity 0 / deenergize cycle
+  worked cleanly on both motors, all getLastError() reads zero.
+  See Build lessons below for the wire-up gotchas.
+- **Step 5** CCAPI. Alive check `GET /ccapi/` returned full
+  endpoint listing; `POST /ccapi/ver100/shooting/control/shutterbutton`
+  with body `{"af":false}` returned 200, photo landed on card.
+  Required two fixes from v1prod's HTTP code: see Build lessons.
+
+**Step 3 paused.** SN65HVD230 transceiver killed by reversed
+3.3V/GND wiring before CAN test could run. CAN-only test sketch
+(DJI_Giga_Step3_CAN.ino) ready to flash once new transceiver
+arrives. Sketch verified Arduino_CAN library compiles fine on
+Giga BSP; only the bench setup is blocked.
+
+**Other infrastructure this session:**
+- GIGA_PIN_PLAN.md created. CAN moves to dedicated CANTX/CANRX
+  pins; I²C confirmed on Wire (pins 20/21); shutter moved D8→D7
+  to free D8 for future Wire2 if ever needed; BNO085 reserved
+  on Serial2 (RX1) UART-RVC; W5500 SPI + D10 + D2 reserved for
+  v2 wired-Ethernet build.
+- Repos moved off OneDrive path. Now at C:\Github\
+  DJI-Ronin-RS4-Arduino and C:\Github\HyperLapse-Excel. Per-repo
+  .git folders moved cleanly; remotes unchanged. Done to remove
+  any future OneDrive-sync interference even though OneDrive was
+  not signed in.
+- Arduino IDE compile/index time on Giga settled to ~30s
+  steady-state after path move and Editor Quick Suggestions
+  remained off. Accepted as Giga's floor (mbed-os is large).
+
+**Build lessons added to PREFERENCES (Day 18):**
+
+1. **Giga mbed WiFi stack needs explicit `\r\n` on HTTP headers.**
+   WiFiS3 on Uno R4 was lenient with bare `\n` from `println`;
+   Canon CCAPI rejects bare-LF requests with 400 + empty body.
+   Use `print("...\r\n")` for every header line. Pattern is RFC
+   2616 — the strict one is correct, the lenient one was lucky.
+   Diagnosed by curl-vs-Giga comparison (curl fired the shutter
+   on first attempt; Giga didn't until headers were fixed).
+
+2. **Giga has three I²C buses; the pins near AREF are Wire1, not
+   Wire.** Silkscreen near AREF reads "SDA1/SCL1" — that's the
+   Wire1 instance. The default `Wire` bus is on pins 20 (SDA)
+   and 21 (SCL) at the other end of the digital header row.
+   Wired the wrong pair initially; bus appeared completely dead
+   until the sketch was changed to `Wire1.begin()` (which then
+   showed BNO085 at 0x4A). Then physically moved wires to pins
+   20/21 to use `Wire` per the original pin plan. Pinout reference
+   confirmed via Adafruit forum and the GIGA datasheet.
+
+3. **Giga's mbed Wire does NOT apply internal pull-ups when the
+   pin switches to peripheral mode.** External 4.7kΩ pull-ups
+   to 3.3V on both SDA and SCL are mandatory. Without them, lines
+   float at ~1.4V (meter impedance reading) and no device acks.
+   `pinMode(20, INPUT_PULLUP)` before `Wire.begin()` is useless —
+   Wire reconfigures the pins.
+
+4. **`Wire.setClock(50000)` blocks the Giga mbed Wire.** The
+   Pololu-recommended "slow clock for marginal pull-ups" advice
+   was for the Uno's I²C stack. On Giga, `setClock(50000)` after
+   `Wire.begin()` causes `Wire.begin()` to hang silently — sketch
+   prints the banner before it but nothing after. Leave default
+   clock; use proper external pull-ups instead.
+
+5. **mbed Wire error codes differ from AVR.** `Wire.endTransmission()`
+   returns `1` for NACK (no device at address), not "data too long"
+   as the standard Arduino docs say. err=1 from a probe = "nothing
+   acked." Don't trust the AVR error-code comments when porting
+   I²C code to Giga.
+
+6. **Phantom device at 0x60 in mbed Wire scans.** With nothing
+   wired to the bus (just pull-ups installed), `Wire.beginTransmission(0x60)`
+   returns success. Harmless — disregard 0x60 in scan results,
+   it is not a real device.
+
+7. **Giga ships without WiFi firmware loaded on internal flash.**
+   First-time Giga WiFi work requires running the
+   STM32H747_System / WiFiFirmwareUpdater example sketch before
+   any WiFi sketch will work. Sketch prints "Failed to mount the
+   filesystem containing the WiFi firmware" if firmware is missing.
+
+8. **Giga 3.3V/GND reversed kills the SN65HVD230 transceiver.**
+   The Uno-tested transceiver breakout was insensitive to which
+   way round 3.3V and GND landed (or it survived a brief reverse).
+   Giga's 3.3V regulator is upstream so the Giga survived a
+   GND/3.3V swap on the transceiver supply pins, but the
+   transceiver itself was cooked. Triple-check VCC/GND on any
+   3.3V breakout before powering.
+
+9. **Arduino IDE 2 indexing penalty after path moves.** Moving
+   the sketch folder (out of OneDrive) caused the language
+   server to fully re-index on next open. First three builds
+   after move: ~60s, ~60s, ~30s. Steady-state thereafter ~30s.
+   Index-time bumps after any sketch-folder relocation are
+   expected; let them complete before opening Serial Monitor.
+
+10. **Giga upload requires double-tap reset to enter DFU mode**
+    when bricked by a crashed sketch. Hard-faulted sketches show
+    a flashing red LED, COM port disappears or changes. Recovery:
+    double-tap the small reset button, watch for fading orange
+    LED, then upload. The COM port often changes between normal
+    mode (e.g. COM12) and DFU mode (e.g. COM11) — re-select
+    Tools → Port after the double-tap.
+
+**Workfront status changes:**
+
+- **#47 Giga R1 migration** — substantial progress. Steps 1, 2,
+  4, 5 of the 7-step capability-demo plan all passed. Step 3
+  paused on transceiver hardware. Step 6 (side-by-side subsystem
+  test) and Step 7 (full port) remain. Migration is now strongly
+  validated for the foundational subsystems; the decision-point
+  Step 6 is the next major checkpoint once Step 3 closes.
+- **#52 I²C cliff** — separate confirmation today that external
+  pull-ups are required on Giga. Day 17's defensive
+  `Wire.setClock(50000)` carryover was wrong for Giga (blocks the
+  bus). Pull-up requirement was always universal; v1prod sidesteps
+  it because Tic 36v4 internal 40kΩ + short wires were just enough
+  on the Uno. On Giga those margins evaporate. Cart-side hardware
+  fix (external 4.7kΩ on SDA/SCL) is no longer optional for v2.
+- **NEW #60 Step 3 transceiver hardware** — one SN65HVD230
+  ordered; spare on hand but reserved for final wire-up after
+  the polarity-kill lesson. No urgency; Step 3 sketch already
+  written and ready.
+- **NEW #61 v2 build discipline — mbed-os failure-mode awareness.**
+  v1prod was written for bare-metal AVR. Several patterns that
+  worked on Uno are latent hazards on Giga's mbed-os. Capturing
+  here so the v2 build (Step 7) avoids the obvious traps.
+
+  *Risk 1 — long blocking calls in `loop()`.* `ccapiRequest` can
+  block up to 10s on a connect-fail. On Uno that just stalls; on
+  Giga the underlying network stack expects to be serviced and
+  may panic or silently drop. v1prod's PROBING state machine
+  sidesteps this by replacing long fetches with 1s pings. If
+  PROBING is dropped in v2 (the wired-Ethernet path makes
+  connect-fail much rarer), the bounded-timeout discipline must
+  still hold — every blocking network call ≤ 2s, with retry at a
+  higher level if needed.
+
+  *Risk 2 — `String` allocation in hot paths.* /status, /cartlog,
+  /gimballog/push all build response strings via repeated
+  `String +=`. AVR newlib heap fragments under this pattern;
+  mbed-os heap is larger and managed differently, so the bug is
+  harder to find but still latent. Multi-hour shoots are where
+  it surfaces. v2 should prefer fixed `char` buffers or
+  `snprintf` for response building in any path that runs more
+  than once per minute.
+
+  *Risk 3 — ISR ↔ blocking network read collision.* v1prod's
+  #48 mechanism A (Day 15) was a CAN RX ISR preempting WiFi
+  `client.read()`. Giga's interrupt + threading model is
+  different but the pattern is unchanged. Arduino_CAN's RX ISR
+  vs mbed's network thread is unspecified territory. Defensive
+  pattern: drain CAN RX FIFO into a ring buffer in the ISR
+  (already what `drainCANRx` does in v1prod) and never call
+  network code from within a CAN-touch path.
+
+  *Risk 4 — tight polling without yield.* `planTick`, the main
+  loop body, runs every iteration with no `delay()` in the
+  common case. On Uno that's fine. On Giga, mbed expects the
+  main thread to yield. A no-yield loop can starve the network
+  stack and cause silent disconnects. v2 should add a `delay(1)`
+  at the bottom of `loop()`, or use mbed's `ThisThread::yield()`.
+
+  *Risk 5 — PROGMEM is a no-op on Giga.* `F("...")` macros around
+  served HTML do nothing on Giga's flat memory model. The
+  strings live in RAM. With 1 MB available it doesn't matter
+  for current usage, but the assumption is silent — a v1prod
+  port that lifts the served-HTML verbatim quietly uses ~30 KB
+  more RAM than the same code did on Uno.
+
+  *Risk 6 — `millis()` rollover.* Identical behaviour on AVR and
+  Giga so long as both sides are `unsigned long`. Day 17 found a
+  related bug; same defensive guards apply.
+
+  *Risk 7 — no EEPROM on Giga.* v1prod doesn't use EEPROM today
+  (Excel pushes Settings) so non-blocking, but anything assuming
+  EEPROM would fail silently on Giga.
+
+  *Defensive disciplines for v2 build:*
+  1. Bounded network timeouts everywhere (≤ 2s, not 10).
+  2. `delay(1)` minimum at the bottom of `loop()`.
+  3. Fixed-buffer `snprintf` for any per-iteration response building.
+  4. CAN RX stays in ring buffer, never calls network code.
+  5. Document `F()` becomes a no-op on Giga; don't rely on PROGMEM
+     for RAM savings.
+  6. Multi-hour soak test before declaring Step 7 done.
+
+- **NEW #62 Excel Camera.bas dead-code cleanup.** Audit performed
+  Day 18 confirmed Camera.bas is largely vestigial — the cart-side
+  exposure walk has been live since #36b (Day 12) and the Excel
+  per-photo CCAPI path is no longer the production code path,
+  even on Uno v1prod. Excel still compiles and runs the dead code
+  if invoked, but `SequenceLoop` and `RunShot` are not the live
+  per-photo loop in current operation.
+
+  *What's dead (Excel side; cart now owns):*
+  - `AdjustExposureByLuminance` (Camera.bas) — cart firmware
+    has its own `adjustExposureByLuminance` (sketch line 3213,
+    called inline from luminance fetch path line 3890).
+  - `KickOffLuminanceCalc`, `KickOffLuminanceFromLastThumb`,
+    `PollLuminanceCalc`, `GetLatestLuminance`, `CalcLuminance`,
+    `FetchLastThumbnailToDisk`, `GetLastThumbnailLuminance`,
+    `SyncWaitForLuminance` — entire Python-thumbnail luminance
+    pipeline. Cart now reads the live histogram via CCAPI
+    `/shooting/liveview/flipdetail?kind=info` and computes mean
+    luminance from the Y histogram inline.
+  - `SetShutterSpeed`, `SetISO`, `SetAperture` — cart issues
+    these PUTs directly. Excel versions only used by the dead
+    AdjustExposureByLuminance path.
+  - `TakePhoto`, `ResetPhotoTimer` — cart fires pin-8
+    autonomously on its own cadence, no Excel call needed.
+  - `RunShot` (Sequence.bas) and most of `SequenceLoop`'s
+    per-photo machinery — pre-#36b architecture.
+
+  *What stays (still live runtime path):*
+  - `InitShoot`, `SystemCheck`, `GetSunsetTime`,
+    `CalculatePhaseTimes`, `CameraReachable`, `ArduinoReachable`
+    — setup and pre-flight.
+  - `GetCartLog`, `GetGimbalLogToSheet`, `ProcessCartLog`,
+    `GenerateReplayPlan` — recon → plan pipeline.
+  - `PushFormulaToCart`, `PushAstroToCart`,
+    `PushTrackPathsToCart` — plan push, one-shot before shoot.
+  - `StartCartReplay`, `RunCartReplayStep` — OnTime-driven
+    Sequence-sheet walker, the live execution path. Issues
+    `/btn{N}`, `/move`, `/home` per row.
+  - `GimbalPosition`, `GimbalHome`, `GimbalHeartbeat`,
+    `GimbalMoveAndWait`, `GetGimbalStatus` — gimbal control.
+  - `CartButton`, `CartSetSpeed`, `CartSetSteering`,
+    `CartStop`, `CartDecay` (Utils.bas) — wrappers used by
+    `RunCartReplayStep`.
+  - `LogEvent`, `ARDUINO_IP`, `CAMERA_IP`, `CCAPI_VER`,
+    `JsonEscape`, `ParseJsonField` — shared utilities.
+  - Astro / BicycleModel / CircleFit / Formula / AstroPush
+    maths — plan authoring.
+
+  *Scope of cleanup:*
+  - Camera.bas: delete the luminance pipeline and the
+    per-photo CCAPI walk. Trim to just `CAMERA_IP`, `CCAPI_VER`,
+    `CameraGet/Put/Post` (useful for setup pre-flight),
+    `InitCamera` (if actually called). Drop `SendHeartbeat`,
+    `UpdateArduinoDisplay`.
+  - Sequence.bas: drop `RunShot` and the per-photo loop
+    structure. Phase machine for plan-baking stays; the runtime
+    photo loop body is dead.
+  - Utils.bas: `InitTvLookup`, `BuildTvLookupFallback`,
+    `NextTv`, `TvToSeconds`, `SecondsToTv`, `CalcInterval` — were
+    used by RunShot, dead if RunShot goes. But Plan authoring
+    (manual Tv selection in Sequence sheet) may still use these
+    — verify before deleting.
+
+  *Risk assessment:* low. The dead code is not on any current
+  production path; removing it changes no runtime behaviour. Main
+  risk is accidentally deleting a helper the Plan-baking side
+  still calls. Mitigation: grep for callers of each candidate
+  before deleting; keep a `Camera_dead.bas` archive in the repo
+  for one release cycle in case something resurfaces.
+
+  *Not blocking.* Workfront exists as documentation of the
+  current architecture vs the code shape. Do during the Giga
+  Excel port (when every HTTP call is being repointed anyway)
+  or any quiet session.
+
+**Day 18 second half — Step 7 v2 sketch port (section-by-section).**
+The migration plan's Step 7 was the verbatim port of v1prod into
+DJI_Ronin_Giga_v2.ino, applying the lessons from Steps 1-5 and the
+defensive disciplines from workfront #61. Sketch went from 0 → 5667
+lines across 8 sections, all source-of-truth ported from
+DJI_Ronin_UnoR4_v1prod.ino with explicit Giga deltas marked inline.
+
+*Open design questions resolved at start of port (per GIGA_DESIGN.md):*
+
+1. **IP addressing during parallel run.** Giga gets 192.168.1.95
+   on Rosedale (DHCP-reserved via MAC). Uno stays on .97 until
+   retirement. At cutover, Excel's `dataArduinoIP` flips from .97
+   to .97 (Giga inherits the address); the .95 is for parallel
+   bench testing without breaking production polling.
+
+2. **Cart UI vs camera traffic split.** Operator UI (browser HTML
+   + Excel /status polling + /btn /move /home plan push) all on
+   WiFi STA port 80. Wired Ethernet via W5500 module (when it
+   arrives) reserved exclusively for camera CCAPI traffic — Tv/ISO
+   PUTs and the 4.5 KB liveview luminance fetch. Cart never serves
+   browser UI over Ethernet.
+
+3. **Shutter pin.** Pin-8 → D7 on Giga (D8 reserved for future
+   Wire2 if ever needed; not a current need). 200ms HIGH pulse
+   discipline carries over verbatim. Sacred pin — fires
+   autonomously on shutter_mode==3 regardless of CCAPI state or
+   Excel connectivity. Wired Ethernet is for CCAPI reliability,
+   NOT for shutter (the pin is the shutter; Ethernet improves
+   the metadata around it).
+
+4. **Buffer sizes.** Operator's 20-50m recon path with handful
+   of turns + ~20 waypoints gives ~50 events worst-case. Uno's
+   CART_LOG_MAX=64 was tight. Giga bumps both CartLog and
+   GimbalLog to 128 — comfortable headroom, trivial SRAM cost
+   on 1 MB.
+
+5. **String allocation policy.** Replace `String` concat with
+   `snprintf` for paths hit more than once a minute (/status,
+   /heartbeat, /cameramsg). Cold paths (/cartlog/clear,
+   /gimballog/push, /settings/astropos) keep String — convenience
+   matters more than per-call cost there.
+
+*Port structure (8 sections):*
+
+- **Section 1 (~370 lines)** — headers, includes, globals, early
+  state. WiFi.h (mbed) not WiFiS3.h. STUB_CAN, STUB_BNO,
+  STUB_WIRED_ETHERNET conditionals at top. LUM_HTTP_TIMEOUT_MS
+  dropped from 10000 to 2000 per discipline #1. CCAPI response
+  buffer raised 4096 → 8192 (validated in Step 5b).
+
+- **Section 2 (~510 lines)** — exposure walk state, TABLE mode,
+  comms-recovery NORMAL/PROBING, Appendix A formula storage +
+  parsers + evaluators (formulaTv, formulaIso, formulaGetParam,
+  parseExposurePayload). No Giga changes.
+
+- **Section 3 (~460 lines)** — global gimbal pose, astro storage
+  (7 yaw/pitch pairs + valid mask), TrackPath / TrackInterval
+  storage, CAN reassembly buffers, CartLog and GimbalLog (both
+  to 128 entries), cart motion helpers (cartUpdateOverdrive,
+  cartApplyVelocity, cartSetSpeed, cartAdjustSpeed, cartStop,
+  cartDeadStop, cartStartDecay, cartApplySteering,
+  cartAdjustSteering, cartEnergise, cartDeenergise).
+
+- **Section 4 (~500 lines)** — CAN frame infrastructure. drainCANRx
+  + sendFrame wrapped in `#ifndef STUB_CAN`. buildFrame
+  library-agnostic. Pano state machine + movewatch sampler.
+  Commands (setPosControl/setSpeedControl/getPosData/enablePush/
+  setFocControl/getFocPosData/cameraControl) — all callable with
+  STUB_CAN; frames built and silently dropped at sendFrame.
+  validateFrame, parsePositionResponse, parseFocusResponse,
+  processCompleteFrame, handleRxMsg, runCRCSelfTest.
+
+- **Section 5 (~655 lines)** — ccapiRequest with CRLF on outbound
+  headers (Step 5b lesson, in-line in build lesson #1 above).
+  PROBING entry on connect-fail preserved (still relevant for
+  WiFi-parallel mode). ccapiStartLiveview / ccapiStopLiveview /
+  tryStartLiveviewIfNeeded. ccapiFetchLuminance with binary-frame
+  parse (FF 00 01 + size:4 BE + JSON + FF FF). nextTv/nextIso
+  ladder walkers. tvStringToSeconds, intervalForTv,
+  applyTvDrivenInterval. adjustExposureByLuminance walk function.
+  parseCcapiMessage, isBusyRetryable, jsonEscapeTv,
+  ccapiPutWithRetry, ccapiPutTv, ccapiPutIso.
+
+- **Section 6 (~935 lines)** — plan executor (planTick #5a M/S/E/D
+  dispatcher + #52 time-based completion + at-rest gate). Pano
+  helpers (panoIssueSlew, panoTick, panoStart). Plan parser
+  (planParseSegment, planLoadFromQuery, planStatusCSV).
+  backupShutter (fires pin D7 with 200ms pulse and readback
+  diagnostic). Exposure init helpers (parseCcapiValue,
+  ccapiGetCurrentTv, ccapiGetCurrentIso, pollCameraEventOnce,
+  initExposureFromCamera). cartLoop housekeeping pulse.
+
+- **Section 7 (~200 lines)** — setup() and loop(). Wire.setClock
+  REMOVED (Day 18 finding: blocks Giga). CAN.begin wrapped in
+  `#ifndef STUB_CAN`. WiFi STA static IP + AP fallback. loop()
+  with diag timing, cartLoop, drainCANRx+dispatch,
+  REQUEST_INTERVAL_MS pose request, 30s keepalive setPosControl
+  (skipped during pano), movewatch sampler, handleHttpRequest
+  delegate, long-iteration detector, **delay(1) at bottom per
+  discipline #2**. Forward declaration of handleHttpRequest.
+
+- **Section 8 (~1860 lines)** — handleHttpRequest body, split
+  into sub-sections 8a-8h:
+
+  - **8a** — skeleton, request parse, favicon, /status (with
+    buildStatusCSV helper), /heartbeat, /cameramsg, /interval.
+  - **8b** — /move, /home, /gimbal/panostatus (before pano),
+    /gimbal/pano, /shutter/start (with anchor diagnostic),
+    /shutter/stop (minimal no-CCAPI per #48), /shutter/pause+
+    /resume, /shutter/status, /shutter/pin8, /shutter, /btn{N}
+    1-22 with cases 13/17 reserved.
+  - **8c** — /exposure/init/load/target/state/walk, /luminance,
+    /settings/astropos (5 yaw/pitch pairs + valid_mask),
+    /settings/trackpath (cubic coefficients per object × seg),
+    /settings/trackplan (intervals + anchor).
+  - **8d** — /cartlog/clear, /gimballog/push, /gimballog,
+    /cartlog (path-ordered for startsWith match).
+  - **8e** — /plan/load/start/stop/status/nudge.
+  - **8f** — /gimbal/showastrooffset, /gimbal/showastro,
+    /gimbal/snapvar (path-ordered).
+  - **8g** — 17 debug endpoints. 4 early-return (/debug/urlsize,
+    formula, ping, trel) placed before /status. 13 response-pattern
+    in the main chain (/debug/fetch* with nested branches,
+    /debug/can, looplong, pathlog, decaytime, trackeval, liveview,
+    reqlog, movewatchdump-before-movewatch, tic, overdrive,
+    poll_camera).
+  - **8h** — browser UI catch-all. Full 3-screen UI verbatim from
+    v1prod (Cart Recon, Gimbal Recon, Execution placeholder),
+    RS4+R3 SVG icons, day palette, all polling JS.
+
+*Sketch state at end of Day 18:*
+
+- 5667 lines (vs v1prod 6275). Slightly shorter — denser comments,
+  same feature set.
+- Compiles + runs with STUB_CAN defined. CAN commands build
+  frames and silently drop. Pose globals stay at 0 unless
+  Serial-poked.
+- All 57 v1prod endpoints ported. Excel-facing surface complete.
+- 3-screen browser UI complete.
+- Path ordering verified for every startsWith chain.
+- Two known limitations until hardware arrives:
+  - Step 3 CAN: needs new SN65HVD230 transceiver
+  - W5500 wired Ethernet: ordered, not yet received
+
+*Pending next steps:*
+
+1. Flash sketch to Giga and smoke test against Excel
+   (status poll, btn1-22, /move, /home, /settings/astropos,
+   /exposure/load round-trip).
+2. Multi-hour soak test once smoke passes (discipline #6).
+3. Step 3 CAN test when transceiver arrives (~5 days).
+4. Step 7 full validation against real gimbal — confirms the
+   STUB_CAN path swaps in cleanly when STUB_CAN is removed.
+5. Workfront #62 Excel Camera.bas cleanup — deferred to Giga
+   Excel port pass.
+
+**Day 18 second half (continued) — Giga smoke test + moon astro
+landed.** Sketch flashed to Giga; smoke test exposed an mbed
+WiFi semantic issue; fixed; then full Excel ↔ Giga validation;
+then workfront #55 (moon astro) closed end-to-end.
+
+*Bug #65 — mbed accept() semantics.* First flash showed every
+HTTP request returning the browser UI catch-all regardless of
+URL — `/status`, `/debug/pathlog?on=0`, even single-purpose
+debug endpoints all rendered the UI. Diagnostic logging added
+to the parse showed `req_len=0` every time — `wifiServer.available()`
+returned a client but `client.available()` returned 0, so the
+read loop never executed and `path` stayed empty. Root cause
+(via web search of ArduinoCore-mbed issues #76, #281, #766):
+mbed's `wifiServer.available()` is semantically `accept()` —
+returns the client as soon as the TCP three-way handshake
+completes, BEFORE the HTTP request body arrives. v1prod's
+single-shot `if (client.available())` was lucky on WiFiS3
+(which buffered the request before returning the client) but
+fails universally on mbed.
+
+Fix: replaced the single-shot check in Section 8a `handleHttpRequest`
+with the canonical mbed idiom — `while (client.connected())`
+loop that polls `client.available()` with `delay(1)` between
+checks, bounded at 2 seconds. If no request line arrives within
+the window, `client.stop()` and return quietly. Confirmed working:
+/status returned the 13-field CSV cleanly. Documented as Day-18
+build lesson #5.
+
+Side-effect (workfront #66): half-open sockets (browser speculative
+pre-connect, port scan, stale Excel WinHttp socket) now cost
+~3000ms wall-clock to detect and close (2s wait + 1s teardown).
+Cosmetic — real Excel polling unaffected, pin-D7 sacred-pin
+guarantee intact. Non-blocking accept + pending-client state
+machine is the long-term cleaner pattern; deferred.
+
+*Excel ↔ Giga smoke test (post-fix).* IP flipped from .95
+(parallel-run) to .97 (Uno retired) per design Q1. Then:
+- `?GetGimbalStatus` → True, 13-field CSV parsed cleanly
+  (gimbal pose 0/0/0 from STUB_CAN, cart fields all defaults)
+- `GimbalHeartbeat` → cart stored 18:19:44 in /status field 3
+- `PushAstroToCart` → 132-char URL parsed, mask=0b1110011
+  (sun rise/set + MW rise/mid/end; moon skipped pending #55)
+- `PushFormulaToCart` → 1384-byte URL parsed cleanly, all
+  126 data points captured (sstv=51, ssiso=12, srtv=49, sriso=14)
+
+Tic + servo physically disconnected (will be reassembled when
+W5500 Ethernet shield arrives in 2+ days); commands return OK
+and log I²C errors but state machines progress.
+
+*Workfront #55 Moon astro — closed end-to-end.* Three modules
+modified to deliver full sun-equivalent treatment for moon:
+
+- `Astro.bas` gained `GetMoonPosition` (Schlyter low-precision
+  ephemeris, ~150 lines, periodic perturbations + parallax),
+  public wrappers (`GetMoonAzimuth/Altitude/AzAltAtTime/GimbalAngles`),
+  `FindSunCrossing` + `BisectSunAltitude` (generic sun-altitude
+  root finder for all twilight phases — closes the internet
+  dependency on api.sunrise-sunset.org), `FindMoonCrossing` +
+  `BisectMoonAltitude` (same for moon).
+
+- `Utils.bas` rewrote `GetSunsetTime` — sun events and all four
+  twilight phases now computed LOCALLY via `FindSunCrossing`;
+  moon rise/set times via `FindMoonCrossing`. Zero internet
+  dependency for any astronomical computation.
+
+- `AstroPush.bas` `PushAstroToCart` adds moon rise/set positions
+  to query string (mnry/mnrp/mnsy/mnsp). Window selection
+  handles all four cases: rise+set in envelope, rise-only,
+  set-only (moon up at sunset), neither. `PushTrackPathsToCart`
+  adds moon as third object; `FitAndPushTrackPath` dispatcher
+  gained a `"moon"` branch using `GetMoonAzAltAtTime`.
+  `N_SEGMENTS` bumped from 2 to 4 (Giga `TRACK_SEGS_MAX = 8`
+  closed #58 SRAM workaround).
+
+*Validation (Adelaide, 24-May-2026):*
+- Local moonset 01:07 vs timeanddate.com 01:09 — **2 minutes**.
+  Within ~0.5° at moon's apparent motion. Inside 14mm FOV
+  tolerance.
+- Initially planned api.sunrisesunset.io as the moon source —
+  cross-check revealed it was **64 minutes off** for the same
+  instant (returned 02:11). Rejected in favour of local maths.
+- End-to-end: `PushAstroToCart` returned mask=11 (sun_rise +
+  sun_set + moon_set; no moonrise since moon was up before
+  sunset tonight). Moon set yaw 274.90° / pitch -0.50° — matches
+  timeanddate's 275° azimuth within 0.1°.
+- `PushTrackPathsToCart` pushed sun (4 segs) + MW (4 segs,
+  with mw seg 2 FREEZE handling Adelaide's near-zenith MW pass)
+  + moon (4 segs). All segments accepted by cart.
+
+*MW push needed a manual `CalculatePhaseTimes` re-run.*
+`dataPhase4aStart` was stale from a previous day's prep —
+symptom of workfront #57 (no shoot-date anchor; everything
+anchored to `Now()`). Worked around for tonight; #57 itself
+remains open.
+
+*Two follow-on workfronts created (Day 18):*
+- **#64 Phase-time terminology cleanup** — `dataPhase2aStart`
+  / `2bStart` / `3Start` / `4aStart` / `4bStart` / `5Start`
+  are jargon from a prior session, not real astronomical
+  terms. Replace with real-event names (golden hour, civil
+  dusk, etc.) computable directly via FindSunCrossing. Defer
+  to Giga Excel port pass alongside #62.
+- **#65 mbed accept() semantics** — DONE this session. Logged
+  for future cross-referencing.
+- **#66 Empty-connection diagnostic cost** — 3-second cost per
+  half-open socket. Cosmetic; revisit if rate becomes significant.
+
+*Sketch state at end of Day 18 (final):*
+- 5711 lines. Compiles + runs at .97. WiFi STA, Excel surface
+  validated, browser UI loads.
+- Bumped `TRACK_SEGS_MAX` from 2 to 8 (closes #58).
+- Section 8a `handleHttpRequest` now uses mbed-correct
+  wait-for-data parse (closes #65).
+- IP flipped from .95 to .97 (Uno retired).
+
+---
+
+**Last updated (legacy entry):** 23 May 2026 (Session C day 17, **second half** —
 workfront #52 (I²C cliff) properly diagnosed and resolved by removing
 the cause, not coping with it. Earlier in the day the cliff was
 "avoided" by throttling planTick's Tic position reads from per-loop

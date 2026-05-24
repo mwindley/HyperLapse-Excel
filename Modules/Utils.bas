@@ -44,107 +44,150 @@ Private g_tvSeconds()  As Double   ' parallel array of float seconds for each
 Private g_tvCount      As Long     ' number of valid entries
 Private g_tvLoaded     As Boolean
 
-' Get today's sunset time as Excel serial (local time)
+' Get today's sunset time as Excel serial (local time).
+'
+' Day 18 (Workfront #55) — rewritten:
+'   - Sun rise/set + all twilight phases computed LOCALLY via
+'     Astro.bas FindSunCrossing.
+'   - Moon rise/set times computed LOCALLY via Astro.bas
+'     FindMoonCrossing. Validated against timeanddate.com to
+'     within 2 minutes; api.sunrisesunset.io was 64 min off
+'     and rejected.
+'   - Zero internet dependency for either sun or moon. Operator
+'     can prepare a shoot offline (closes part of #57).
+'   - Same named ranges as before so downstream code unchanged.
+'     Adds dataMoonriseTime / dataMoonsetTime.
+'
+' Returns sunset time on success, 0 on failure (e.g. polar
+' regions on solstice where sun never crosses the target).
 Public Function GetSunsetTime() As Date
     On Error GoTo ErrHandler
-    
-    Dim lat       As Double
-    Dim lng       As Double
-    Dim utcOffset As Double
-    lat = Sheets("Settings").Range("dataLatitude").value
-    lng = Sheets("Settings").Range("dataLongitude").value
-    utcOffset = Sheets("Settings").Range("dataUTCOffset").value
-    
-    Dim url As String
-    Dim dateStr As String
-    dateStr = Year(Now()) & "-" & Right("0" & Month(Now()), 2) & "-" & Right("0" & Day(Now()), 2)
-    url = "https://api.sunrise-sunset.org/json?lat=" & lat & _
-          "&lng=" & lng & "&date=" & dateStr & "&formatted=0"
-    
-    Dim http As Object
-    'Set http = CreateObject("WinHttp.WinHttpRequest.5.1")
-    'http.Open "GET", url, False
-    'http.Send
-    
-    Set http = CreateObject("WinHttp.WinHttpRequest.5.1")
-    'http.SetAutoProxySetting 1   ' use IE/system proxy settings
-    http.Open "GET", url, False
-    http.Send
 
-    If http.Status <> 200 Then
-        LogEvent "UTILS", "GetSunsetTime HTTP " & http.Status
-        GetSunsetTime = 0
-        Exit Function
-    End If
-    
-    ' Parse sunset from JSON
-    ' Response: {"results":{"sunset":"2026-05-09T08:23:00+00:00",...},"status":"OK"}
-    Dim response As String
-    response = http.ResponseText
-    Set http = Nothing
-    
-    Dim sunsetStr As String
-    sunsetStr = ParseJsonField(response, "sunset")
-    If sunsetStr = "" Then
-        LogEvent "UTILS", "GetSunsetTime: could not parse sunset from response"
-        GetSunsetTime = 0
-        Exit Function
-    End If
-    
-    ' Parse ISO 8601 UTC time and convert to local
-    ' Format: "2026-05-09T08:23:00+00:00"
-    Dim utcTime As Date
-    'utcTime = CDate(Left(sunsetStr, 19))  ' "2026-05-09 08:23:00"
-    utcTime = CDate(Replace(Left(sunsetStr, 19), "T", " "))
-    
-    ' Convert UTC to local time
-    Dim localTime As Date
-    localTime = utcTime + (utcOffset / 24)
-    
-    ' Store sunset
-    Sheets("Settings").Range("dataSunsetTime").value = localTime
-    
-    ' Parse and store all twilight phases from same response
     Dim ws As Worksheet
     Set ws = Sheets("Settings")
-    
-    Dim fields(5) As String
-    Dim names(5) As String
-    fields(0) = "sunrise"
-    fields(1) = "civil_twilight_begin"
-    fields(2) = "civil_twilight_end"
-    fields(3) = "nautical_twilight_end"
-    fields(4) = "astronomical_twilight_end"
-    names(0) = "dataSunriseTime"
-    names(1) = "dataCivilDawn"
-    names(2) = "dataCivilDusk"
-    names(3) = "dataNauticalDusk"
-    names(4) = "dataAstroDusk"
-    
-    Dim k As Integer
-    For k = 0 To 4
-        Dim fStr As String
-        fStr = ParseJsonField(response, fields(k))
-        If fStr <> "" Then
-            Dim fUTC As Date
-            fUTC = CDate(Replace(Left(fStr, 19), "T", " "))
-            Dim fLocal As Date
-            fLocal = fUTC + (utcOffset / 24)
-            ws.Range(names(k)).value = fLocal
-        End If
-    Next k
-    
-    LogEvent "UTILS", "Sunset: " & Format(localTime, "HH:nn:ss") & _
-             " Civil dusk: " & Format(ws.Range("dataCivilDusk").value, "HH:nn:ss") & _
-             " Astro dark: " & Format(ws.Range("dataAstroDusk").value, "HH:nn:ss")
-    GetSunsetTime = localTime
+
+    ' Anchor date for the shoot. Future workfront #57 will read
+    ' dataShootDate; for now default to today.
+    Dim shootDate As Date
+    shootDate = CDate(Int(Now()))    ' midnight today, local
+
+    ' ─── Sun events — local computation ──────────────────────
+    ' Standard altitudes:
+    '   sunrise/sunset      -0.833° (atmospheric refraction)
+    '   civil twilight      -6°
+    '   nautical twilight   -12°
+    '   astronomical twi.   -18°
+    Dim sunriseT     As Date
+    Dim sunsetT      As Date
+    Dim civilDawn    As Date
+    Dim civilDusk    As Date
+    Dim nauticalDawn As Date
+    Dim nauticalDusk As Date
+    Dim astroDawn    As Date
+    Dim astroDusk    As Date
+
+    sunriseT     = FindSunCrossing(shootDate, -0.833,  1)
+    sunsetT      = FindSunCrossing(shootDate, -0.833, -1)
+    civilDawn    = FindSunCrossing(shootDate, -6#,     1)
+    civilDusk    = FindSunCrossing(shootDate, -6#,    -1)
+    nauticalDawn = FindSunCrossing(shootDate, -12#,    1)
+    nauticalDusk = FindSunCrossing(shootDate, -12#,   -1)
+    astroDawn    = FindSunCrossing(shootDate, -18#,    1)
+    astroDusk    = FindSunCrossing(shootDate, -18#,   -1)
+
+    ws.Range("dataSunsetTime").value = sunsetT
+    ws.Range("dataSunriseTime").value = sunriseT
+    ws.Range("dataCivilDawn").value = civilDawn
+    ws.Range("dataCivilDusk").value = civilDusk
+    ws.Range("dataNauticalDusk").value = nauticalDusk
+    ws.Range("dataAstroDusk").value = astroDusk
+
+    LogEvent "UTILS", "Sun (local): rise=" & Format(sunriseT, "HH:nn") & _
+             " set=" & Format(sunsetT, "HH:nn") & _
+             " civDusk=" & Format(civilDusk, "HH:nn") & _
+             " astroDusk=" & Format(astroDusk, "HH:nn")
+
+    ' ─── Moon events — .io API (one or two calls) ─────────────
+    FetchMoonTimesForNight shootDate
+
+    GetSunsetTime = sunsetT
     Exit Function
 ErrHandler:
     MsgBox "GetSunsetTime error: " & Err.Description
     LogEvent "UTILS", "GetSunsetTime error: " & Err.Description
-    
     GetSunsetTime = 0
 End Function
+
+' ============================================================
+' FetchMoonTimesForNight  (Day 18, fully local — no internet)
+'
+' Computes moonrise / moonset times for tonight's shoot envelope
+' using Astro.bas FindMoonCrossing on the local Schlyter
+' ephemeris. Validated Day 18 against timeanddate.com — local
+' maths agreed within 2 minutes (1:07 vs 1:09 for Adelaide
+' 25-May-2026), whereas api.sunrisesunset.io disagreed by 64
+' minutes for the same instant. Local maths wins on accuracy
+' AND removes the internet dependency.
+'
+' Scans the shoot envelope [sunsetTime, sunriseTime+1] for
+' altitude-zero crossings:
+'   moonrise = first rising crossing inside envelope
+'   moonset  = first setting crossing AFTER moonrise (or after
+'              sunset if moon was already up at sunset)
+'
+' Stores results in dataMoonriseTime / dataMoonsetTime. Either
+' may be 0 if no crossing exists in the envelope.
+' ============================================================
+Public Sub FetchMoonTimesForNight(ByVal shootDate As Date)
+    On Error GoTo ErrHandler
+
+    Dim ws As Worksheet
+    Set ws = Sheets("Settings")
+
+    ' Read the shoot envelope set by sun events above
+    Dim shootSunset As Date, shootSunrise As Date
+    shootSunset = ws.Range("dataSunsetTime").value
+    shootSunrise = ws.Range("dataSunriseTime").value
+    ' If sunrise < sunset (typical: shoot crosses midnight), shift +24h
+    If shootSunrise < shootSunset Then shootSunrise = shootSunrise + 1#
+
+    ' Use altitude -0.5° as the horizon definition (matches the
+    ' convention timeanddate.com and most almanacs use — moon's
+    ' upper limb on the horizon, no refraction applied).
+    Const MOON_HORIZON As Double = -0.5
+
+    ' Find moonrise inside the shoot envelope.
+    ' Scan starts at shootSunset, extends to shootSunrise.
+    Dim chosenRise As Date
+    chosenRise = FindMoonCrossing(shootSunset, MOON_HORIZON, 1)
+    ' FindMoonCrossing scans 24h from its start — clamp to envelope
+    If chosenRise > shootSunrise Then chosenRise = 0
+
+    ' Find moonset. Start the scan from chosenRise if we got one,
+    ' or from shootSunset if moon was already up (no rise in window).
+    Dim setScanStart As Date
+    If chosenRise > 0 Then
+        setScanStart = chosenRise
+    Else
+        setScanStart = shootSunset
+    End If
+
+    Dim chosenSet As Date
+    chosenSet = FindMoonCrossing(setScanStart, MOON_HORIZON, -1)
+    ' Clamp: only accept moonset within reasonable window of envelope
+    If chosenSet > shootSunrise + 0.5 Then chosenSet = 0
+
+    ws.Range("dataMoonriseTime").value = chosenRise
+    ws.Range("dataMoonsetTime").value = chosenSet
+
+    LogEvent "UTILS", "Moon (local): rise=" & _
+             IIf(chosenRise = 0, "(none in window)", Format(chosenRise, "HH:nn")) & _
+             " set=" & _
+             IIf(chosenSet = 0, "(none in window)", Format(chosenSet, "HH:nn"))
+    Exit Sub
+ErrHandler:
+    LogEvent "UTILS", "FetchMoonTimesForNight error: " & Err.Description
+End Sub
 
 ' Get today's sunrise time as Excel serial (local time)
 Public Function GetSunriseTime() As Date
