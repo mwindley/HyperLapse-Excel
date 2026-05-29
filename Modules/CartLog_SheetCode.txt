@@ -1,0 +1,63 @@
+' ============================================================
+' CartLog sheet code module — paste this into the VBA editor
+'
+' In the VBA editor (Alt+F11):
+'   1. In the Project Explorer (top-left), find "Microsoft Excel
+'      Objects" under VBAProject(HyperLapse.xlsm)
+'   2. Double-click the entry for the CartLog sheet
+'   3. Paste the code below, REPLACING any previous version
+'   4. Save the workbook
+'
+' Two handlers:
+'
+'   Worksheet_SelectionChange — remembers the last selection that
+'     was on a data row (row >= 2, cols A..F), writing to
+'     Smooth.gLastCartLogSelection.
+'
+'   Worksheet_BeforeDoubleClick — dispatches button-cell clicks to
+'     the matching macro via Buttons.RunButton.
+' ============================================================
+
+Option Explicit
+
+
+' Called whenever the operator clicks/selects on this sheet. We
+' remember selections that look like "data rows" (row >= 2, columns
+' inside A..F) and ignore everything else. The remembered address
+' lives in Smooth.gLastCartLogSelection (Public variable in
+' Smooth.bas) — read by btnSmoothSelection when the operator
+' double-clicks the Smooth Selection button cell.
+Private Sub Worksheet_SelectionChange(ByVal Target As Range)
+    On Error Resume Next
+
+    If Target.Row = 1 Then Exit Sub
+    If Target.Column > 6 Then Exit Sub
+    If Target.Row < 2 Then Exit Sub
+
+    gLastCartLogSelection = Target.Address
+End Sub
+
+
+Private Sub Worksheet_BeforeDoubleClick(ByVal Target As Range, _
+                                          Cancel As Boolean)
+    Dim btnRange As Range
+    On Error Resume Next
+    Set btnRange = Application.Union( _
+        ThisWorkbook.Names("btnSmoothSelection").RefersToRange, _
+        ThisWorkbook.Names("btnCommitSmooth").RefersToRange, _
+        ThisWorkbook.Names("btnDiscardSmooth").RefersToRange)
+    On Error GoTo 0
+    If btnRange Is Nothing Then Exit Sub
+    If Application.Intersect(Target, btnRange) Is Nothing Then Exit Sub
+
+    If Not Application.Intersect(Target, _
+            ThisWorkbook.Names("btnSmoothSelection").RefersToRange) Is Nothing Then
+        Call RunButton(Target, "btnSmoothSelection", Cancel)
+    ElseIf Not Application.Intersect(Target, _
+            ThisWorkbook.Names("btnCommitSmooth").RefersToRange) Is Nothing Then
+        Call RunButton(Target, "btnCommitSmooth", Cancel)
+    ElseIf Not Application.Intersect(Target, _
+            ThisWorkbook.Names("btnDiscardSmooth").RefersToRange) Is Nothing Then
+        Call RunButton(Target, "btnDiscardSmooth", Cancel)
+    End If
+End Sub
