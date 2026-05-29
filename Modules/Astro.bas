@@ -1,13 +1,13 @@
 Attribute VB_Name = "Astro"
 ' ============================================================
-' HyperLapse Cart â€” Astronomical Calculations Module
+' HyperLapse Cart -- Astronomical Calculations Module
 '
 ' Calculates:
 '   1. Sun azimuth and altitude at any time/location
-'      â†’ Used for sunset/sunrise gimbal pointing direction
+'      -> Used for sunset/sunrise gimbal pointing direction
 '
 '   2. Milky Way galactic centre azimuth and altitude
-'      â†’ Used for gimbal tracking during Phase 3
+'      -> Used for gimbal tracking during Phase 3
 '
 ' All calculations use standard spherical astronomy formulae.
 ' Location read from Settings sheet named ranges:
@@ -15,20 +15,20 @@ Attribute VB_Name = "Astro"
 '   dataLongitude  (decimal degrees, negative = west)
 '   dataUTCOffset  (hours)
 '
-' Gimbal yaw is relative to cart heading â€” operator must set
+' Gimbal yaw is relative to cart heading -- operator must set
 ' dataCartHeading (compass bearing the cart is pointing) so
 ' world azimuth can be converted to gimbal-relative yaw.
 '
 ' References:
 '   Jean Meeus, "Astronomical Algorithms" 2nd ed.
-'   Galactic centre: RA 17h 45m 40s, Dec -29Â° 00' 28"
+'   Galactic centre: RA 17h 45m 40s, Dec -29� 00' 28"
 ' ============================================================
 
 Option Explicit
 
 ' â”€â”€ Galactic centre coordinates (J2000) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 Private Const GC_RA_DEG   As Double = 266.4167    ' 17h 45m 40s in degrees
-Private Const GC_DEC_DEG  As Double = -29.0078    ' -29Â° 00' 28"
+Private Const GC_DEC_DEG  As Double = -29.0078    ' -29� 00' 28"
 
 ' â”€â”€ Constants â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 Private Const PI     As Double = 3.14159265358979
@@ -98,12 +98,12 @@ Public Function GetSunGimbalAngles(ByVal atTime As Date, _
     gimbalYaw = AzimuthToGimbalYaw(az, cartHeading)
     gimbalPitch = alt   ' pitch = altitude above horizon
     
-    GetSunGimbalAngles = (alt > -5)  ' True if sun within 5Â° of horizon
+    GetSunGimbalAngles = (alt > -5)  ' True if sun within 5� of horizon
     
     LogEvent "ASTRO", "Sun at " & Format(atTime, "HH:nn:ss") & _
              ": az=" & Format(az, "0.0") & Chr(176) & _
              " alt=" & Format(alt, "0.0") & Chr(176) & _
-             " â†’ yaw=" & Format(gimbalYaw, "0.0") & Chr(176) & _
+             " -> yaw=" & Format(gimbalYaw, "0.0") & Chr(176) & _
              " pitch=" & Format(gimbalPitch, "0.0") & Chr(176)
 End Function
 
@@ -125,12 +125,12 @@ Public Function GetGCGimbalAngles(ByVal atTime As Date, _
     LogEvent "ASTRO", "GC at " & Format(atTime, "HH:nn:ss") & _
              ": az=" & Format(az, "0.0") & Chr(176) & _
              " alt=" & Format(alt, "0.0") & Chr(176) & _
-             " â†’ yaw=" & Format(gimbalYaw, "0.0") & Chr(176) & _
+             " -> yaw=" & Format(gimbalYaw, "0.0") & Chr(176) & _
              " pitch=" & Format(gimbalPitch, "0.0") & Chr(176)
 End Function
 
 ' ============================================================
-' Day 17 additions â€” Workfront #50 push astro
+' Day 17 additions -- Workfront #50 push astro
 '
 ' Public wrappers around the private *Position subs. Use these
 ' when EARTH-frame azimuth + altitude are wanted (e.g. pushing
@@ -169,10 +169,10 @@ Public Sub GenerateGCTable()
     
     ws.Cells.Clear
     ws.Cells(1, 1).value = "Time"
-    ws.Cells(1, 2).value = "GC Az (Â°)"
-    ws.Cells(1, 3).value = "GC Alt (Â°)"
-    ws.Cells(1, 4).value = "Sun Az (Â°)"
-    ws.Cells(1, 5).value = "Sun Alt (Â°)"
+    ws.Cells(1, 2).value = "GC Az ("  & Chr(176) & ")"
+    ws.Cells(1, 3).value = "GC Alt (" & Chr(176) & ")"
+    ws.Cells(1, 4).value = "Sun Az (" & Chr(176) & ")"
+    ws.Cells(1, 5).value = "Sun Alt (" & Chr(176) & ")"
     ws.Cells(1, 6).value = "GC above horizon"
     
     Dim cartHeading As Double
@@ -206,14 +206,14 @@ Public Sub GenerateGCTable()
     ws.Columns(1).NumberFormat = "hh:mm"
     ws.Columns("A:F").AutoFit
     
-    LogEvent "ASTRO", "GC table generated â€” " & (row - 2) & " rows"
+    LogEvent "ASTRO", "GC table generated -- " & (row - 2) & " rows"
     MsgBox "Astro table generated on AstroTable sheet.", vbInformation
 End Sub
 
 ' ============================================================
 ' Sun position calculation
 ' Based on Jean Meeus "Astronomical Algorithms"
-' Accurate to within ~1Â° for dates 2000-2100
+' Accurate to within ~1� for dates 2000-2100
 ' ============================================================
 
 Private Sub GetSunPosition(ByVal atTime As Date, _
@@ -236,16 +236,16 @@ Private Sub GetSunPosition(ByVal atTime As Date, _
     jd = DateToJulian(utcTime)
     
     ' Days since J2000.0
-    Dim N As Double
-    N = jd - 2451545#
+    Dim n As Double
+    n = jd - 2451545#
     
     ' Mean longitude (degrees)
     Dim L As Double
-    L = NormalizeDeg(280.46 + 0.9856474 * N)
+    L = NormalizeDeg(280.46 + 0.9856474 * n)
     
     ' Mean anomaly (degrees)
     Dim g As Double
-    g = NormalizeDeg(357.528 + 0.9856003 * N)
+    g = NormalizeDeg(357.528 + 0.9856003 * n)
     
     ' Ecliptic longitude (degrees)
     Dim lambda As Double
@@ -253,7 +253,7 @@ Private Sub GetSunPosition(ByVal atTime As Date, _
     
     ' Obliquity of ecliptic
     Dim epsilon As Double
-    epsilon = 23.439 - 0.0000004 * N
+    epsilon = 23.439 - 0.0000004 * n
     
     ' Right ascension and declination
     Dim ra As Double     ' degrees
@@ -265,7 +265,7 @@ Private Sub GetSunPosition(ByVal atTime As Date, _
     
     ' Greenwich Mean Sidereal Time (degrees)
     Dim gmst As Double
-    gmst = NormalizeDeg(280.46061837 + 360.98564736629 * N)
+    gmst = NormalizeDeg(280.46061837 + 360.98564736629 * n)
     
     ' Local Sidereal Time
     Dim lst As Double
@@ -305,12 +305,12 @@ Private Sub GetGCPosition(ByVal atTime As Date, _
     jd = DateToJulian(utcTime)
     
     ' Days since J2000.0
-    Dim N As Double
-    N = jd - 2451545#
+    Dim n As Double
+    n = jd - 2451545#
     
     ' Greenwich Mean Sidereal Time (degrees)
     Dim gmst As Double
-    gmst = NormalizeDeg(280.46061837 + 360.98564736629 * N)
+    gmst = NormalizeDeg(280.46061837 + 360.98564736629 * n)
     
     ' Local Sidereal Time
     Dim lst As Double
@@ -362,11 +362,11 @@ End Sub
 
 ' Convert Excel date/time to Julian Day Number
 Private Function DateToJulian(ByVal dt As Date) As Double
-    Dim y As Integer, M As Integer, D As Integer
+    Dim y As Integer, M As Integer, d As Integer
     Dim hr As Double, mn As Double, sc As Double
     y = Year(dt)
     M = Month(dt)
-    D = Day(dt)
+    d = Day(dt)
     hr = Hour(dt)
     mn = Minute(dt)
     sc = Second(dt)
@@ -376,13 +376,13 @@ Private Function DateToJulian(ByVal dt As Date) As Double
         M = M + 12
     End If
     
-    Dim A As Long, B As Long
-    A = Int(y / 100)
-    B = 2 - A + Int(A / 4)
+    Dim a As Long, B As Long
+    a = Int(y / 100)
+    B = 2 - a + Int(a / 4)
     
     DateToJulian = Int(365.25 * (y + 4716)) + _
                    Int(30.6001 * (M + 1)) + _
-                   D + B - 1524.5 + _
+                   d + B - 1524.5 + _
                    (hr + mn / 60# + sc / 3600#) / 24#
 End Function
 
@@ -392,7 +392,7 @@ Private Function NormalizeDeg(ByVal deg As Double) As Double
     If NormalizeDeg < 0 Then NormalizeDeg = NormalizeDeg + 360#
 End Function
 
-' VBA Asin â€” not built in
+' VBA Asin -- not built in
 Private Function Asin(ByVal x As Double) As Double
     If Abs(x) = 1 Then
         Asin = PI / 2 * Sgn(x)
@@ -401,7 +401,7 @@ Private Function Asin(ByVal x As Double) As Double
     End If
 End Function
 
-' VBA Acos â€” not built in
+' VBA Acos -- not built in
 Private Function Acos(ByVal x As Double) As Double
     If Abs(x) = 1 Then
         Acos = (1 - x) * PI / 2
@@ -410,7 +410,7 @@ Private Function Acos(ByVal x As Double) As Double
     End If
 End Function
 
-' VBA Atan2 â€” not built in
+' VBA Atan2 -- not built in
 Private Function Atn2(ByVal y As Double, ByVal x As Double) As Double
     If x > 0 Then
         Atn2 = Atn(y / x)
@@ -463,15 +463,26 @@ Public Sub GetMoonAzAltAtTime(ByVal atTime As Date, _
     GetMoonPosition atTime, az, alt
 End Sub
 
-' Wraps GetMoonPosition + AzimuthToGimbalYaw for plan authoring
+' Calculate gimbal yaw and pitch to point at moon at given time
+' cartHeading: compass bearing the cart faces (degrees)
+' Returns True if moon is above horizon
 Public Function GetMoonGimbalAngles(ByVal atTime As Date, _
-                                     ByRef yaw As Double, _
-                                     ByRef pitch As Double) As Boolean
+                                     ByVal cartHeading As Double, _
+                                     ByRef gimbalYaw As Double, _
+                                     ByRef gimbalPitch As Double) As Boolean
     Dim az As Double, alt As Double
     GetMoonPosition atTime, az, alt
-    yaw = AzimuthToGimbalYaw(az)
-    pitch = alt
-    GetMoonGimbalAngles = True
+
+    gimbalYaw = AzimuthToGimbalYaw(az, cartHeading)
+    gimbalPitch = alt
+
+    GetMoonGimbalAngles = (alt > -5)  ' True if moon within 5� of horizon
+
+    LogEvent "ASTRO", "Moon at " & Format(atTime, "HH:nn:ss") & _
+             ": az=" & Format(az, "0.0") & Chr(176) & _
+             " alt=" & Format(alt, "0.0") & Chr(176) & _
+             " -> yaw=" & Format(gimbalYaw, "0.0") & Chr(176) & _
+             " pitch=" & Format(gimbalPitch, "0.0") & Chr(176)
 End Function
 
 ' ─── Moon position core ──────────────────────────────────────
@@ -558,10 +569,10 @@ Private Sub GetMoonPosition(ByVal atTime As Date, _
     Ls = NormalizeDeg(ws_ + Ms)                       ' Sun mean longitude
     Lm = NormalizeDeg(NN + w + M)                      ' Moon mean longitude
 
-    Dim Mm As Double, Dm As Double, F As Double
+    Dim Mm As Double, Dm As Double, f As Double
     Mm = M                                              ' Moon mean anomaly
     Dm = NormalizeDeg(Lm - Ls)                          ' Mean elongation
-    F = NormalizeDeg(Lm - NN)                          ' Argument of latitude
+    f = NormalizeDeg(Lm - NN)                          ' Argument of latitude
 
     ' Longitude perturbations (degrees) — only the largest terms
     Dim dLon As Double
@@ -579,11 +590,11 @@ Private Sub GetMoonPosition(ByVal atTime As Date, _
 
     ' Latitude perturbations (degrees) — largest terms
     Dim dLat As Double
-    dLat = -0.173 * Sin((F - 2 * Dm) * DEG2RAD) _
-         - 0.055 * Sin((Mm - F - 2 * Dm) * DEG2RAD) _
-         - 0.046 * Sin((Mm + F - 2 * Dm) * DEG2RAD) _
-         + 0.033 * Sin((F + 2 * Dm) * DEG2RAD) _
-         + 0.017 * Sin((2 * Mm + F) * DEG2RAD)
+    dLat = -0.173 * Sin((f - 2 * Dm) * DEG2RAD) _
+         - 0.055 * Sin((Mm - f - 2 * Dm) * DEG2RAD) _
+         - 0.046 * Sin((Mm + f - 2 * Dm) * DEG2RAD) _
+         + 0.033 * Sin((f + 2 * Dm) * DEG2RAD) _
+         + 0.017 * Sin((2 * Mm + f) * DEG2RAD)
     eclLat = eclLat + dLat
 
     ' Convert ecliptic lon/lat to equatorial RA/Dec

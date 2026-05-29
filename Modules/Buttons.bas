@@ -1,22 +1,22 @@
 Attribute VB_Name = "Buttons"
 ' ============================================================
-' HyperLapse Cart — Buttons Module
+' HyperLapse Cart â€” Buttons Module
 '
 ' PURPOSE
 '   Shared helpers for the "double-click a cell to run a macro"
 '   pattern used on the Control sheet. Provides:
 '
-'     RunButton         — orange → action → blue / yellow colour
+'     RunButton         â€” orange â†’ action â†’ blue / yellow colour
 '                         cycle wrapper. Called from the
 '                         Worksheet_BeforeDoubleClick handler on
 '                         the Control sheet.
-'     CellFormat        — apply one of a small palette of named
+'     CellFormat        â€” apply one of a small palette of named
 '                         styles to a cell (Blue, Orange, Yellow,
 '                         Green, Grey, etc.). Carried over from
 '                         prior projects.
-'     AllBorder         — uniform thin border on all four edges
+'     AllBorder         â€” uniform thin border on all four edges
 '                         and the inside grid.
-'     BuildControlSheet — one-shot setup: create the Control sheet,
+'     BuildControlSheet â€” one-shot setup: create the Control sheet,
 '                         lay out the button cells, name them, and
 '                         apply the default Blue style. Run once
 '                         after importing this module.
@@ -25,15 +25,15 @@ Attribute VB_Name = "Buttons"
 Option Explicit
 
 ' ============================================================
-' Public — called from sheet double-click handlers
+' Public â€” called from sheet double-click handlers
 ' ============================================================
 
 ' Run a macro on behalf of a "button" cell, with the visual feedback
 ' cycle: orange while running, blue on success, yellow on error.
 '
-' Target  — the cell that was double-clicked (becomes the button face)
-' macroName — name of a Public Sub callable via Application.Run
-' Cancel  — pass through the Cancel ByRef arg from the event handler;
+' Target  â€” the cell that was double-clicked (becomes the button face)
+' macroName â€” name of a Public Sub callable via Application.Run
+' Cancel  â€” pass through the Cancel ByRef arg from the event handler;
 '           we set it True so Excel doesn't put the cell into edit mode.
 Public Sub RunButton(ByVal Target As Range, _
                      ByVal macroName As String, _
@@ -63,11 +63,11 @@ Public Sub RunButton(ByVal Target As Range, _
 End Sub
 
 ' ============================================================
-' Cell formatting — port from prior projects
+' Cell formatting â€” port from prior projects
 ' ============================================================
 
 ' Apply uniform thin borders on all edges + interior of a range.
-' colorIdx — Excel colour index (0 = automatic, 2 = white, etc.)
+' colorIdx â€” Excel colour index (0 = automatic, 2 = white, etc.)
 Public Sub AllBorder(ByVal myCell As Range, ByVal colorIdx As Integer)
     myCell.Borders(xlDiagonalDown).LineStyle = xlNone
     myCell.Borders(xlDiagonalUp).LineStyle = xlNone
@@ -116,7 +116,7 @@ Public Sub CellFormat(ByVal myCell As Range, ByVal myFormat As String)
         Case "FormatWhite"
             myFill = 16777215:  myFont = 0: myBorder = 0
         Case Else
-            ' Unknown style — leave cell alone
+            ' Unknown style â€” leave cell alone
             Exit Sub
     End Select
     
@@ -126,10 +126,10 @@ Public Sub CellFormat(ByVal myCell As Range, ByVal myFormat As String)
 End Sub
 
 ' ============================================================
-' One-shot setup — build the Control sheet
+' One-shot setup â€” build the Control sheet
 ' ============================================================
 
-' Create the Control sheet, lay out the 8 button cells, name them,
+' Create the Control sheet, lay out the button cells, name them,
 ' and apply the default Blue (idle) style. Safe to run multiple times:
 ' if the sheet already exists, you'll be asked whether to rebuild it.
 Public Sub BuildControlSheet()
@@ -137,16 +137,24 @@ Public Sub BuildControlSheet()
     
     ' Button definitions: label text + named-range name.
     ' Order here = vertical layout order on the sheet.
-    Dim btns(0 To 8, 0 To 1) As String
-    btns(0, 0) = "System Check":       btns(0, 1) = "btnSystemCheck"
-    btns(1, 0) = "Init Shoot":         btns(1, 1) = "btnInitShoot"
-    btns(2, 0) = "Start Sequence":     btns(2, 1) = "btnStartSequence"
-    btns(3, 0) = "Stop Sequence":      btns(3, 1) = "btnStopSequence"
-    btns(4, 0) = "Get Sunset Time":    btns(4, 1) = "btnGetSunsetTime"
-    btns(5, 0) = "Generate GC Table":  btns(5, 1) = "btnGenerateGCTable"
-    btns(6, 0) = "Integrate Bicycle":  btns(6, 1) = "btnIntegrateBicycle"
-    btns(7, 0) = "Export Modules":     btns(7, 1) = "btnExportModules"
-    btns(8, 0) = "Import Modules":     btns(8, 1) = "btnImportModules"
+    ' Day-9 late evening: added btnInitFallbackFormula and btnPushFormula
+    ' for the simple-formula CCAPI fallback (WORKFRONTS #36 / #36a).
+    Dim btns(0 To 14, 0 To 1) As String
+    btns(0, 0) = "System Check":            btns(0, 1) = "btnSystemCheck"
+    btns(1, 0) = "Init Shoot":              btns(1, 1) = "btnInitShoot"
+    btns(2, 0) = "Start Sequence":          btns(2, 1) = "btnStartSequence"
+    btns(3, 0) = "Stop Sequence":           btns(3, 1) = "btnStopSequence"
+    btns(4, 0) = "Get Sunset Time":         btns(4, 1) = "btnGetSunsetTime"
+    btns(5, 0) = "Generate GC Table":       btns(5, 1) = "btnGenerateGCTable"
+    btns(6, 0) = "Integrate Bicycle":       btns(6, 1) = "btnIntegrateBicycle"
+    btns(7, 0) = "Init Fallback Formula":   btns(7, 1) = "btnInitFallbackFormula"
+    btns(8, 0) = "Push Formula to Cart":    btns(8, 1) = "btnPushFormula"
+    btns(9, 0) = "Init Calibration Sheet":  btns(9, 1) = "btnInitCalibration"
+    btns(10, 0) = "Match Waypoints to Log": btns(10, 1) = "btnMatchWaypoints"
+    btns(11, 0) = "Export Modules":         btns(11, 1) = "btnExportModules"
+    btns(12, 0) = "Import Modules":         btns(12, 1) = "btnImportModules"
+    btns(13, 0) = "Push Astro to Cart":     btns(13, 1) = "btnPushAstro"
+    btns(14, 0) = "Push Track Paths to Cart": btns(14, 1) = "btnPushTrack"
     
     ' Find or (re)create the sheet
     Dim ws As Worksheet

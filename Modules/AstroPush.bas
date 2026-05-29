@@ -1,6 +1,6 @@
 Attribute VB_Name = "AstroPush"
 ' ============================================================
-' HyperLapse Cart â€” AstroPush module
+' HyperLapse Cart â€” AstroPush module (Day 17, Workfront #50)
 '
 ' PURPOSE
 '   Pushes today's astro keypoint positions to the cart's
@@ -11,11 +11,11 @@ Attribute VB_Name = "AstroPush"
 ' WHAT GETS PUSHED
 '   Sun rise:  yaw/pitch (azimuth + altitude at dataSunriseTime)
 '   Sun set:   yaw/pitch (azimuth + altitude at dataSunsetTime)
-'   Moon rise: yaw/pitch (Day 18, Workfront #55) at dataMoonriseTime
-'   Moon set:  yaw/pitch (Day 18, Workfront #55) at dataMoonsetTime
 '   MW rise:   first moment in dark window where MW core alt > 0
 '   MW mid:    time of max MW core altitude within dark window
 '   MW end:    last moment in dark window where MW core alt > 0
+'   Moon:      NOT PUSHED (deferred per Workfront #55 â€” no moon
+'              maths in Astro.bas yet).
 '
 ' FRAME
 '   Yaw values pushed are EARTH FRAME (real-world azimuth, 0Â°=N).
@@ -28,10 +28,6 @@ Attribute VB_Name = "AstroPush"
 '   End   = dataPhase4aStart (proxy for astronomical dawn until
 '           Workfront #56 lands).
 '   MW rise/mid/end are intersected with this window.
-'   Moon rise/set are intersected with the shoot envelope
-'   [sunset, sunrise] by Utils.FetchMoonTimesForNight using
-'   local Schlyter ephemeris (validated to within 2 min vs
-'   timeanddate.com).
 ' ============================================================
 
 Option Explicit
@@ -90,31 +86,7 @@ Public Sub PushAstroToCart()
     LogEvent "ASTROPUSH", "Sun set   yaw=" & Format(sunSetAz, "0.0") & _
              " pitch=" & Format(sunSetAlt, "0.0")
 
-    ' --- 3. Moon rise / set positions (Day 18, Workfront #55) -------------
-    Dim moonriseTime As Date, moonsetTime As Date
-    moonriseTime = setSheet.Range("dataMoonriseTime").value
-    moonsetTime = setSheet.Range("dataMoonsetTime").value
-
-    Dim moonRiseAz As Double, moonRiseAlt As Double
-    Dim moonSetAz As Double, moonSetAlt As Double
-    Dim moonRiseOK As Boolean, moonSetOK As Boolean
-    moonRiseOK = False: moonSetOK = False
-    If moonriseTime > 0 Then
-        GetMoonAzAltAtTime moonriseTime, moonRiseAz, moonRiseAlt
-        moonRiseOK = True
-        LogEvent "ASTROPUSH", "Moon rise " & Format(moonriseTime, "HH:nn") & _
-                 " yaw=" & Format(moonRiseAz, "0.0") & _
-                 " pitch=" & Format(moonRiseAlt, "0.0")
-    End If
-    If moonsetTime > 0 Then
-        GetMoonAzAltAtTime moonsetTime, moonSetAz, moonSetAlt
-        moonSetOK = True
-        LogEvent "ASTROPUSH", "Moon set  " & Format(moonsetTime, "HH:nn") & _
-                 " yaw=" & Format(moonSetAz, "0.0") & _
-                 " pitch=" & Format(moonSetAlt, "0.0")
-    End If
-
-    ' --- 4. MW rise / mid / end within dark window -------------------------
+    ' --- 3. MW rise / mid / end within dark window -------------------------
     Dim mwRiseTime As Date, mwMidTime As Date, mwEndTime As Date
     Dim mwRiseAz As Double, mwRiseAlt As Double
     Dim mwMidAz As Double, mwMidAlt As Double
@@ -139,20 +111,12 @@ Public Sub PushAstroToCart()
                  " yaw=" & Format(mwEndAz, "0.0") & " pitch=" & Format(mwEndAlt, "0.0")
     End If
 
-    ' --- 5. Build URL ------------------------------------------------------
+    ' --- 4. Build URL ------------------------------------------------------
     Dim qs As String
     qs = "?sry=" & Format(sunRiseAz, "0.00") & _
          "&srp=" & Format(sunRiseAlt, "0.00") & _
          "&ssy=" & Format(sunSetAz, "0.00") & _
          "&ssp=" & Format(sunSetAlt, "0.00")
-    If moonRiseOK Then
-        qs = qs & "&mnry=" & Format(moonRiseAz, "0.00") & _
-                  "&mnrp=" & Format(moonRiseAlt, "0.00")
-    End If
-    If moonSetOK Then
-        qs = qs & "&mnsy=" & Format(moonSetAz, "0.00") & _
-                  "&mnsp=" & Format(moonSetAlt, "0.00")
-    End If
     If mwOK Then
         qs = qs & _
              "&mry=" & Format(mwRiseAz, "0.00") & _
@@ -163,7 +127,7 @@ Public Sub PushAstroToCart()
              "&mep=" & Format(mwEndAlt, "0.00")
     End If
 
-    ' --- 6. HTTP push ------------------------------------------------------
+    ' --- 5. HTTP push ------------------------------------------------------
     Dim http As Object
     Set http = CreateObject("WinHttp.WinHttpRequest.5.1")
     Dim url As String
@@ -181,23 +145,9 @@ Public Sub PushAstroToCart()
 
     If sc = 200 Then
         LogEvent "ASTROPUSH", "OK " & respText
-        Dim moonLine As String
-        If moonRiseOK And moonSetOK Then
-            moonLine = "Moon rise: " & Format(moonRiseAz, "0.0") & "Â° / " & Format(moonRiseAlt, "0.0") & "Â°" & vbCrLf & _
-                       "Moon set:  " & Format(moonSetAz, "0.0") & "Â° / " & Format(moonSetAlt, "0.0") & "Â°" & vbCrLf
-        ElseIf moonRiseOK Then
-            moonLine = "Moon rise: " & Format(moonRiseAz, "0.0") & "Â° / " & Format(moonRiseAlt, "0.0") & "Â°" & vbCrLf & _
-                       "Moon set:  (not in window)" & vbCrLf
-        ElseIf moonSetOK Then
-            moonLine = "Moon rise: (not in window)" & vbCrLf & _
-                       "Moon set:  " & Format(moonSetAz, "0.0") & "Â° / " & Format(moonSetAlt, "0.0") & "Â°" & vbCrLf
-        Else
-            moonLine = "Moon: not in shoot window" & vbCrLf
-        End If
         MsgBox "Astro pushed to cart." & vbCrLf & vbCrLf & _
                "Sun rise:  " & Format(sunRiseAz, "0.0") & "Â° / " & Format(sunRiseAlt, "0.0") & "Â°" & vbCrLf & _
                "Sun set:   " & Format(sunSetAz, "0.0") & "Â° / " & Format(sunSetAlt, "0.0") & "Â°" & vbCrLf & _
-               moonLine & _
                IIf(mwOK, _
                   "MW rise:   " & Format(mwRiseAz, "0.0") & "Â° / " & Format(mwRiseAlt, "0.0") & "Â°" & vbCrLf & _
                   "MW mid:    " & Format(mwMidAz, "0.0") & "Â° / " & Format(mwMidAlt, "0.0") & "Â°" & vbCrLf & _
@@ -225,10 +175,7 @@ End Sub
 ' Windows:
 '   sun:  sunset â†’ sunrise (next day if needed)
 '   mw:   astroDusk â†’ darkEnd (next day if needed)
-'   moon: moonrise â†’ moonset (Day 18, Workfront #55).
-'         Times resolved by Utils.FetchMoonTimesForNight which
-'         intersects api.sunrisesunset.io results against the
-'         shoot envelope.
+'   moon: NOT PUSHED (deferred per #55)
 ' ============================================================
 Public Sub PushTrackPathsToCart()
     LogEvent "TRACKPUSH", "=== PushTrackPathsToCart ==="
@@ -258,7 +205,7 @@ Public Sub PushTrackPathsToCart()
     Dim t0 As Date
     t0 = Now()
 
-    ' Sun: fit cubic over sunset → sunrise window
+    ' Sun: fit cubic over sunset â†’ sunrise window
     Dim sunOK As Boolean
     sunOK = FitAndPushTrackPath("sun", t0, sunsetTime, sunriseTime, arduinoIP)
 
@@ -266,45 +213,10 @@ Public Sub PushTrackPathsToCart()
     Dim mwOK As Boolean
     mwOK = FitAndPushTrackPath("mw", t0, astroDusk, darkEnd, arduinoIP)
 
-    ' Moon (Day 18, Workfront #55): fit cubic over the moon's
-    ' arc within the shoot envelope.
-    '
-    ' Window selection:
-    '   - moonrise + moonset both in window: rise → set
-    '   - only moonrise: rise → sunrise+1d (shoot end)
-    '   - only moonset (moon up at sunset): sunset → set
-    '   - neither: skip
-    Dim moonOK As Boolean
-    Dim moonriseTime As Date, moonsetTime As Date
-    moonriseTime = setSheet.Range("dataMoonriseTime").value
-    moonsetTime = setSheet.Range("dataMoonsetTime").value
-    moonOK = False
-    Dim moonReason As String
-    moonReason = ""
-
-    Dim moonWinStart As Date, moonWinEnd As Date
-    moonWinStart = 0: moonWinEnd = 0
-    If moonriseTime > 0 And moonsetTime > 0 And moonsetTime > moonriseTime Then
-        moonWinStart = moonriseTime
-        moonWinEnd = moonsetTime
-    ElseIf moonriseTime > 0 Then
-        moonWinStart = moonriseTime
-        moonWinEnd = sunriseTime    ' rise to shoot end
-    ElseIf moonsetTime > 0 Then
-        moonWinStart = sunsetTime   ' shoot start to set
-        moonWinEnd = moonsetTime
-    End If
-
-    If moonWinEnd > moonWinStart And moonWinEnd > 0 Then
-        moonOK = FitAndPushTrackPath("moon", t0, moonWinStart, moonWinEnd, arduinoIP)
-    Else
-        moonReason = "not in window"
-    End If
-
     Dim summary As String
-    summary = "Sun:  " & IIf(sunOK, "pushed", "FAILED") & vbCrLf & _
-              "MW:   " & IIf(mwOK, "pushed", "FAILED") & vbCrLf & _
-              "Moon: " & IIf(moonOK, "pushed", IIf(moonReason <> "", moonReason, "FAILED"))
+    summary = "Sun: " & IIf(sunOK, "pushed", "FAILED") & vbCrLf & _
+              "MW:  " & IIf(mwOK, "pushed", "FAILED") & vbCrLf & _
+              "Moon: skipped (#55 pending)"
     MsgBox summary, vbInformation, "Push Track Paths to Cart"
 End Sub
 
@@ -317,12 +229,11 @@ Private Function FitAndPushTrackPath(ByVal objName As String, _
                                       ByVal winEnd As Date, _
                                       ByVal arduinoIP As String) As Boolean
 
-    ' Number of segments per object. Giga firmware allows up to 8
-    ' (TRACK_SEGS_MAX bumped from 2 to 8 on Day 18 — closed #58).
-    ' Use 4 by default — comfortable headroom, low yaw residual,
-    ' and well inside the cart's storage limit. Bump higher per
-    ' object if residuals are visible (CheckTrackFitResiduals).
-    Const N_SEGMENTS As Long = 4
+    ' Number of segments per object. 4 is the cart's SRAM-imposed limit
+    ' (TRACK_SEGS_MAX in firmware). With 3-hour segments over a 12-hour
+    ' window the cubic still struggles near MW zenith — accuracy may
+    ' degrade there; verify with CheckTrackFitResiduals.
+    Const N_SEGMENTS As Long = 2
 
     ' Sample resolution within each segment.
     Const STEP_MIN As Double = 5
@@ -368,8 +279,6 @@ Private Function FitAndPushTrackPath(ByVal objName As String, _
                 GetSunAzAltAtTime t, az, alt
             ElseIf objName = "mw" Then
                 GetGCAzAltAtTime t, az, alt
-            ElseIf objName = "moon" Then
-                GetMoonAzAltAtTime t, az, alt
             Else
                 FitAndPushTrackPath = False
                 Exit Function
