@@ -54,3 +54,10 @@ __pycache__/
 # Anything you keep next to the workbook for your own use only.
 # Drop files into a /local folder and they'll stay off GitHub.
 /local/
+
+# --- Bundled tools / generated outputs (Day 23 cleanup) ---
+exiftool.exe
+exiftool_files/
+*.log
+exif.csv
+exposure_feb_decoded.csv
