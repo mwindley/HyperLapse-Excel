@@ -1,13 +1,15 @@
-# CCAPI Fallback — Table-Driven Exposure Continuity
+# Exposure Fallback — Table-Driven Exposure Continuity
 
 **Status:** Design document. No firmware or Excel code yet.
 **Created:** 15 May 2026 (Session C day 9).
-**Companion files:** REFERENCE_DATA.md (the table itself), WORKFRONTS.md (queued tasks), PROJECT_STATE.md (handoff).
+**Supersedes:** `CCAPI_FALLBACK.md`, `WORKFRONT_36.md`, `OLD_SUN_TABLE.md` (all folded in here).
+**Companion files:** `WORKFRONTS.md` (queued tasks under "Exposure fallback + validation"), `PROJECT_STATE.md` (handoff).
 
 This document captures a fallback design for exposure control when CCAPI
-luminance fetches become unreliable or unavailable. Hand-off to future
-sessions: read this end-to-end; don't assume the design transcript is
-available.
+luminance fetches become unreliable or unavailable, together with the
+validation method for refining the underlying rate table from real-shoot
+exposure exports. Hand-off to future sessions: read this end-to-end;
+don't assume the design transcript is available.
 
 ---
 
@@ -52,6 +54,18 @@ A fallback strategy that:
 - **Never drops a photo** because of CCAPI state — the photo cadence
   remains sacred, governed by the existing pin-8 + Tv+1.5s rule.
 
+### The learning loop in one sentence
+
+**Every successful CCAPI-driven shoot improves the fallback table
+used the next time CCAPI fails.** CCAPI in production is the
+measurement instrument; the rate table is the predictor that runs
+when the instrument is unavailable. Each CCAPI shoot's EXIF Tv/ISO
+is a real-world (EV, t_rel) sample. Aggregating these refines the
+predictor. Fallback episodes get shorter and more graceful over
+time as a direct consequence of normal production use. See §5 for
+the curation and shoot-type discipline that protects this loop
+from self-referential corruption.
+
 ---
 
 ## 2. Foundational insights from investigation
@@ -74,9 +88,9 @@ is approximate. CCAPI is a refinement, not a hard dependency.
 
 ### 2.2 The table is local shape, not global trajectory
 
-The Tv/ISO/Interval table in REFERENCE_DATA.md was hand-tuned by the
-operator over many shoots. It is real-world data — but it is data
-from *specific shoots* on *specific days* under *specific
+The Tv/ISO/Interval reference table (Appendix A) was hand-tuned by
+the operator over many shoots. It is real-world data — but it is
+data from *specific shoots* on *specific days* under *specific
 conditions*. Treating it as "the curve sunset follows" is wrong.
 Tonight's sunset will differ in start time, atmospheric clarity,
 cloud cover, etc.
@@ -166,9 +180,9 @@ Not the full Tv/ISO/Interval table. A small derived table:
 | +4  (deep twilight) | slow (~0.005) |
 | +8  (astronomical dark) | very slow (~0.0001) |
 
-Exact values derived in Excel from the real-world table and
-augmented by past-shoot analysis (§5). Probably ~20 rows; ~120 bytes
-in PROGMEM. Linear interpolation between rows.
+Exact values derived in Excel from the real-world reference table
+(Appendix A) and augmented by past-shoot analysis (§5). Probably
+~20 rows; ~120 bytes in PROGMEM. Linear interpolation between rows.
 
 Cart has one operation: given current EV, look up dEV/dt, integrate
 over elapsed time since last anchor.
@@ -205,7 +219,7 @@ Consistent with day-7/8 architectural decisions throughout the
 project.
 
 **Excel (pre-shoot):**
-- Holds the real-world Tv/ISO/Interval table (REFERENCE_DATA.md)
+- Holds the real-world Tv/ISO/Interval reference table (Appendix A)
 - Holds the aggregate dataset from past shoots (§5)
 - Computes the (EV → dEV/dt) rate table by combining table-derived
   shape with past-shoot statistics
@@ -323,7 +337,7 @@ rate-table variant Excel hands it at shoot start.
 
 ---
 
-## 5. Future evolution: the learning loop
+## 5. The learning loop — validation method and worked examples
 
 ### 5.1 Why this design improves over time
 
@@ -366,6 +380,10 @@ At shoot time, operator looks at the actual sky and picks which
 variant Excel ships to the cart. The cart doesn't know variants
 exist; it just receives the right table for the night.
 
+**Sky-condition needs operator log.** Weather isn't in EXIF — needs
+operator-tagged metadata at shoot start, or post-hoc weather-API
+lookup per shoot date.
+
 ### 5.4 Curation discipline
 
 The operator's eye on post-processed shoots remains the ground truth.
@@ -379,7 +397,158 @@ This is fine because shape is all we need. The rate table's job is
 correct exposure?" That second question is answered live by CCAPI
 when CCAPI works, and approximated by integration when it doesn't.
 
-### 5.5 Caveat: clock drift in old EXIF
+**Don't fight individual-shoot accuracy.** Per architectural
+principle #2 ("wrong exposure fixable in post"), individual shoots
+with operator-nudge or weather variance are not worth rescuing
+data-wise. Treat all clean exports as input to the soup; accept
+noise; trust median across N≥3-4 shoots before table changes.
+
+### 5.4a Shoot-type discipline — only CCAPI-driven shoots refine the table
+
+**Critical methodological finding (day 9 evening, Jan 22-23 2026
+shoot review).** A shoot's EXIF Tv/ISO record tells you what the
+camera DID, not what reality WAS. Two distinct shoot regimes
+produce that EXIF data, and only one of them is usable for
+refining the recipe table:
+
+1. **CCAPI-driven shoots (refinement-eligible).** Cart reads
+   luminance from camera in real time and adjusts Tv/ISO to
+   match. EXIF Tv/ISO therefore tracks *reality*. Comparing this
+   EXIF curve against the reference table is a legitimate
+   **table-vs-reality** measurement.
+
+2. **Table-driven shoots (NOT refinement-eligible).** Cart applies
+   a pre-baked recipe (possibly an older version of the same
+   table, possibly with shoot-time operator nudges). EXIF Tv/ISO
+   tracks the *recipe*, not reality. Comparing this EXIF curve
+   against the reference table is a **table-vs-table** diff — it
+   tells you whether two recipe versions agree, not whether
+   either matches reality.
+
+Both regimes have valid uses, but they're not interchangeable as
+refinement input. Confusing them silently corrupts the aggregate
+dataset with self-referential bias: feeding "table-driven" exports
+back as ground truth would lock in the original table's errors and
+amplify operator nudges.
+
+**Worked example — the Jan 22-23 2026 shoot:**
+- 6,176 photos across full sunset → astro → sunrise
+- Recipe was table-driven (no CCAPI luminance loop active)
+- Validated against canonical Appendix A reference table
+- Sunset block: 74% within ±0.5 stop, mean EV_diff -0.23
+- Pre-sunset bins (-80 to -30min): std 0.07-0.11 — recipes agree
+  to ~1/8 stop. Tight match between this shoot's recipe and the
+  canonical table.
+- t=0 to +30min: -0.5 to -1.0 stop divergence. Two recipe
+  versions disagreeing about the rapid-twilight slope.
+- t=+60 to +70min: +2 to +3 stop wild divergence — the §5.6.3
+  manual-time-nudge signature (large offset at astro-lock
+  boundary while mid-curve still matches well).
+
+Verdict: this shoot is **not** refinement input. It is, however,
+informative about:
+- Recipe-version consistency at the start of the sunset ramp
+- Where this shoot's recipe diverged from canonical (could be
+  intentional refinement applied earlier or operator nudge)
+- The day-9 manual-time-nudge gotcha replicating in a new shoot
+
+**Going forward:** every shoot must be tagged at capture time with
+the regime that produced it (CCAPI-driven / table-driven). Without
+this tag, EXIF analysis is ambiguous. Add to shoot-log workflow.
+
+**Toolchain status (day 9 evening):** `exif_ingest.py` and
+`validate_exposure.py` are working end-to-end. The pipeline is
+correct; the input needs to be the right shoot type. Once a
+CCAPI-driven shoot is in hand, the same toolchain will produce a
+genuine table-vs-reality measurement.
+
+### 5.5 Validation method — proven day 9 with two exports
+
+Step-by-step process for processing a new exposure export:
+
+1. Load exposure export (columns: SourceFile, ExposureTime, ISO,
+   DateTimeOriginal).
+2. **Check Tv column for Excel date-mangling** (see §5.6.1).
+3. **Check camera clock for DST offset** (see §5.6.2).
+4. Detect shoot blocks via inter-photo gap > 600s. Some shoots
+   run continuous through astro window, others split at
+   operator break. If no gap, split at midpoint between
+   sunset and sunrise.
+5. For each block, compute t_rel = photo_time - sun_event_time.
+   Sun event from ephemeris (use timeanddate.com Adelaide page
+   for accuracy).
+6. Compute EV per photo: `EV = -log2(Tv_s) - log2(ISO/100)`.
+   Linear-interpolate old table EV at each photo's t_rel.
+7. Filter Tv_s == 0 garbage rows (sub-second photos truncated
+   to int 0 in some export formats).
+8. Compare: mean/median/std EV_diff, % within ±0.5/±1.0/±2.0
+   stop. Bucket by 10-min time bins.
+
+### 5.6 Method gotchas — three to remember
+
+#### 5.6.1 Excel date-mangling of Tv column
+
+If the export came through a workbook column without text
+formatting, Excel interprets fractional Tv values as dates:
+
+- `1/4` → "1-Apr-current-year" → Excel serial like 46113
+- `1/80` → "1-Jan-1980" → serial 29221
+- `1/2000` → "1-Jan-2000" → serial 36526
+- `1/13` → "1-Jan-2013" → serial 41275
+
+Decoder rules:
+- Year 1950-1999 with day=1 month=1 → Tv = 1/(year-1900)
+- Year 2026 with day=1, month varies → Tv = 1/month
+- Year 2000-2099 with day=1 month=1, year-2000 in
+  {13,15,20,25,30,40,50,60,80} → Tv = 1/(year-2000); else 1/year
+- Year >= 2100 with day=1 month=1 → Tv = 1/year (genuine fast)
+
+Prevention: format Tv column as TEXT in Excel before export.
+
+#### 5.6.2 Camera-clock DST
+
+Camera may be on ACDT while shoot is in ACST window — Adelaide DST
+runs Oct→Apr (ended 5 April 2026). Symptom: implied sunset/sunrise
+from Tv inflection points lands ~1 hour later than ephemeris.
+Subtract 1 hour from timestamps if so. A 1-hour offset masquerades
+as ~10-stop formula failure if uncaught.
+
+#### 5.6.3 Manual time-nudge artefact
+
+The old Excel could shift the entire ramp earlier/later by 10-15
+min (operator action, not visible in EXIF). Symptom in EV_diff:
+large systematic offset (>±1 stop) concentrated in the
+rapid-changing zones either side of astro-lock entry/exit, with
+mid-curve fast-Tv region still matching well. Don't update table
+from a shoot showing that pattern; flag it as "operator-nudged"
+in shoot log instead.
+
+### 5.7 Day-9 results across two shoots
+
+*April 17-18 2026, DST-corrected:*
+- Sunset side: mean EV_diff +0.02, 73% within ±0.5 stop,
+  95% within ±1 stop. Old table ~0.5 stop darker than reality
+  at +10 to +30 min.
+- Sunrise side: could not validate (operator skipped ISO ramp).
+
+*Feb 20-21 2026, sunset 20:04 / sunrise 06:54 ACDT:*
+- Sunset mid-curve (-30 to +10 min): 82% within ±1 stop.
+  Old ~0.5 stop darker than reality at t=0 — matches April.
+- Sunset astro-lock zone (+20 to +50 min): consistent -2.5
+  stop offset. **LIKELY ARTEFACT** — operator confirmed the
+  old Excel had a manual time-nudge to hurry/slow the ramp
+  relative to sun event, and believes it was used on this
+  shoot. Cannot attribute this offset to the table itself.
+- Sunrise pre-ramp (-100 to -70 min): ~2 stops darker than
+  recipe. Same possible nudge artefact.
+
+**Signal vs noise:**
+- Repeated across shoots (likely table refinement): post-sunset
+  rapid twilight ~0.5 stop too dark.
+- Single shoot, plausibly nudge-driven: large astro-lock
+  offsets. Don't over-correct from these.
+
+### 5.8 Caveat: clock drift in old EXIF
 
 Image timestamps depend on the camera's clock being correct at
 capture. R3 clock drift is usually small but not zero. For very old
@@ -459,9 +628,20 @@ that exposure was correct, so EV = scene luminance up to a small
 offset. For ✗ ranges, the discrepancy is the whole reason they were
 rejected. So curation handles this naturally — but worth naming.
 
-EXIF `BrightnessValue` tag *might* give us the camera's own metered
-luminance independent of exposure decision. To be confirmed with
-sample R3 files.
+**BrightnessValue is not available on Canon R3 (verified day 9
+evening).** EXIF tag `BrightnessValue` (0x9203) was speculated as a
+free source of camera-metered luminance independent of the exposure
+decision. The R3 does not populate this tag — confirmed by running
+`exif_ingest.py` over a 6,176-image CR3 shoot from Jan 22-23 2026:
+column was blank for every row. No further attempt; this avenue is
+closed. The `BrightnessValue` column in `exif.csv` is kept (cheap
+to produce, may populate on a future camera) but treated as
+permanently empty in the current pipeline.
+
+Therefore: scene luminance signal must come from the EV computed
+from Tv & ISO (i.e. what the camera actually used), with curation
+discipline (§5.4) doing the work of separating "exposure used"
+from "scene luminance." No free metered-EV channel.
 
 ### 6.6 What happens if CCAPI returns wrong/wild values
 
@@ -480,62 +660,7 @@ Operator needs to see, at a glance, which mode the cart is in:
 
 ---
 
-## 7. Proposed workfront entries
-
-To be added to WORKFRONTS.md when this design is ready to act on.
-
-### Firmware
-27. **Rate-table evaluator on cart.** Receive (rate_table, Tv_grid,
-    ISO_grid, initial_EV, mode, threshold) from Excel via new
-    `/exposure/load` endpoint. Integrate dEV/dt over elapsed time
-    since last anchor. Snap result to nearest (Tv, ISO) pair. ~80
-    lines C. Storage cost ~400 bytes PROGMEM.
-
-28. **Decouple CCAPI fetch cadence from photo cadence.** Replace
-    "every Nth photo" with wall-clock interval (default 30s,
-    configurable). Photo cadence remains pin-8 + Tv+1.5s.
-
-29. **Fallback mode switching + anchor management.** Track last
-    successful fetch timestamp. After threshold of silence, switch
-    to integration mode silently. On successful fetch, update
-    anchor; if delta > 1/3 stop, smooth over 3 frames.
-
-30. **Cart UI exposure status.** New status bar showing mode (live
-    / fallback / seconds-since-fetch), current EV anchor, integrated
-    EV, last fetch delta. Parallel to existing CAN status bar.
-
-### Excel
-31. **Rate-table derivation.** Compute (EV → dEV/dt) lookup from
-    real-world table (REFERENCE_DATA.md §1) using finite differences.
-    ~20 rows. Export to cart-compatible binary or JSON.
-
-32. **EXIF ingestion pipeline.** Python script: image folder → CSV
-    with (timestamp, Tv, ISO, BrightnessValue, GPS). Tested on past
-    shoot data.
-
-33. **Astro retrospective mode.** Confirm Astro.bas accepts past
-    timestamps and returns (alt, az). Wire into review pipeline.
-
-34. **Review sheet.** Excel sheet that imports a past-shoot CSV,
-    computes EV per image, plots EV-vs-sun-altitude and delta-from-
-    table. Operator marks ✓/✗ ranges and tags atmospheric condition.
-
-35. **Aggregate dataset + rate-table variants.** Append ✓ ranges
-    across shoots, tagged by condition. Regenerate per-condition
-    rate tables (clear / overcast / smoke / default).
-
-36. **Pre-shoot Excel handoff.** Operator picks variant, Excel POSTs
-    to cart `/exposure/load` at shoot start.
-
-### Reference data
-37. **REFERENCE_DATA.md upkeep.** Each curated shoot's contribution
-    summarised in a "shoots reviewed" log within REFERENCE_DATA.md.
-    Tracks which data informs the current rate tables. Lightweight
-    version control by hand.
-
----
-
-## 8. Summary in one paragraph
+## 7. Summary in one paragraph
 
 CCAPI is a refinement, not a dependency. The cart's exposure target
 advances through sunset/sunrise by integrating a small on-cart rate
@@ -545,7 +670,173 @@ reality; missed fetches leave the cart walking the table on its
 own, drifting by at most ~1/3 stop per minute in the steepest
 regions — well within post-fix range. The rate table is derived in
 Excel from the operator's hand-tuned real-world Tv/ISO/Interval
-table plus a growing aggregate of EXIF data from past shoots,
-curated by operator review and tagged by atmospheric condition.
-Cart stays dumb; Excel does the brains; every shoot makes the
-system smarter; photos are never delayed.
+table (Appendix A) plus a growing aggregate of EXIF data from past
+shoots, curated by operator review and tagged by atmospheric
+condition. Cart stays dumb; Excel does the brains; every shoot
+makes the system smarter; photos are never delayed.
+
+---
+
+## Appendix A — Reference data: hand-built sun table
+
+Source: hand-built reference table from prior shoots, used to derive
+the Tv+1.5s cadence rule and ISO ramp behaviour. Captured here as
+the canonical reference asset for ongoing comparison against
+real-shoot exports.
+
+### Properties
+
+- **Sunset:** 64 rows, t = -80 min (1/5000, ISO 100) → +74 min (20s, ISO 1600)
+- **Sunrise:** 63 rows, t = -99 min (20s, ISO 1600) → +1 min (1/5000, ISO 100)
+- **Tv steps:** ~1/3 stop spacing, 52 distinct Tv values across both curves
+- **ISO ramp:** 100 throughout daylight; 100 ↔ 1600 only when Tv pinned at 20s ceiling
+- **Interval column:** matches Tv+1.5s rule (`max(2, ceil(Tv+1.5))`) for 60/64 sunset
+  and 61/63 sunrise rows.
+
+### Columns
+
+`SunLabel | Timelabel | Time | T | ISO | Interval`
+
+- `Time` = seconds relative to sun event (negative = before, positive = after)
+- `Timelabel` = wall-clock label for that t_rel (sunset@17:46 reference)
+- `T` = Tv value (e.g. `1/500`, `0.8`, `20`)
+- `ISO` = ISO setting
+- `Interval` = photo interval in seconds
+
+### Data
+
+SunLabel	Timelabel	Time	T	ISO	Interval
+Sunset	Sunset_16:25	-4800	1/5000	100	2
+Sunset	Sunset_16:38	-4020	1/4000	100	2
+Sunset	Sunset_16:51	-3240	1/3200	100	2
+Sunset	Sunset_17:03	-2520	1/2500	100	2
+Sunset	Sunset_17:13	-1920	1/2000	100	2
+Sunset	Sunset_17:21	-1440	1/1600	100	2
+Sunset	Sunset_17:28	-1020	1/1250	100	2
+Sunset	Sunset_17:31	-840	1/1000	100	2
+Sunset	Sunset_17:34	-660	1/800	100	2
+Sunset	Sunset_17:37	-480	1/640	100	2
+Sunset	Sunset_17:40	-300	1/500	100	2
+Sunset	Sunset_17:43	-120	1/400	100	2
+Sunset	Sunset_17:46	60	1/320	100	2
+Sunset	Sunset_17:49	240	1/250	100	2
+Sunset	Sunset_17:51	360	1/200	100	2
+Sunset	Sunset_17:54	540	1/160	100	2
+Sunset	Sunset_17:56	660	1/125	100	2
+Sunset	Sunset_17:57	720	1/100	100	2
+Sunset	Sunset_17:58	780	1/80	100	2
+Sunset	Sunset_18:00	900	1/60	100	2
+Sunset	Sunset_18:02	1020	1/50	100	2
+Sunset	Sunset_18:03	1080	1/40	100	2
+Sunset	Sunset_18:04	1140	1/30	100	2
+Sunset	Sunset_18:06	1260	1/25	100	2
+Sunset	Sunset_18:08	1380	1/20	100	2
+Sunset	Sunset_18:09	1440	1/15	100	2
+Sunset	Sunset_18:10	1500	1/13	100	2
+Sunset	Sunset_18:11	1560	1/10	100	2
+Sunset	Sunset_18:12	1620	1/8	100	2
+Sunset	Sunset_18:13	1680	1/6	100	2
+Sunset	Sunset_18:15	1800	1/5	100	2
+Sunset	Sunset_18:16	1860	1/4	100	2
+Sunset	Sunset_18:17	1920	0.3	100	2
+Sunset	Sunset_18:18	1980	0.4	100	2
+Sunset	Sunset_18:19	2040	0.5	100	2
+Sunset	Sunset_18:20	2100	0.6	100	2
+Sunset	Sunset_18:21	2160	0.8	100	2
+Sunset	Sunset_18:22	2220	1	100	3
+Sunset	Sunset_18:23	2280	1.3	100	3
+Sunset	Sunset_18:24	2340	1.6	100	4
+Sunset	Sunset_18:26	2460	2	100	4
+Sunset	Sunset_18:27	2520	2.5	100	5
+Sunset	Sunset_18:28	2580	3.2	100	5
+Sunset	Sunset_18:29	2640	4	100	5
+Sunset	Sunset_18:31	2760	5	100	7
+Sunset	Sunset_18:32	2820	6	100	8
+Sunset	Sunset_18:34	2940	8	100	10
+Sunset	Sunset_18:35	3000	10	100	12
+Sunset	Sunset_18:37	3120	13	100	15
+Sunset	Sunset_18:38	3180	15	100	17
+Sunset	Sunset_18:40	3300	20	100	22
+Sunset	Sunset_18:41	3360	20	125	22
+Sunset	Sunset_18:42	3420	20	160	22
+Sunset	Sunset_18:43	3480	20	200	22
+Sunset	Sunset_18:44	3540	20	250	22
+Sunset	Sunset_18:45	3600	20	320	22
+Sunset	Sunset_18:46	3660	20	400	22
+Sunset	Sunset_18:47	3720	20	500	22
+Sunset	Sunset_18:49	3840	20	640	22
+Sunset	Sunset_18:51	3960	20	800	22
+Sunset	Sunset_18:53	4080	20	1000	22
+Sunset	Sunset_18:56	4260	20	1250	22
+Sunset	Sunset_18:59	4440	20	1600	22
+Sunrise	Sunrise_05:06	-5940	20	1600	22
+Sunrise	Sunrise_05:09	-5760	20	1250	22
+Sunrise	Sunrise_05:12	-5580	20	1000	22
+Sunrise	Sunrise_05:14	-5460	20	800	22
+Sunrise	Sunrise_05:16	-5340	20	640	22
+Sunrise	Sunrise_05:18	-5220	20	500	22
+Sunrise	Sunrise_05:19	-5160	20	400	22
+Sunrise	Sunrise_05:20	-5100	20	300	22
+Sunrise	Sunrise_05:21	-5040	20	250	22
+Sunrise	Sunrise_05:22	-4980	20	200	22
+Sunrise	Sunrise_05:23	-4920	20	160	22
+Sunrise	Sunrise_05:24	-4860	20	125	22
+Sunrise	Sunrise_05:25	-4800	20	100	22
+Sunrise	Sunrise_05:31	-4440	20	100	22
+Sunrise	Sunrise_05:32	-4380	15	100	17
+Sunrise	Sunrise_05:33	-4320	13	100	15
+Sunrise	Sunrise_05:34	-4260	10	100	12
+Sunrise	Sunrise_05:36	-4140	8	100	10
+Sunrise	Sunrise_05:38	-4020	6	100	8
+Sunrise	Sunrise_05:39	-3960	5	100	7
+Sunrise	Sunrise_05:41	-3840	4	100	6
+Sunrise	Sunrise_05:42	-3780	3	100	5
+Sunrise	Sunrise_05:43	-3720	2.5	100	5
+Sunrise	Sunrise_05:45	-3600	2	100	4
+Sunrise	Sunrise_05:46	-3540	1.6	100	4
+Sunrise	Sunrise_05:47	-3480	1.3	100	4
+Sunrise	Sunrise_05:48	-3420	1	100	3
+Sunrise	Sunrise_05:50	-3300	0.8	100	3
+Sunrise	Sunrise_05:52	-3180	0.6	100	3
+Sunrise	Sunrise_05:54	-3060	0.5	100	2
+Sunrise	Sunrise_05:55	-3000	0.3	100	2
+Sunrise	Sunrise_05:57	-2880	1/4	100	2
+Sunrise	Sunrise_05:58	-2820	1/5	100	2
+Sunrise	Sunrise_06:00	-2700	1/6	100	2
+Sunrise	Sunrise_06:01	-2640	1/8	100	2
+Sunrise	Sunrise_06:03	-2520	1/10	100	2
+Sunrise	Sunrise_06:04	-2460	1/13	100	2
+Sunrise	Sunrise_06:05	-2400	1/15	100	2
+Sunrise	Sunrise_06:06	-2340	1/20	100	2
+Sunrise	Sunrise_06:07	-2280	1/25	100	2
+Sunrise	Sunrise_06:08	-2220	1/30	100	2
+Sunrise	Sunrise_06:09	-2160	1/40	100	2
+Sunrise	Sunrise_06:10	-2100	1/50	100	2
+Sunrise	Sunrise_06:11	-2040	1/60	100	2
+Sunrise	Sunrise_06:12	-1980	1/80	100	2
+Sunrise	Sunrise_06:14	-1860	1/100	100	2
+Sunrise	Sunrise_06:15	-1800	1/125	100	2
+Sunrise	Sunrise_06:16	-1740	1/160	100	2
+Sunrise	Sunrise_06:18	-1620	1/200	100	2
+Sunrise	Sunrise_06:19	-1560	1/250	100	2
+Sunrise	Sunrise_06:21	-1440	1/320	100	2
+Sunrise	Sunrise_06:23	-1320	1/400	100	2
+Sunrise	Sunrise_06:25	-1200	1/500	100	2
+Sunrise	Sunrise_06:27	-1080	1/640	100	2
+Sunrise	Sunrise_06:29	-960	1/800	100	2
+Sunrise	Sunrise_06:32	-780	1/1000	100	2
+Sunrise	Sunrise_06:34	-660	1/1250	100	2
+Sunrise	Sunrise_06:36	-540	1/1600	100	2
+Sunrise	Sunrise_06:38	-420	1/2000	100	2
+Sunrise	Sunrise_06:40	-300	1/2500	100	2
+Sunrise	Sunrise_06:42	-180	1/3200	100	2
+Sunrise	Sunrise_06:44	-60	1/4000	100	2
+Sunrise	Sunrise_06:46	60	1/5000	100	2
+
+---
+
+## Appendix B — Session assets cross-reference
+
+- `exposure_feb_decoded.csv` — Feb 2026 shoot with Tv values decoded
+  from Excel date-mangling. Retained for cross-session reuse and as
+  a worked example of §5.5 method applied.
