@@ -411,6 +411,198 @@ cart waypoint arrives").
 
 ---
 
+## 9.5 Cart-side gimbal execution model (Day 19)
+
+> **Added Day 19** during Plan Authoring discussion. Clarifies the
+> per-tick model the cart uses to drive the gimbal during plan
+> execution, with explicit handling of Lock segments and BNO
+> correction.
+
+### Photo cadence timing (canonical)
+
+The night-shoot photo cycle is **22 seconds total**:
+
+```
+T = 0       Shutter opens (gimbal still, at rest)
+T = 0..20   Photo exposure — 20 sec; gimbal MUST be perfectly still
+T = 20      Shutter closes
+T = 20..22  Service window (2 sec):
+              - Card writes
+              - Camera commands (CCAPI Tv/ISO if any)
+              - Gimbal move request issued
+              - Gimbal slew executes (1.0–1.5 sec)
+              - Vibration damps
+              - Gimbal at rest
+T = 22      Cycle repeats; shutter opens for photo N+1
+```
+
+The 20s exposure dominates the cycle and constrains everything:
+**the gimbal does not move while the shutter is open.** All motion
+is compressed into the 2-second service window, leaving 0.5–1.0 sec
+for vibration damping before the next exposure begins.
+
+The gimbal sees a *sequence of still poses*, one per photo. Smooth
+real-world motion in the timelapse emerges from frame-to-frame pose
+changes, not from continuous gimbal motion.
+
+### Cart's tick model
+
+"Tick" in pseudocode means **one photo cadence**, not one main-loop
+iteration or one stepper step. The cart issues exactly one gimbal
+command per 22-second cycle, during the service window.
+
+Three cadences exist on the cart, only one matters here:
+
+| Cadence | Period | Used for |
+|---|---|---|
+| Main loop | ~5–15 ms variable | Housekeeping, polling, I/O |
+| Gimbal command | 22 sec (= photo cadence) | One `setPosControl` per photo |
+| Stepper Tic | internal to Pololu Tic | Step generation, hidden from cart |
+
+The 100ms minimum granularity of `setPosControl(timeForAction)` is
+plenty fine — slews are 1000–1500 ms = 10–15 increments of the
+0.1-second time unit.
+
+### Per-cycle dispatch
+
+Once per cycle, during the service window, the cart computes the
+gimbal target for the *next* exposure pose and issues one
+`setPosControl(yaw, roll, pitch, time)` command.
+
+The target depends on the active gimbal segment type:
+
+**Approach (static target, real-world frame):**
+- Target = static pose + `gimbal_yaw_correction` (real → cart frame)
+- Same target every cycle once converged; gimbal sits still naturally
+
+**Approach (moving target — sun, moon, MW):**
+- Target = evaluate `track_<obj>` cubic at `t_now` + offsets
+- Plus `gimbal_yaw_correction`
+- Re-evaluated each cycle; gimbal makes small per-cycle steps
+
+**Pan Follow:**
+- Target = (current cart yaw) + PF offset, in cart frame
+- Counter-rotates if cart is turning (operator wants cart-forward view)
+
+**Lock (real-world freeze):**
+- Target = (gimbal yaw at Lock start) − (cumulative cart yaw change since Lock start)
+- Cumulative cart yaw computed from steering + speed via bicycle
+  formula (see below). Resets to 0 at Lock segment entry.
+
+### Cart heading source — no cubic needed
+
+The cart does NOT need a pre-computed cart-heading function from
+Excel. It computes cart yaw locally as needed:
+
+**Per-cycle bicycle-formula sample:**
+
+```
+Δt = elapsed since last cycle (≈ 22 sec for normal operation)
+dθ_cart/dt = (v / wheelbase) × tan(steering_offset)
+Δθ_cart = (dθ_cart/dt) × Δt
+cart_yaw_accumulator += Δθ_cart    (within Lock segments; resets at Lock entry)
+```
+
+The bicycle model lives on the cart, but only as a one-liner per
+cycle using already-known values. Excel's `BicycleModel.bas` remains
+as a planning-time validator (operator can see in Excel "this Lock
+segment will require X° of gimbal counter-rotation, fits in
+envelope") but the cart computes its own runtime values.
+
+### Three scalars define cart heading state
+
+| Scalar | Updated when | Used for |
+|---|---|---|
+| `gimbal_yaw_correction` | At BNO syncs (margin-triggered, see below) | Convert real-world poses to cart-frame |
+| `cart_yaw_accumulator`  | Per cycle within Lock; reset at Lock entry | Counter-rotation for Lock segments |
+| `pending_bno_correction`| Continuously, as BNO reads come in | Awaiting next Move-to to fold in |
+
+No θ_cart cubic. No absolute heading. Three scalars and a one-line
+formula.
+
+### BNO correction — applied at next Move-to (no snaps)
+
+The BNO085 provides the absolute real-world cart heading
+(workfront #40, build pending — STUB_BNO returns Ry=Cy today).
+
+Continuous BNO polling is fine, but the *application* of any
+correction is **deferred** until the next Move-to (or Approach)
+segment dispatches. The correction is folded into that segment's
+target pose. The gimbal slews smoothly to a slightly-corrected
+endpoint; no snap is ever issued.
+
+**Mechanism:**
+
+```
+At BNO read (continuous, e.g. every loop):
+    bno_yaw_now = read from BNO085
+    cart_yaw_estimated_now = (gimbal pose in real frame) - gimbal_yaw_correction
+    drift = bno_yaw_now - cart_yaw_estimated_now
+    pending_bno_correction = drift     (accumulates / overwrites)
+
+At next Move-to / Approach dispatch:
+    target_real = authored_target_pose
+    target_cart = target_real - (gimbal_yaw_correction + pending_bno_correction)
+    setPosControl(target_cart, ..., time=slew_duration)
+    gimbal_yaw_correction += pending_bno_correction   (apply to the running scalar)
+    pending_bno_correction = 0
+```
+
+The correction is **hidden inside an authored motion.** Operator
+authored "Cinematic ease over 19 minutes from current to sun"; if
+the slew distance becomes 63.4° instead of 63°, the rate is
+unchanged, duration is unchanged, motion is identical to the eye.
+
+**Margin behaviour:** the BNO sync margin (how much drift before we
+care) is set by "how much accumulated drift can we tolerate during
+Lock / PF / Track" — not by "how big a snap is acceptable," since
+snaps never happen. Generous margin (a few degrees) is fine for
+most shoots.
+
+**Worst-case safety valve:** if a gimbal plan has no Move-to
+segments for a long stretch (Track sun → Lock → Track moon) and
+drift exceeds a hard threshold, the cart can force-apply the
+correction at a segment boundary. Open question for the build phase.
+
+### Lock segment, end-to-end
+
+Operator authors "Lock at current pose" as a gimbal Plan row
+(Day-19 vocabulary). Cart executes:
+
+1. **At Lock entry:**
+   - `lock_start_yaw_cart = current gimbal yaw (cart frame)`
+   - `cart_yaw_accumulator = 0`
+
+2. **Each photo cycle during Lock:**
+   - Sample cart speed `v` and steering `δ` (whatever they are right now)
+   - `Δθ = (v / wheelbase) × tan(δ) × Δt`  (Δt = 22 sec or actual elapsed)
+   - `cart_yaw_accumulator += Δθ`
+   - `target_yaw_cart = lock_start_yaw_cart − cart_yaw_accumulator`
+   - `setPosControl(target_yaw_cart, roll, target_pitch_cart, time=1500ms)`
+
+3. **At Lock exit (next segment dispatches):**
+   - Discard `cart_yaw_accumulator`
+   - `pending_bno_correction` (which accumulated during Lock) folds
+     into the next Move-to / Approach as above
+
+Real-world pose stays constant across the Lock segment (modulo BNO
+drift, which is bounded by the sync margin). Gimbal moves smoothly
+in cart frame as cart turns; appears motionless in the timelapse
+output.
+
+### What this implies for Excel-side authoring
+
+- No cart-heading cubic to author or push
+- No θ_cart column on the Cart Plan
+- BicycleModel.bas remains useful for *planning-time validation*
+  (e.g. visualising "during this Lock segment, gimbal will need to
+  counter-rotate X° in cart frame — within envelope?")
+- The Excel-side astro tables and trackpath cubics push real-world
+  poses; the cart applies `gimbal_yaw_correction` at dispatch time
+  to convert to cart-frame commands. Excel doesn't worry about it.
+
+---
+
 ## 10. Open design questions
 
 > **STATUS UPDATE Day 16 (23 May 2026).** Status of each question is

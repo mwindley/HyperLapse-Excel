@@ -8,9 +8,11 @@ Attribute VB_Name = "BicycleModel"
 '   trace using a rear-axle bicycle / Ackermann model.
 '
 '   Inputs:  CartLog sheet (6 columns — populated by Cart.GetCartLog)
-'   Outputs: Trace sheet  (7 columns — t, x, y, theta_deg, segment
-'                          distance, steering, speed)
-'            Chart on CartLog sheet (XY trace of x,y for the operator)
+'   Outputs: Trace sheet  (8 columns — t, x, y, theta_deg, segment
+'                          distance, steering, speed, CartLogRow)
+'            Chart on CartLog sheet (XY trace of x,y with row-number
+'                          labels at each T/X event for operator
+'                          cross-reference with the log).
 '
 ' STATUS day 8
 '   M_PER_STEP measured = 0.00178 mm/step (~1.77 µm/step), validated
@@ -44,6 +46,9 @@ Attribute VB_Name = "BicycleModel"
 '   1. Run Cart.GetCartLog to retrieve the latest CartLog
 '   2. Run BicycleModel.IntegrateBicycle (or click Control button)
 '   3. View Trace sheet for numeric data; chart on CartLog renders xy
+'      with row-number labels at each T (steering) and X (stop) event.
+'      Operator can match labels on the chart to rows in CartLog when
+'      selecting ranges for Smooth Selection (workfront #44).
 ' ============================================================
 
 Option Explicit
@@ -79,7 +84,6 @@ Private Const ARC_VIZ_STEP_M As Double = 0.1
 
 Private Const PI As Double = 3.14159265358979
 
-' --- Public entry point -------------------------------------------
 
 ' Main entry point. Reads CartLog, integrates, writes Trace sheet,
 ' refreshes chart on CartLog.
@@ -100,8 +104,8 @@ Public Sub IntegrateBicycle()
     Dim wsTrace As Worksheet
     Set wsTrace = EnsureTraceSheet()
 
-    ' Clear previous trace
-    wsTrace.Range("A2:G" & wsTrace.Rows.count).ClearContents
+    ' Clear previous trace — column H included for the new row-label data
+    wsTrace.Range("A2:H" & wsTrace.Rows.count).ClearContents
 
     ' --- State -----------------------------------------------------
     Dim t_sec As Double, x_m As Double, y_m As Double, theta_rad As Double
@@ -130,6 +134,7 @@ Public Sub IntegrateBicycle()
     wsTrace.Cells(outRow, 5).value = 0#
     wsTrace.Cells(outRow, 6).value = 0#
     wsTrace.Cells(outRow, 7).value = 0#
+    ' Column H (CartLogRow) intentionally left blank on row 0
     outRow = outRow + 1
 
     ' Apply the first event's settings (it may set initial speed / steering).
@@ -198,6 +203,18 @@ Public Sub IntegrateBicycle()
             wsTrace.Cells(outRow, 5).value = d_sub
             wsTrace.Cells(outRow, 6).value = SteerToDeg(currentSteerVal)
             wsTrace.Cells(outRow, 7).value = currentSpeedVal
+
+            ' Only the FINAL sub-step of this event gets the row label,
+            ' and only for T (steering) and X (stop) events — S events
+            ' don't change geometry, so labelling them adds noise.
+            If k = nSteps Then
+                Dim et As String
+                et = UCase(Trim(evtType))
+                If et = "T" Or et = "X" Then
+                    wsTrace.Cells(outRow, 8).value = r
+                End If
+            End If
+
             outRow = outRow + 1
 
             ' Advance state
@@ -212,7 +229,7 @@ Public Sub IntegrateBicycle()
     Next r
 
     ' Tidy formatting
-    wsTrace.Columns("A:G").AutoFit
+    wsTrace.Columns("A:H").AutoFit
 
     ' Refresh/create chart on CartLog
     RefreshTraceChart wsLog, wsTrace, outRow - 1
@@ -335,7 +352,10 @@ Private Function EnsureTraceSheet() As Worksheet
         ws.Name = "Trace"
     End If
 
-    ' Write headers (overwrite, in case columns evolved between versions)
+    ' Write headers (overwrite, in case columns evolved between versions).
+    ' Column H added so the chart can label T/X events with the
+    ' originating Excel row from CartLog — useful for Smooth Selection
+    ' (workfront #44) where the operator picks ranges of rows to fold.
     ws.Cells(1, 1).value = "t_sec"
     ws.Cells(1, 2).value = "x_m"
     ws.Cells(1, 3).value = "y_m"
@@ -343,14 +363,17 @@ Private Function EnsureTraceSheet() As Worksheet
     ws.Cells(1, 5).value = "segment_dist_m"
     ws.Cells(1, 6).value = "steering_deg"
     ws.Cells(1, 7).value = "speed_mhr"
-    ws.Range("A1:G1").Font.Bold = True
+    ws.Cells(1, 8).value = "CartLogRow"
+    ws.Range("A1:H1").Font.Bold = True
 
     Set EnsureTraceSheet = ws
 End Function
 
 ' Build (or refresh) an XY scatter chart on the CartLog sheet showing
 ' the (x,y) path. Lines connect successive points so the operator sees
-' the trace as a continuous route.
+' the trace as a continuous route. T (steering) and X (stop) events
+' carry the originating Excel row number in Trace column H, which is
+' rendered as a data label at the corresponding point on the chart.
 Private Sub RefreshTraceChart(ByVal wsLog As Worksheet, _
                               ByVal wsTrace As Worksheet, _
                               ByVal lastTraceRow As Long)
@@ -387,6 +410,28 @@ Private Sub RefreshTraceChart(ByVal wsLog As Worksheet, _
             .Values = wsTrace.Range("C2:C" & lastTraceRow)
             .MarkerStyle = xlMarkerStyleCircle
             .MarkerSize = 4
+
+            ' Data labels: linked-to-source from Trace column H.
+            ' Excel reads each point's label text from the corresponding
+            ' cell in H — blank cells produce blank labels, so the chart
+            ' only shows row numbers at the T/X event points. This is
+            ' an Excel 2013+ feature ("Value from Cells").
+            '
+            ' Order of operations matters:
+            '   1. .HasDataLabels = True       — turn labels on
+            '   2. .DataLabels.ShowValue = False — stop default value display
+            '   3. ShowRange + InsertChartField — link to cell range
+            ' Step 2 BEFORE step 3 or Excel keeps the values on too.
+            .HasDataLabels = True
+            With .DataLabels
+                .ShowValue = False
+                .ShowCategoryName = False
+                .ShowSeriesName = False
+                .ShowRange = True
+                .Format.TextFrame2.TextRange.InsertChartField _
+                    msoChartFieldRange, _
+                    "='" & wsTrace.Name & "'!$H$2:$H$" & lastTraceRow, 0
+            End With
         End With
 
         ' Equal-ish axes by default — Excel won't enforce true 1:1 aspect,
@@ -525,8 +570,10 @@ ErrHandler:
     MsgBox "SimulateCartLog error: " & Err.Description, vbExclamation
 End Sub
 
-' Helper: seconds (Double) to HH:MM:SS string
-Private Function SecToHms(ByVal s As Double) As String
+' Helper: seconds (Double) to HH:MM:SS string.
+' Public so other modules (e.g. WobblyRecon) can format their own
+' synthetic timestamps consistently.
+Public Function SecToHms(ByVal s As Double) As String
     Dim h As Long, m As Long, sec As Long
     Dim totalSec As Long
     totalSec = CLng(s + 0.5) - 1   ' floor-ish
@@ -536,3 +583,4 @@ Private Function SecToHms(ByVal s As Double) As String
     sec = totalSec Mod 60
     SecToHms = Format(h, "00") & ":" & Format(m, "00") & ":" & Format(sec, "00")
 End Function
+

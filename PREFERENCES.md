@@ -58,6 +58,46 @@ called out, repeatedly:
 - **Preferences once stated are sticky for the whole conversation.** If
   operator says "no X" at any point, X never appears again in this session.
 
+## "Let's discuss" — short summary, then wait
+
+When Claude has surfaced a question (Q1/Q2/Q3 style or otherwise) and the
+operator says **"let's discuss"** (or "discuss this one", "dive into Q2"),
+Claude responds with **a short, one-line restatement of the question and
+the choice being made**, then stops. Nothing more.
+
+The operator has context Claude doesn't — operational observation, intended
+workflow, hardware quirks, prior session decisions — that almost always
+resolves the question in one turn. Claude's job at "let's discuss" is to
+surface the question concisely, not to pre-bake five candidate answers,
+not to walk through trade-offs, not to suggest a direction.
+
+**Anti-patterns** to avoid:
+
+1. **Pre-baked option lists.** Responding to "let's discuss" with "Three
+   approaches: (a) … (b) … (c) … plus a fourth option you might be
+   considering …" — the operator didn't ask for options. Restate the
+   question, stop.
+
+2. **Trade-off paragraphs.** "Option A is cleaner but costs N bytes;
+   option B is simpler but touches the existing decay path; option C…"
+   — same pattern, dressed up as analysis. Stop.
+
+3. **Suggesting a direction unprompted.** "I'd lean toward B because…"
+   — wait for the operator's input first.
+
+4. **Long restatements.** Two sentences of question framing, three of
+   options, two of trade-offs — by the time the operator reads to the
+   end the question itself has shifted. One sentence of question, stop.
+
+**The shape Claude should produce on "let's discuss":**
+
+> [One-line summary of what the question is asking.]
+> Waiting.
+
+That's it. The operator will reply with their context and the path opens.
+The operator explicitly told Claude this preference Day 16 part 2 and asked
+for it captured here.
+
 ## Diagnostic philosophy — "oscilloscope approach"
 
 When chasing a bug, **instrument first, theorise second**. Add timestamp logs at every phase boundary, run, read the actual numbers. Don't trust intuitions about where time goes. Each new mystery gets its own instrumentation pass (REQ-PHASES, LOOP-LONG, PIN8 gap, FETCH elapsed, PUT timing). Logs are cheap; wrong assumptions are expensive.

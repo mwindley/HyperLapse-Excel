@@ -19,7 +19,14 @@ Attribute VB_Name = "Gimbal"
 '                      the Arduino during a recce or rehearsal pass
 '
 ' COORDINATE CONVENTIONS
-'   Yaw   — relative to cart heading, ±180° (RS4 Pro range)
+'   Yaw   — relative to cart heading. CUMULATIVE (unwrapped) — RS4 Pro
+'           can wind through multiple rotations. Per-shoot envelope is
+'           enforced by this module from Settings named ranges
+'           gimbalYawEnvelopeMin / gimbalYawEnvelopeMax (default ±225,
+'           450° span). Cable budget = 450°; the operator edits the
+'           envelope cells per shoot to position the span where the
+'           plan needs it (e.g. -160 to +290). Cart firmware is dumb
+'           on yaw and accepts whatever value Excel sends.
 '   Pitch — relative to earth horizon (the RS4 Pro stabilises gravity),
 '           +146° / −56° per RS4 Pro spec
 '   Roll  — always 0 for timelapse work (±30° available if ever needed)
@@ -41,12 +48,18 @@ Attribute VB_Name = "Gimbal"
 Option Explicit
 
 ' ── Gimbal limits (RS4 Pro confirmed) ────────────────────────
-Public Const GIMBAL_YAW_MIN     As Double = -180#
-Public Const GIMBAL_YAW_MAX     As Double = 180#
+' Yaw has NO hardcoded constant — it's cumulative, enforced per-shoot
+' via Settings named ranges (see EnsureGimbalEnvelopeNamedRanges).
+' Roll/pitch are mechanical-mount limits, hardcoded.
 Public Const GIMBAL_PITCH_MIN   As Double = -56#
 Public Const GIMBAL_PITCH_MAX   As Double = 146#
 Public Const GIMBAL_ROLL_MIN    As Double = -30#
 Public Const GIMBAL_ROLL_MAX    As Double = 30#
+
+' Default yaw envelope (±225°, 450° span centred on cart-forward).
+' Seeded into Settings cells on first call; operator edits per shoot.
+Private Const DEFAULT_YAW_ENVELOPE_MIN As Double = -225#
+Private Const DEFAULT_YAW_ENVELOPE_MAX As Double = 225#
 
 ' Default move time in seconds
 Public Const GIMBAL_DEFAULT_TIME As Double = 2#
@@ -56,20 +69,43 @@ Public Const GIMBAL_DEFAULT_TIME As Double = 2#
 ' ============================================================
 
 ' Move gimbal to absolute yaw/roll/pitch over time (seconds)
-' Yaw is relative to cart heading
-' Pitch is relative to earth horizon (RS4 Pro stabilises)
-' Roll is always 0 for timelapse
+' Yaw is cumulative (unwrapped), relative to cart heading.
+' Pitch is relative to earth horizon (RS4 Pro stabilises).
+' Roll is always 0 for timelapse.
+'
+' Yaw envelope: read from Settings named ranges gimbalYawEnvelopeMin /
+' gimbalYawEnvelopeMax. Defaults ±225° (450° span) are seeded on first
+' call; operator edits cells per shoot. Commands outside the envelope
+' are REFUSED (not clamped) — returns False, logs the violation. Cart
+' firmware accepts whatever it receives; envelope enforcement is here.
+' Roll/pitch keep mechanical clamps (mount can't exceed those).
 Public Function GimbalPosition(ByVal myYaw As Double, _
                                 ByVal myRoll As Double, _
                                 ByVal myPitch As Double, _
                                 Optional ByVal myTime As Double = GIMBAL_DEFAULT_TIME) As Boolean
     On Error GoTo ErrHandler
-    
-    ' Clamp to RS4 Pro limits
-    myYaw = ClampDouble(myYaw, GIMBAL_YAW_MIN, GIMBAL_YAW_MAX)
+
+    ' Lazy-init the envelope cells/named ranges on first call
+    EnsureGimbalEnvelopeNamedRanges
+
+    ' Read current envelope from Settings
+    Dim envMin As Double, envMax As Double
+    envMin = CDbl(ThisWorkbook.names("gimbalYawEnvelopeMin").RefersToRange.value)
+    envMax = CDbl(ThisWorkbook.names("gimbalYawEnvelopeMax").RefersToRange.value)
+
+    ' Hard refuse if yaw outside envelope — Excel owns the cable budget
+    If myYaw < envMin Or myYaw > envMax Then
+        LogEvent "GIMBAL", "Move REFUSED — yaw=" & Format(myYaw, "0.0") & _
+                           " outside envelope [" & Format(envMin, "0.0") & _
+                           ", " & Format(envMax, "0.0") & "]"
+        GimbalPosition = False
+        Exit Function
+    End If
+
+    ' Roll/pitch keep mechanical clamps (mount limits, not plan envelope)
     myRoll = ClampDouble(myRoll, GIMBAL_ROLL_MIN, GIMBAL_ROLL_MAX)
     myPitch = ClampDouble(myPitch, GIMBAL_PITCH_MIN, GIMBAL_PITCH_MAX)
-    
+
     Dim url As String
     url = ARDUINO_IP() & "/move?yaw=" & Format(myYaw, "0.0") & _
                               "&roll=" & Format(myRoll, "0.0") & _
@@ -296,6 +332,45 @@ Private Function ClampDouble(ByVal val As Double, _
         ClampDouble = val
     End If
 End Function
+
+
+' Ensure gimbalYawEnvelopeMin / gimbalYawEnvelopeMax named ranges exist
+' on the Settings sheet. Seeds defaults (±225° = 450° span) on first
+' creation. Idempotent — if either name already exists, leaves both
+' alone. Pattern mirrors Formula.bas's EnsureActiveBranchNamedRange.
+Private Sub EnsureGimbalEnvelopeNamedRanges()
+    Dim nm As Name
+    Dim minExists As Boolean, maxExists As Boolean
+    minExists = False
+    maxExists = False
+    For Each nm In ThisWorkbook.names
+        If nm.Name = "gimbalYawEnvelopeMin" Then minExists = True
+        If nm.Name = "gimbalYawEnvelopeMax" Then maxExists = True
+    Next nm
+
+    If minExists And maxExists Then Exit Sub
+
+    Dim wsSet As Worksheet
+    Set wsSet = ThisWorkbook.Sheets("Settings")
+
+    ' Place at rows 45-46 on Settings (immediately below dataActiveBranch
+    ' at row 44). Label in column B (italic), value in column C.
+    If Not minExists Then
+        wsSet.Range("$C$45").value = DEFAULT_YAW_ENVELOPE_MIN
+        wsSet.Cells(45, 2).value = "Gimbal yaw envelope min (°)"
+        wsSet.Cells(45, 2).Font.Italic = True
+        ThisWorkbook.names.Add Name:="gimbalYawEnvelopeMin", _
+                               RefersTo:="=Settings!$C$45"
+    End If
+
+    If Not maxExists Then
+        wsSet.Range("$C$46").value = DEFAULT_YAW_ENVELOPE_MAX
+        wsSet.Cells(46, 2).value = "Gimbal yaw envelope max (°)"
+        wsSet.Cells(46, 2).Font.Italic = True
+        ThisWorkbook.names.Add Name:="gimbalYawEnvelopeMax", _
+                               RefersTo:="=Settings!$C$46"
+    End If
+End Sub
 
 
 
