@@ -1,34 +1,49 @@
 Attribute VB_Name = "PlanBuilder"
 ' ============================================================
-' HyperLapse Cart — Plan Builder
+' HyperLapse Cart - Plan Builder
 '
 ' Builds the left zone (Cart Plan) of the Plan sheet from
 ' CartLog recon data. Requires Cart.ProcessCartLog to have
 ' been run first so col G (per-event distance) is populated.
 '
 ' Public entry points:
-'   BuildPlanFromCartLog   — walks CartLog W events, writes
+'   BuildPlanFromCartLog   - walks CartLog W events, writes
 '                            one Plan row per waypoint leg
 '
-' Day 19 — initial P2 implementation. Reads CartLog only;
-' GimbalLog → right zone is P4 (separate macro).
+' Day 19 - initial P2 implementation. Reads CartLog only;
+' GimbalLog -> right zone is P4 (separate macro).
+' Day 20 - P6: col H (WP #) now written as text "WP01", "WP02"
+'          (was integer). Matches Anchor ref convention so the
+'          anchor resolver formula in col Q (Fires at) can MATCH
+'          string-to-string. No other left-zone changes.
+' Day 20 - Session E: col H collapsed into col B. Col B IS the WP
+'          label now (text "WP01" formula in mockup; static text from
+'          this macro). Col H not written. Anchor resolver MATCHes
+'          against col B. STOP rows get a WP label too - once a row
+'          is in the plan it is a position the operator may reference.
+'
+' Plan sheet left-zone columns (Session E):
+'   B=WP label (text), C=Action, D=Dist(m), E=Speed(m/hr),
+'   F=Turn(deg), G=Hold(s), H=(unused gutter),
+'   I=DistSum(m), J=Arrives, K=Note
 '
 ' CartLog column layout (post-ProcessCartLog):
 '   A=Timestamp, B=Type, C=Value, D=Description,
 '   E=Duration(s), F=Scout speed, G=Distance(m), H=Replay speed
 '
 ' CartLog event types (per DJI_Ronin_Giga_v2.ino):
-'   S — speed set; value = m/hr
-'   T — steering target set (authoritative); value = RAW servo code
+'   S - speed set; value = m/hr
+'   T - steering target set (authoritative); value = RAW servo code
 '       (CART_STEERING_CENTRE = 98; offset_deg = value - 98)
-'   t — steering ramp complete (informational; sketch line 3159)
-'   W — waypoint mark; value = waypoint #
-'   X — stop
-'   P / p / a — execution-time plan markers (not seen in recon)
+'   t - steering ramp complete (informational; sketch line 3159)
+'   W - waypoint mark; value = waypoint #
+'   X - stop
+'   P / p / a - execution-time plan markers (not seen in recon)
 '
-' Plan sheet left-zone columns (P1 mockup):
+' Plan sheet left-zone columns (P1 mockup - pre-Session E shape):
 '   B=Step, C=Action, D=Dist(m), E=Speed(m/hr), F=Turn(deg),
 '   G=Hold(s), H=WP#, I=DistSum(m), J=Arrives, K=Note
+' (Session E collapsed B+H - see WritePlanRow body for current shape.)
 ' ============================================================
 
 Option Explicit
@@ -47,13 +62,15 @@ Private Const CL_DESC = 4
 Private Const CL_DURATION = 5
 Private Const CL_SCOUT_SPEED = 6
 Private Const CL_DISTANCE = 7
+Private Const CL_COMPASS_DEG = 14   ' GetCartLog: C-row deg (verbatim)
+Private Const CL_COMPASS_WP  = 15   ' GetCartLog: WP# the C-row binds to
 
 ' Steering centre offset used in CartLog T-events
 Private Const CART_STEERING_CENTRE As Integer = 98
 
 
 ' ============================================================
-' Public entry — BuildPlanFromCartLog
+' Public entry - BuildPlanFromCartLog
 ' ============================================================
 Public Sub BuildPlanFromCartLog()
     On Error GoTo ErrHandler
@@ -79,7 +96,7 @@ Public Sub BuildPlanFromCartLog()
 
     ' --- Sanity check: ProcessCartLog must have run (col G populated) ---
     If wsLog.Cells(1, CL_DISTANCE).value <> "Distance (m)" Then
-        MsgBox "CartLog col G is not 'Distance (m)' — has " & _
+        MsgBox "CartLog col G is not 'Distance (m)' - has " & _
                "Cart.ProcessCartLog been run?" & vbCrLf & vbCrLf & _
                "Run ProcessCartLog first, then retry.", _
                vbExclamation, "BuildPlanFromCartLog"
@@ -87,7 +104,7 @@ Public Sub BuildPlanFromCartLog()
     End If
 
     Dim lastCartRow As Long
-    lastCartRow = wsLog.Cells(wsLog.Rows.count, 1).End(xlUp).row
+    lastCartRow = wsLog.Cells(wsLog.rows.count, 1).End(xlUp).row
     If lastCartRow < 2 Then
         MsgBox "CartLog is empty.", vbExclamation, "BuildPlanFromCartLog"
         Exit Sub
@@ -111,6 +128,25 @@ Public Sub BuildPlanFromCartLog()
     ' --- Clear existing left-zone rows ---
     wsPlan.Range(CART_COL_FIRST & PLAN_FIRST_ROW & ":" & _
                  CART_COL_LAST & (PLAN_FIRST_ROW + PLAN_MAX_ROWS - 1)).ClearContents
+
+    ' Label col H (header row 5 is not in the cleared data zone).
+    wsPlan.Cells(5, 8).value = "Heading (deg)"
+
+    ' Pre-scan iPhone-compass 'C' rows -> map waypoint # to heading deg.
+    ' C rows bind to a WP EXPLICITLY via col 15 (the WP# the operator was
+    ' on when typing the compass), NOT by log position - so look up on that
+    ' and stamp it onto the matching WP leg below. deg = col 14, WP# = col 15.
+    Dim compassByWp As Object
+    Set compassByWp = CreateObject("Scripting.Dictionary")
+    Dim cr As Long
+    For cr = 2 To lastCartRow
+        If Trim(CStr(wsLog.Cells(cr, CL_TYPE).value)) = "C" Then
+            If IsNumeric(wsLog.Cells(cr, CL_COMPASS_WP).value) Then
+                compassByWp(CLng(wsLog.Cells(cr, CL_COMPASS_WP).value)) = _
+                    wsLog.Cells(cr, CL_COMPASS_DEG).value   ' last-write-wins
+            End If
+        End If
+    Next cr
 
     ' --- Walk CartLog, aggregate per waypoint ---
     Dim currentSpeed As Double:     currentSpeed = 0
@@ -137,7 +173,7 @@ Public Sub BuildPlanFromCartLog()
 
         evtTime = CStr(wsLog.Cells(r, CL_TIME).value)
         ' Preserve case: 'T' (target set, authoritative) vs 't' (ramp-complete, informational).
-        ' Per DJI_Ronin_Giga_v2.ino line 1317 vs line 3159 — case is meaningful.
+        ' Per DJI_Ronin_Giga_v2.ino line 1317 vs line 3159 - case is meaningful.
         evtTypeRaw = Trim(CStr(wsLog.Cells(r, CL_TYPE).value))
         evtType = evtTypeRaw   ' do NOT UCase
         evtValue = SafeDouble(wsLog.Cells(r, CL_VALUE).value)
@@ -157,7 +193,7 @@ Public Sub BuildPlanFromCartLog()
                 End If
                 currentSpeed = evtValue
             Case "T"
-                ' Steering TARGET set — authoritative. Value is RAW servo code
+                ' Steering TARGET set - authoritative. Value is RAW servo code
                 ' (CART_STEERING_CENTRE = 98). Per sketch line 1317.
                 Dim steerDeg As Integer
                 steerDeg = CInt(evtValue) - CART_STEERING_CENTRE
@@ -167,16 +203,19 @@ Public Sub BuildPlanFromCartLog()
                 End If
                 currentSteer = steerDeg
             Case "t"
-                ' Steering ramp COMPLETE — informational only (sketch line 3159).
+                ' Steering ramp COMPLETE - informational only (sketch line 3159).
                 ' Do NOT update currentSteer here; the 'T' event already set it.
                 ' Listed explicitly so future readers see it was considered.
             Case "W"
-                ' Waypoint mark — close out the current leg
+                ' Waypoint mark - close out the current leg
                 wpNum = wpNum + 1
+                Dim legHeading As Variant
+                legHeading = Empty
+                If compassByWp.Exists(wpNum) Then legHeading = compassByWp(wpNum)
                 WritePlanRow wsPlan, planRow, wpNum, _
                              "DRIVE", legDistance, legStartSpeed, legStartSteer, _
                              "", evtTime, "Way" & Format(wpNum, "00") & _
-                             " (recon " & evtTime & ")"
+                             " (recon " & evtTime & ")", legHeading
                 planRow = planRow + 1
                 writtenRows = writtenRows + 1
 
@@ -186,32 +225,24 @@ Public Sub BuildPlanFromCartLog()
                 legStartSpeed = currentSpeed
                 legStartSteer = currentSteer
             Case "X"
-                ' Stop — close out as final leg, then emit STOP row
-                If legDistance > 0 Or wpNum = 0 Then
-                    wpNum = wpNum + 1
-                    WritePlanRow wsPlan, planRow, wpNum, _
-                                 "DRIVE", legDistance, legStartSpeed, legStartSteer, _
-                                 "", evtTime, "Way" & Format(wpNum, "00") & _
-                                 " (recon stop @ " & evtTime & ")"
-                    planRow = planRow + 1
-                    writtenRows = writtenRows + 1
-                End If
-
-                ' Emit explicit STOP row (no waypoint number — STOP is an action)
+                ' Stop. Day 25: a stop is NOT a waypoint. Only deliberate 'W'
+                ' marks number a leg. Accidental start/stop churn during a recon
+                ' must not inflate the waypoint count. So emit ONLY an un-numbered
+                ' STOP annotation and let legDistance CARRY FORWARD to the next 'W'
+                ' (do not reset it) so the leg to the next real mark keeps the
+                ' distance driven up to the stop.
                 WritePlanRow wsPlan, planRow, Empty, _
                              "STOP", Empty, 0, Empty, _
                              Empty, evtTime, "Cart parked"
                 planRow = planRow + 1
                 writtenRows = writtenRows + 1
-
-                legDistance = 0
-                legStart = ""
+                ' legDistance intentionally NOT reset; leg continues to next W.
             Case "P", "p", "a"
                 ' Execution-time markers (plan segment start / phase / abort).
                 ' Per sketch lines 2592, 2609, 2624. Should not appear in a
                 ' recon CartLog; ignored defensively if they do.
             Case Else
-                ' Unknown event type — ignore but don't fail.
+                ' Unknown event type - ignore but don't fail.
         End Select
     Next r
 
@@ -234,7 +265,7 @@ End Sub
 
 
 ' ============================================================
-' Helper — write one Plan row
+' Helper - write one Plan row
 ' ============================================================
 Private Sub WritePlanRow(ByVal wsPlan As Worksheet, _
                           ByVal r As Long, _
@@ -245,9 +276,23 @@ Private Sub WritePlanRow(ByVal wsPlan As Worksheet, _
                           ByVal turn As Variant, _
                           ByVal hold As Variant, _
                           ByVal arrives As String, _
-                          ByVal note As String)
-    ' Col B = Step #  (derived from row index, not authored)
-    wsPlan.Cells(r, 2).value = r - PLAN_FIRST_ROW + 1
+                          ByVal note As String, _
+                          Optional ByVal heading As Variant = Empty)
+    ' Col B = Step / WP label.
+    ' Session E (Day 20): col B IS the WP label - text "WP01", "WP02", ...
+    ' Pre-Session E B held an integer step number and col H held the WP label
+    ' separately. The two columns carried redundant information once H became
+    ' text in P6, so Session E collapses them. STOP rows get a WP label too:
+    ' once a row is in the plan it is a position, even if speed=0.
+    ' Day 25: label from the WAYPOINT number passed by the caller, NOT the
+    ' row index. Real 'W' marks pass a number -> "WP01", "WP02"... in mark
+    ' order. STOP / action rows pass Empty -> a dash, so accidental stops are
+    ' visibly NOT numbered waypoints.
+    If IsEmpty(wpNum) Then
+        wsPlan.Cells(r, 2).value = ChrW(8212)  ' em-dash (ChrW: Chr() only takes 0-255): action row, no WP#
+    Else
+        wsPlan.Cells(r, 2).value = "WP" & Format(CLng(wpNum), "00")
+    End If
     ' Col C = Action
     wsPlan.Cells(r, 3).value = action
     ' Col D = Distance (m)
@@ -256,7 +301,7 @@ Private Sub WritePlanRow(ByVal wsPlan As Worksheet, _
             wsPlan.Cells(r, 4).value = Round(CDbl(distance), 3)
         End If
     End If
-    ' Col E = Speed (m/hr) — seed with recon speed
+    ' Col E = Speed (m/hr) - seed with recon speed
     If Not IsEmpty(speed) Then
         wsPlan.Cells(r, 5).value = speed
     End If
@@ -268,13 +313,14 @@ Private Sub WritePlanRow(ByVal wsPlan As Worksheet, _
     If Not IsEmpty(hold) Then
         wsPlan.Cells(r, 7).value = hold
     End If
-    ' Col H = WP #
-    If Not IsEmpty(wpNum) Then
-        wsPlan.Cells(r, 8).value = wpNum
+    ' Col H = Heading (deg) - iPhone-compass value for this WP, verbatim
+    ' (no conversion). Blank if the WP had no compass entry.
+    If Not IsEmpty(heading) Then
+        If IsNumeric(heading) Then wsPlan.Cells(r, 8).value = heading
     End If
-    ' Col I = Dist Σ — derived, leave for P3 formulae to fill
-    '   (P2 deliberately does not compute running total — P3 will)
-    ' Col J = Arrives — seed with raw CartLog timestamp for now
+    ' Col I = Dist (sum) - derived, leave for P3 formulae to fill
+    '   (P2 deliberately does not compute running total - P3 will)
+    ' Col J = Arrives - seed with raw CartLog timestamp for now
     wsPlan.Cells(r, 10).value = arrives
     ' Col K = Note
     wsPlan.Cells(r, 11).value = note
@@ -282,7 +328,7 @@ End Sub
 
 
 ' ============================================================
-' Helper — count existing non-empty Plan rows (col C = Action)
+' Helper - count existing non-empty Plan rows (col C = Action)
 ' ============================================================
 Private Function CountPlanRows(ByVal wsPlan As Worksheet) As Long
     Dim n As Long: n = 0
@@ -295,7 +341,7 @@ End Function
 
 
 ' ============================================================
-' Helper — apply seed-fill colour to written rows
+' Helper - apply seed-fill colour to written rows
 ' Pale yellow (FFFFEE) matches the P1 mockup convention
 ' ============================================================
 Private Sub ApplySeedFormatting(ByVal wsPlan As Worksheet, _
@@ -310,7 +356,7 @@ End Sub
 
 
 ' ============================================================
-' Helper — safe Double parse (returns 0 for non-numeric)
+' Helper - safe Double parse (returns 0 for non-numeric)
 ' ============================================================
 Private Function SafeDouble(ByVal v As Variant) As Double
     If IsNumeric(v) Then
@@ -322,7 +368,7 @@ End Function
 
 
 ' ============================================================
-' Helper — log to Log sheet if LogEvent exists, else silent
+' Helper - log to Log sheet if LogEvent exists, else silent
 ' ============================================================
 Private Sub LogEventSafe(ByVal category As String, ByVal msg As String)
     On Error Resume Next

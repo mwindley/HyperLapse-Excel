@@ -1,46 +1,70 @@
 Attribute VB_Name = "BicycleModel"
 ' ============================================================
-' HyperLapse Cart — BicycleModel Module
+' HyperLapse Cart - BicycleModel Module
 '
 ' PURPOSE
 '   Convert the event-driven Cart Log (timestamps + steering/speed
 '   changes + TIC step counts) into a continuous (x, y, theta) ground
 '   trace using a rear-axle bicycle / Ackermann model.
 '
-'   Inputs:  CartLog sheet (6 columns — populated by Cart.GetCartLog)
-'   Outputs: Trace sheet  (8 columns — t, x, y, theta_deg, segment
+'   Inputs:  CartLog sheet (6 columns - populated by Cart.GetCartLog)
+'   Outputs: Trace sheet  (8 columns - t, x, y, theta_deg, segment
 '                          distance, steering, speed, CartLogRow)
 '            Chart on CartLog sheet (XY trace of x,y with row-number
 '                          labels at each T/X event for operator
 '                          cross-reference with the log).
 '
 ' STATUS day 8
-'   M_PER_STEP measured = 0.00178 mm/step (~1.77 µm/step), validated
+'   M_PER_STEP measured = 0.00178 mm/step (~1.77 um/step), validated
 '     across 10-100 m/hr at locked OD=1.00 in three clean runs.
 '   WHEELBASE_M = 0.490 m measured day 7.
 '   SERVO_TO_DEG = 1.0 is a PLACEHOLDER. Real value comes from circle
-'     test (workfront #20) — drive a known servo angle, measure circle
+'     test (workfront #20) - drive a known servo angle, measure circle
 '     diameter, derive degrees-per-servo-PWM-unit.
 '
-' MATHS (rear-axle bicycle, no slip assumed)
+' CONVENTION (Day 29 - UNIFIED on the Ronin/standard frame)
+'   The WHOLE system now uses ONE heading frame, clockwise-POSITIVE:
+'   N 0 / E +90 / S 180 / W -90 - the same as a phone compass and the
+'   Ronin gimbal yaw. So you enter the RAW phone reading in cart recon
+'   (east = +90, no hand-negation) and the trace/log report the same frame.
+'
+'   This is done as a BOUNDARY FLIP: the proven Day-8 integration math
+'   below is left UNTOUCHED (it runs internally in the old clockwise-
+'   NEGATIVE frame, which is why the path geometry stays validated). Only
+'   two boundaries are negated:
+'     - SEED:   theta_rad = -(C value) * PI/180   (read-time negate)
+'     - OUTPUT: reported heading = -(internal theta)  (trace col 4 + log)
+'   Net contract: everything you TYPE and everything you READ is clockwise-
+'   POSITIVE; the internal representation is an implementation detail.
+'   Steering entry (+ = RIGHT) is a separate wheel-angle convention and is
+'   NOT affected by this flip.
+'
+' MATHS (rear-axle bicycle, no slip assumed) - INTERNAL frame, unchanged
+'   FRAME (internal): +Y = NORTH (heading 0), +X = EAST (heading -90),
+'   clockwise-NEGATIVE, heading runs N 0 / E -90 / S -180 / W +90. This was
+'   MEASURED on the cart at four quads (N~0, E~-84, S~-179, W~+97). theta is
+'   the cart heading in this internal frame; the heading unit vector is
+'   u(theta) = (-sin theta, cos theta). The seed/output negates above map
+'   this internal frame to/from the clockwise-POSITIVE contract.
 '   For each segment between event i and event i+1:
 '     d     = (rear_steps[i+1] - rear_steps[i]) * M_PER_STEP        [m]
-'     phi   = wheel angle in radians (positive = left turn)
-'     theta = current heading in radians (0 = +X axis, CCW positive)
+'     phi   = wheel angle in radians (positive = RIGHT turn = clockwise)
+'     theta = cart heading in radians (0 = NORTH = +Y; clockwise negative)
 '
 '   Straight segment (|phi| < TINY):
-'     x_new     = x + d * cos(theta)
-'     y_new     = y + d * sin(theta)
+'     x_new     = x - d * sin(theta)
+'     y_new     = y + d * cos(theta)
 '     theta_new = theta
 '
 '   Arc segment:
-'     R         = WHEELBASE_M / tan(phi)        ' turning radius
-'     dtheta    = d / R                          ' heading change
+'     R         = WHEELBASE_M / tan(phi)        ' turning radius (R>0 = right)
+'     dtheta    = -d / R                         ' right turn = clockwise = theta DOWN
 '     theta_new = theta + dtheta
-'     x_new     = x + R * (sin(theta_new) - sin(theta))
-'     y_new     = y - R * (cos(theta_new) - cos(theta))
+'     x_new     = x + R * (cos(theta) - cos(theta_new))
+'     y_new     = y + R * (sin(theta) - sin(theta_new))
 '
-'   Initial state: x = 0, y = 0, theta = 0 (cart points +X at start).
+'   Initial state: x = 0, y = 0, theta = seed heading (cart points along
+'   its logged start heading; North seed => points +Y / up).
 '
 ' USAGE
 '   1. Run Cart.GetCartLog to retrieve the latest CartLog
@@ -57,7 +81,7 @@ Option Explicit
 ' Update these as measurements improve.
 
 ' Cart drivetrain: metres travelled per microstep at the rear axle.
-' Day-8 measured: ~1.77 µm/step. Verified speed-independent 10-100 m/hr.
+' Day-8 measured: ~1.77 um/step. Verified speed-independent 10-100 m/hr.
 Public Const M_PER_STEP As Double = 0.00000178
 
 ' Wheelbase centre-to-centre (rear axle to front axle), metres.
@@ -66,17 +90,20 @@ Public Const WHEELBASE_M As Double = 0.49
 
 ' Servo PWM offset (from CART_STEERING_CENTRE) to wheel angle in degrees.
 ' Cart.bas servo values come through as offsets-from-centre.
-' PLACEHOLDER — to be calibrated by circle test (workfront #20).
+' PLACEHOLDER - to be calibrated by circle test (workfront #20).
 ' Once known, replace with measured value.
-Public Const SERVO_TO_DEG As Double = 1#
+Public Const SERVO_TO_DEG As Double = 0.504   ' Day 9 (17 May) 8-point full-circle
+                                              ' Kasa fit at +30 PWM, grass, R=1693mm,
+                                              ' +-67mm scatter. Was 1.0 placeholder.
+                                              ' (day-9 quarter-turn est. 0.35 superseded.)
 
-' Numerical tolerance for "this is a straight segment" — radians.
+' Numerical tolerance for "this is a straight segment" - radians.
 ' Below this, we treat phi=0 to avoid divide-by-near-zero on tan(phi).
 Private Const STRAIGHT_TINY As Double = 0.00017453  ' ~0.01 degree
 
 ' Visualisation: maximum arc length per emitted trace point. For real
 ' Cart Logs the operator may hold steering across long arcs (one T event,
-' one X event) — that's only two trace points, so the chart would draw a
+' one X event) - that's only two trace points, so the chart would draw a
 ' straight chord instead of the arc. We subdivide arcs into pieces no
 ' longer than this value so the chart can render the curve. Maths is
 ' unchanged; we only add intermediate output rows.
@@ -94,7 +121,7 @@ Public Sub IntegrateBicycle()
     Set wsLog = Sheets("CartLog")
 
     Dim lastRow As Long
-    lastRow = wsLog.Cells(wsLog.Rows.count, 1).End(xlUp).row
+    lastRow = wsLog.Cells(wsLog.rows.count, 1).End(xlUp).row
     If lastRow < 2 Then
         MsgBox "CartLog is empty. Run GetCartLog first.", vbExclamation
         Exit Sub
@@ -104,14 +131,30 @@ Public Sub IntegrateBicycle()
     Dim wsTrace As Worksheet
     Set wsTrace = EnsureTraceSheet()
 
-    ' Clear previous trace — column H included for the new row-label data
-    wsTrace.Range("A2:H" & wsTrace.Rows.count).ClearContents
+    ' Clear previous trace - column H included for the new row-label data
+    wsTrace.Range("A2:H" & wsTrace.rows.count).ClearContents
 
     ' --- State -----------------------------------------------------
     Dim t_sec As Double, x_m As Double, y_m As Double, theta_rad As Double
     x_m = 0#: y_m = 0#: theta_rad = 0#
+    ' Day 28: seed theta from the iPhone-compass start heading (first 'C'
+    ' row, CartLog col 14 = deg as typed). The BNO is treated as STUB now -
+    ' its cold-boot 'A' heading is not trusted - so we no longer seed from
+    ' col 12.
+    ' Day 29 BOUNDARY FLIP: the C value is now entered in the clockwise-
+    ' POSITIVE contract frame (raw phone reading, east = +90). The internal
+    ' integration runs clockwise-NEGATIVE, so NEGATE on read here. Falls back
+    ' to 0 (north) if no 'C' row.
+    Dim hdr0 As Variant, rr As Long
+    For rr = 2 To lastRow
+        If CStr(wsLog.Cells(rr, 2).value) = "C" Then
+            hdr0 = wsLog.Cells(rr, 14).value
+            If IsNumeric(hdr0) Then theta_rad = -CDbl(hdr0) * PI / 180#
+            Exit For
+        End If
+    Next rr
 
-    ' Steering and speed are "current settings" — they persist between
+    ' Steering and speed are "current settings" - they persist between
     ' events until changed by an S or T row. Track them as we walk the log.
     Dim currentSteerVal As Double
     Dim currentSpeedVal As Double
@@ -124,7 +167,7 @@ Public Sub IntegrateBicycle()
     Dim prevTimestamp As String
     prevTimestamp = CStr(wsLog.Cells(2, 1).value)
 
-    ' Write the initial state (segment 0 — t=0, origin, no motion).
+    ' Write the initial state (segment 0 - t=0, origin, no motion).
     Dim outRow As Long
     outRow = 2
     wsTrace.Cells(outRow, 1).value = 0#
@@ -154,7 +197,7 @@ Public Sub IntegrateBicycle()
         evtValue = SafeNum(wsLog.Cells(r, 3).value)
         rearSteps = SafeNum(wsLog.Cells(r, 5).value)
 
-        ' Segment distance from rear_steps delta (signed by direction —
+        ' Segment distance from rear_steps delta (signed by direction -
         ' which is set by speed sign; here we trust the step count sign).
         Dim d_m As Double
         d_m = (rearSteps - prevRearSteps) * M_PER_STEP
@@ -199,13 +242,15 @@ Public Sub IntegrateBicycle()
             wsTrace.Cells(outRow, 1).value = t_sub
             wsTrace.Cells(outRow, 2).value = x_new
             wsTrace.Cells(outRow, 3).value = y_new
-            wsTrace.Cells(outRow, 4).value = NormalizeDeg(theta_new * 180# / PI)
+            ' Day 29 boundary flip: report heading in the clockwise-POSITIVE
+            ' contract frame (negate the internal clockwise-negative theta).
+            wsTrace.Cells(outRow, 4).value = NormalizeDeg(-theta_new * 180# / PI)
             wsTrace.Cells(outRow, 5).value = d_sub
             wsTrace.Cells(outRow, 6).value = SteerToDeg(currentSteerVal)
             wsTrace.Cells(outRow, 7).value = currentSpeedVal
 
             ' Only the FINAL sub-step of this event gets the row label,
-            ' and only for T (steering) and X (stop) events — S events
+            ' and only for T (steering) and X (stop) events - S events
             ' don't change geometry, so labelling them adds noise.
             If k = nSteps Then
                 Dim et As String
@@ -236,7 +281,7 @@ Public Sub IntegrateBicycle()
 
     LogEvent "BIKE", "IntegrateBicycle: " & (outRow - 2) & " segments, " & _
              "end at (" & Format(x_m, "0.000") & ", " & Format(y_m, "0.000") & _
-             ") m, heading " & Format(NormalizeDeg(theta_rad * 180# / PI), "0.0") & "°"
+             ") m, heading " & Format(NormalizeDeg(-theta_rad * 180# / PI), "0.0") & "deg"
     Exit Sub
 
 ErrHandler:
@@ -246,8 +291,8 @@ End Sub
 
 ' --- Bicycle integration core -------------------------------------
 
-' Integrate one segment of motion. Distance d_m signed (+ forward, − reverse).
-' phi_rad is wheel steering angle in radians (+ left turn, − right turn).
+' Integrate one segment of motion. Distance d_m signed (+ forward, - reverse).
+' phi_rad is wheel steering angle in radians (+ RIGHT turn = clockwise, cart frame).
 Private Sub BicycleStep(ByVal x As Double, ByVal y As Double, _
                         ByVal theta As Double, _
                         ByVal d_m As Double, ByVal phi_rad As Double, _
@@ -255,18 +300,18 @@ Private Sub BicycleStep(ByVal x As Double, ByVal y As Double, _
                         ByRef theta_new As Double)
     If Abs(phi_rad) < STRAIGHT_TINY Then
         ' Straight segment
-        x_new = x + d_m * Cos(theta)
-        y_new = y + d_m * Sin(theta)
+        x_new = x - d_m * Sin(theta)
+        y_new = y + d_m * Cos(theta)
         theta_new = theta
     Else
-        ' Arc segment — rear-axle bicycle model
-        Dim R As Double
-        R = WHEELBASE_M / Tan(phi_rad)
+        ' Arc segment - rear-axle bicycle model
+        Dim r As Double
+        r = WHEELBASE_M / Tan(phi_rad)
         Dim dtheta As Double
-        dtheta = d_m / R
+        dtheta = -d_m / r
         theta_new = theta + dtheta
-        x_new = x + R * (Sin(theta_new) - Sin(theta))
-        y_new = y - R * (Cos(theta_new) - Cos(theta))
+        x_new = x + r * (Cos(theta) - Cos(theta_new))
+        y_new = y + r * (Sin(theta) - Sin(theta_new))
     End If
 End Sub
 
@@ -282,21 +327,28 @@ Private Sub ApplyEvent(ByVal evtType As String, ByVal evtValue As Double, _
         Case "S"
             currentSpeedVal = evtValue   ' m/hr
         Case "T"
-            currentSteerVal = evtValue   ' servo offset from centre
+            ' Day 25 fix: Cart.bas writes the RAW servo code (centre=98),
+            ' NOT an offset. Convert to offset-from-centre here so the
+            ' bicycle geometry sees a wheel angle near 0, not ~98.
+            currentSteerVal = evtValue - 98
         Case "X"
             currentSpeedVal = 0#
         Case Else
-            ' Unknown — leave state alone
+            ' Unknown - leave state alone
     End Select
 End Sub
 
 ' Convert servo offset (Cart.bas value column) to wheel angle in radians.
 Private Function SteerToRadians(ByVal servoOffset As Double) As Double
+    ' Day 27 frame: cart steer offset +ve = RIGHT; in the cart plot
+    ' frame a right turn is clockwise and the arc math drives theta
+    ' DOWN via dtheta = -d/R, so phi is used POSITIVE for right here
+    ' (no negate). Pairs with the un-negated heading seed.
     SteerToRadians = SteerToDeg(servoOffset) * PI / 180#
 End Function
 
 ' Convert servo offset to wheel angle in degrees.
-' PLACEHOLDER — circle test will give a real coefficient.
+' PLACEHOLDER - circle test will give a real coefficient.
 Private Function SteerToDeg(ByVal servoOffset As Double) As Double
     SteerToDeg = servoOffset * SERVO_TO_DEG
 End Function
@@ -327,7 +379,7 @@ Private Function NormalizeDeg(ByVal d As Double) As Double
     NormalizeDeg = x
 End Function
 
-' Safe numeric read — returns 0 if cell empty or non-numeric.
+' Safe numeric read - returns 0 if cell empty or non-numeric.
 Private Function SafeNum(ByVal v As Variant) As Double
     If IsNumeric(v) Then
         SafeNum = CDbl(v)
@@ -354,7 +406,7 @@ Private Function EnsureTraceSheet() As Worksheet
 
     ' Write headers (overwrite, in case columns evolved between versions).
     ' Column H added so the chart can label T/X events with the
-    ' originating Excel row from CartLog — useful for Smooth Selection
+    ' originating Excel row from CartLog - useful for Smooth Selection
     ' (workfront #44) where the operator picks ranges of rows to fold.
     ws.Cells(1, 1).value = "t_sec"
     ws.Cells(1, 2).value = "x_m"
@@ -407,20 +459,20 @@ Private Sub RefreshTraceChart(ByVal wsLog As Worksheet, _
         With .SeriesCollection(1)
             .Name = "Trace"
             .XValues = wsTrace.Range("B2:B" & lastTraceRow)
-            .Values = wsTrace.Range("C2:C" & lastTraceRow)
+            .values = wsTrace.Range("C2:C" & lastTraceRow)
             .MarkerStyle = xlMarkerStyleCircle
             .MarkerSize = 4
 
             ' Data labels: linked-to-source from Trace column H.
             ' Excel reads each point's label text from the corresponding
-            ' cell in H — blank cells produce blank labels, so the chart
+            ' cell in H - blank cells produce blank labels, so the chart
             ' only shows row numbers at the T/X event points. This is
             ' an Excel 2013+ feature ("Value from Cells").
             '
             ' Order of operations matters:
-            '   1. .HasDataLabels = True       — turn labels on
-            '   2. .DataLabels.ShowValue = False — stop default value display
-            '   3. ShowRange + InsertChartField — link to cell range
+            '   1. .HasDataLabels = True       - turn labels on
+            '   2. .DataLabels.ShowValue = False - stop default value display
+            '   3. ShowRange + InsertChartField - link to cell range
             ' Step 2 BEFORE step 3 or Excel keeps the values on too.
             .HasDataLabels = True
             With .DataLabels
@@ -434,7 +486,7 @@ Private Sub RefreshTraceChart(ByVal wsLog As Worksheet, _
             End With
         End With
 
-        ' Equal-ish axes by default — Excel won't enforce true 1:1 aspect,
+        ' Equal-ish axes by default - Excel won't enforce true 1:1 aspect,
         ' but at least give the chart room to show the shape.
         With .Axes(xlCategory)
             .HasTitle = True
@@ -487,7 +539,7 @@ Public Sub SimulateCartLog()
     ' Constants for this simulation
     Const SIM_M_PER_STEP As Double = 0.00000178
     Const SIM_SPEED_MHR As Double = 100#       ' 100 m/hr to keep times short
-    Const SIM_PHI_DEG As Double = 13.77        ' atan(0.49/2) = ~13.77° -> R=2m arc
+    Const SIM_PHI_DEG As Double = 13.77        ' atan(0.49/2) = ~13.77deg -> R=2m arc
     Const SIM_STRAIGHT_M As Double = 5#
     Const SIM_ARC_M As Double = 3.14159265358979 ' quarter-circle at R=2m
 
@@ -525,7 +577,7 @@ Public Sub SimulateCartLog()
     ws.Cells(row, 6).value = 0
     row = row + 1
 
-    ' t = 1 + straight_time : start of arc — apply steering
+    ' t = 1 + straight_time : start of arc - apply steering
     Dim t_end_straight As Double
     t_end_straight = 1# + (SIM_STRAIGHT_M / v_mps)
     Dim steps_after_straight As Double
@@ -574,13 +626,13 @@ End Sub
 ' Public so other modules (e.g. WobblyRecon) can format their own
 ' synthetic timestamps consistently.
 Public Function SecToHms(ByVal s As Double) As String
-    Dim h As Long, m As Long, sec As Long
+    Dim h As Long, M As Long, sec As Long
     Dim totalSec As Long
     totalSec = CLng(s + 0.5) - 1   ' floor-ish
     If totalSec < 0 Then totalSec = 0
     h = totalSec \ 3600
-    m = (totalSec Mod 3600) \ 60
+    M = (totalSec Mod 3600) \ 60
     sec = totalSec Mod 60
-    SecToHms = Format(h, "00") & ":" & Format(m, "00") & ":" & Format(sec, "00")
+    SecToHms = Format(h, "00") & ":" & Format(M, "00") & ":" & Format(sec, "00")
 End Function
 

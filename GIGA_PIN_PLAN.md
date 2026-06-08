@@ -1,9 +1,19 @@
 # Giga R1 — Pin Assignment Plan
 
-Draft v2 (Day 22). CAN Pal + CCAPI-over-HTTP current; D9 readback (#68)
+Draft v3 (Day 25). CAN Pal + CCAPI-over-HTTP current; D9 readback (#68)
 and W5500 wired Ethernet (#69) are future workfronts. **BNO085 moved from
 UART-RVC to I²C** — it's an occasional heading-truth reference, not a
 continuous stream (see decision note under the pin map).
+
+> **Day-25 CHANGE — BNO085 moved OFF the shared Wire bus onto its OWN bus,
+> Wire2 (D8 SDA / D9 SCL), with 2.2kΩ pull-ups.** Reason: the Tic holds SCL
+> low while busy (documented I²C clock-stretching); on the shared Wire bus
+> that blocked the BNO's SHTP read under motor power → stream stall.
+> Isolating the BNO on Wire2 makes the contention impossible — fix
+> validated on production (soak-v20, motors driving, no stall). The pin
+> map / addresses / decision notes below still say "BNO on Wire (D20/D21)"
+> in places — treat THIS note as canonical where they conflict; the
+> Tics remain on Wire (D20/D21), only the BNO moved.
 
 ## What's connecting
 

@@ -1,877 +1,213 @@
 # HyperLapse Cart — Open Workfronts
 
-**As of:** Session C day 18 (second half), 24 May 2026
+**As of:** Day 31, 07 Jun 2026 — gimbal Plan View (#2) renderer + Excel
+Render-Plan-View button LIVE; moon astro table->push->cart proven on the
+spare GIGA (cart mask 127). See the Day-31 block immediately below for
+remaining items. The numbered open-workfronts catalog further down keeps
+each workfront's standing status. (Dated session-history blocks Day 13 ->
+Day 25 - including the Day-25-part-2 BNO Wire2-isolation correction - have
+been relocated to PROJECT_STATE_CONSOLIDATED.md; see the pointer below the
+Day-31 block.)
 
 This file lists work surfaced but not yet executed. Each item
 references which session/day raised it. Prioritise per shoot
 calendar.
 
-Older session detail (days 6–11 workfront narratives) lives in
-`WORKFRONTS_old_ver1.md`. This file keeps only open items, plus
-one-line stubs for resolved/rejected ones to preserve traceability.
+## Day 31 (07 Jun 2026) — gimbal Plan View built; moon astro pushed; remaining items
+
+Three work streams this session. Full detail in companion docs
+(GIMBAL_PLANVIEW_BUILD.md, GIMBAL_PLANVIEW_REMAINING.md). Note: the
+moon-astro and cable-UI workfront docs are now build-complete and have
+been archived (see PROJECT_STATE_CONSOLIDATED.md); their remaining items
+are carried in B and the Cart-UI block below. canon_battery_pause and
+gimbal_WP_coordination remain LIVE deep-dives (still designed-not-built).
+
+### A. Gimbal Plan View (#2) — renderer + Excel loop LIVE
+DONE: Python renderer `Python/gimbal_planview_v2.py` (non-cumulative
+reference model: base = Ry when present else WP heading; pitch = Rp else
+0; deltas additive; NO accumulation). Pitch-as-length glyphs, world-sweep
+legs (1->2->3->4) obeying col-AC CW/CCW with near-180 ambiguity flag when
+blank, PREV/NEXT, map-underlay hook, park-and-wait marker. Excel side:
+`Modules/GimbalSweepDir.bas` (auto-fills col AC shortest cart-frame
+CW/CCW, preserves overrides) + `Modules/GimbalPlanViewButton.bas` (the
+Render Plan View button; outer-quoted cmd /c; logs to render_log.txt).
+Hardware-confirmed render loop on operator machine (Python 3.14).
+REMAINING:
+- **FIX #11 validation chart (real bug).** GimbalPlanViz_v3 accumulates
+  Move rows — same stale cumulative model removed from the plan view.
+  Its trajectory, max-|cum yaw| and +/-450 cable numbers are WRONG.
+  Re-base on the non-cumulative reference model + col-AC cable calc.
+- Cable strip (view #3): linear -450..+450, reads col AC, shows wind-up;
+  the plan view deliberately omits cable (gimbal-pointing only).
+- Map underlay v2: auto-fetch static tile from Settings lat/lon (needs
+  API key + network; operator machine, not sandbox). v1 (manual
+  screenshot --map) works; Tapanappa is the reference image.
+- Update GIMBAL_PLANVIEW_BUILD.md — predates the non-cumulative + col-AC
+  decisions; its resolver pseudocode is stale.
+
+### B. Moon astro — table->push->cart proven; firmware piece remains
+Decisions: moon IS in scope; moon obeys no-shoot-under-horizon ->
+goto-rise-and-wait (supersedes the old "no horizon gating" line in
+GIMBAL_EXECUTION_CAPABILITIES).
+DONE + hardware-confirmed (spare GIGA, no gimbal/camera): step 3 moon
+AstroTable column (Astro.bas GenerateGCTable, cols G/H/I); step 4a astro
+push (AstroPush.bas PushAstroToCart -> mnry/mnrp/mnsy/mnsp); step 4b
+track-path cubic was already in production; step 6 renderer reads moon
+defensively. 07-Jun push returned cart `"mask":127` (all 7 slots; moon
+bits 2/3 now on, was 115). Both .bas swapped as whole modules + compiled.
+REMAINING:
+- **Step 5 (FIRMWARE): moon below-horizon goto-rise-and-wait** in the cart
+  executor/cubic — park at rise bearing + hold, no underground tracking.
+  Same treatment as sun/GC. This is the only un-built moon item.
+- Verify Show astro -> Moonrise/Moonset actually SWINGS the gimbal —
+  untested (main GIGA out for repackaging, spare in use, no gimbal).
+- DECIDE: tonight moonset resolved to 12:21 / az 264 (a MIDDAY set,
+  outside the 4pm-8am window; FetchMoonTimesForNight clamped to
+  sunrise+0.5 and accepted it as bookend). Confirm desired vs "none in
+  window." Moonrise 23:23 is inside-window and clean.
+
+### C. Canon R3 overnight power — battery-swap pause fallback (FUTURE)
+Primary path = continuous adaptor (in place) for the ~16h 4pm-8am run.
+FALLBACK if adaptor missing/fails: operator-triggered pause that freezes
+the gimbal pose, holds the exposure clock, allows a quick battery change,
+resumes via Phase-A ease — reuse the parked pano suspend/resume plumbing.
+Measure-first: does R3 keep Tv/ISO across a DC-coupler power cycle
+(CCAPI re-init on resume?); tolerable gap before a visible seam; trigger
+on the execution UI. (Ronin can also feed the camera — native ~18W
+USB-C, or true 12V via a P-Tap/V-mount accessory plate — as an alt to
+the swap; 18W-sustains-R3-overnight is unverified, measure.)
+
+### D. Exec night mode (red-on-black) — FUTURE, spec exists, never wired
+The day/night toggle is a long-standing MOCKUP/spec, NOT built. The Day
+tab in the cart UI is a dead stub (`<a href='#'>Day</a>`); both UI_DESIGN
+docs confirm it was always a no-op pending the Exec screen (now built),
+and PROJECT_STATE item 12 lists it "Parked". So this is build-the-parked-
+item, not find-lost-code.
+Spec (locked by mockup, transcribe don't invent):
+- Global day/night theme; **only the Exec screen repaints** (Cart/Gimbal
+  are daytime-only, toggle is a visible no-op there). Tab stays in the
+  header, label flips DAY<->NIGHT.
+- Trigger: auto hard-flip at nautical sunset/sunrise (cart has the sun
+  times from astropos) PLUS a manual override button. DECIDE: auto+manual
+  (as specced) or manual-only to start.
+- Night palette (UI_DESIGN_v2, "no white anywhere"): bg #000; panels
+  #0a0202; borders #2a0808; body text #7a1818 (dim red); active/labels
+  #a82020; critical accent #d04040; button base #1a0606 / border #4a0c0c;
+  action base #3a0a0a / border #7a1818; header icons red @50% opacity.
+- v3 note: the toggle is also where the alert-sound audio-unlock
+  ("tap to start") lives (UI_DESIGN_Execution_v3 section 5) — separable
+  but co-located.
+Build = an Exec-screen night-CSS block swapped by the toggle; firmware.
+
+### E. Cable strip arcs on the cart SVG — DONE (Day 31)
+Added the sweep-order arcs (green forward / red reverse-turnaround), GP id +
+cart-frame yaw labels (staggered above/below by x-order to avoid overlap),
+max-wind flag, and the right-edge "lim" tick to the cart SVG authored by
+CableStripPush. "Excel authors the rich background, Giga moves the marker" —
+cart firmware unchanged. Fragment grew ~611 -> ~1580 chars (5 -> 11 push
+chunks). Verified by rendering the exact fragment.
+
+### F. Cable strip frame: world -> CART-FRAME — DONE (Day 31), correctness fix
+CONFLATION CORRECTED. The cable strip was unwrapping each GP's WORLD bearing
+(180/280/440/270), which folds in the cart's own per-WP heading change as if
+it were gimbal wind. Cable tangle is gimbal-relative-to-cart = CART-FRAME.
+Fix (CableStripPush): per-GP value is now cf = world - heading(anchor),
+matching the dial resolver (gimbal_planview_v2.py: cf = ((world-h+540)%360)-180);
+chassis GPs reduce to cf = dyaw. Same col-AC unwrap, same 450 span, min left.
+For the live plan this changes the read from world 180->440 (260 used /190
+headroom) to cart-frame 0->170 (170 used /280 headroom) — the gimbal is far
+from a cable problem; the old number was inflated by the cart turning between
+waypoints.
+Bonus: the strip and the preview/jog poses are now in the SAME frame
+(both cart-frame 0/100/170/0), so the index-marker and the status-line
+degrees on the cart agree — resolves the earlier frame-mismatch caveat.
+Frames, settled:
+- Gimbal/plan dial = WORLD (Ry, true-North) on the map — "where the camera
+  looks in the real world". 180 = south, etc.
+- Cable strip = CART-FRAME (cf, relative cart nose) — "how far the gimbal is
+  wound off the cart body, vs the 450 cable limit". 0 = cart front.
+These two SHOULD differ; they answer different questions.
+OPEN: the planning-side gimbal_cablestrip.py still plots WORLD-unwrapped
+(imports the resolver's world). One-line change there if the van PNG should
+match the cart strip — not yet done.
+
+### Cart UI tidy-up — DONE (Day 31)
+- Cable screen (view #3) built + flashed (soak-v102): ?screen=cable,
+  /settings/cablesvg, index-driven marker, PREV/NEXT jog reusing /preview/step,
+  PLAN_RUNNING interlock. See WORKFRONT_cable_ui.md / FIRMWARE_PATCH_cable_screen.md.
+- "Day" tab was a dead stub (href='#'); removed from the nav row. Day/Night
+  toggle relocated to a button at the top of the Exec screen body (self-
+  contained label flip; real red repaint = workfront D). Confirmed never-built
+  mockup, not lost code.
+- Tab order reordered Cart - Gimbal - Cable - Exec (left-to-right workflow).
+- Cable strip was distorting under preserveAspectRatio='none' (viewBox stretched
+  to a wider container). Changed the cable <svg> to 'xMidYMid meet' (uniform
+  scaling, dots stay round, letterboxes on wide screens). Exec chart left as-is.
+  A fixed viewBox can't be stretch-free across device widths under 'none'.
+
+### G. Gimbal WP-event coordination — Phases 1-3 DONE; Phase 4 + 3b heading REMAIN
+Phases 1-3 (WP-event-anchored GP firing) are BUILT + hardware-proven (soak-v37, nudge
+test passed Day 30) — now recorded in PROJECT_STATE.md. REMAINING:
+- **Phase 4 piece A — live Sun Track WP-anchored run (DAYLIGHT).** Needs NO new code
+  (Phase-2 window selection is mode-agnostic; cubic eval / Model B real-time proven
+  Day 24); only a live confirmation that a Track GP anchored to a WP opens on WP
+  arrival and the gimbal follows the sun. DEFERRED Day 30 (sun down ~6pm Adelaide
+  June). FOOTGUN: the cubic rt0 (AstroPush, UTC) and `/settings/realtime` anchor MUST
+  both be UTC epoch-ms; local time aims the sun off by the Adelaide offset (~9.5-10.5h).
+  No realtime-push macro exists — bench: hit `/settings/realtime?ms=<UTC epoch>` by hand.
+- **Phase 4 piece B — earth-frame heading correction (3b), ENDPOINT FIRST.** The
+  genuinely-new build (operator order Day 30: build both halves, endpoint first — the
+  executor correction has nothing to apply until the endpoint feeds a value). No sign
+  flip (cart + gimbal both CW-positive since Day 30; see #40).
+  - 1a ENDPOINT: push per-WP `expected_cart_heading` (PlanBuilder already writes it to
+    Plan col H — just send it to the cart); store cart-side; the Exec `hdg` button
+    (currently a STUB) posts the operator's REAL heading; cart computes delta and stores
+    it as the running offset — REPLACE not additive, FORWARD-only, non-blocking (no input
+    -> planned floor). Test: post a heading, read the stored offset back in `/exec/feed`.
+    NEXT ACTION on resume: read how col H / expected_cart_heading flows before wiring.
+  - 1b EXECUTOR (3b): `trackPlanTick` astro path applies
+    `gimbal_yaw_correction = real_heading − expected_cart_heading` (+ Adelaide declination
+    + mount) to commanded gimbal yaw, EARTH-FRAME GPs ONLY. Testable once 1a exists,
+    ideally in the daylight Sun Track run.
+- Two build-time decisions still parked: fire-late-vs-skip when an offset window is still
+  open at the next WP (offsets were all 0, not exercised); Pan-Follow -> Track handoff ease.
+- Doc reconciliation to HEADING_CONVENTION.md still owed: CART_HEADING_DESIGN,
+  GIMBAL_EXECUTION_CAPABILITIES (Delta-yaw wording), GIMBAL_VIZ, WORKFRONT_gimbal_WP_
+  coordination_Day29 sec 4. (#40 + PROJECT_STATE done this pass.)
+- LOOP-LONG ~1.4-3.0s stalls at `/track/start` + first interval entry — noted, NOT
+  investigated (partly the gimbal SLEEPING; wake it). Instrument before theorising.
+
+### H. SERVO_TO_DEG / slip calibration — STILL UNSETTLED (carried from Day 25-30)
+The bicycle model OVER-rotates: the +35 leg drives ~3.1m of arc reading ~128deg vs a
+true ~90deg (compass ground truth -180 -> -270). SERVO_TO_DEG = 0.504 is a Day-9 grass-
+circle PLACEHOLDER; this recon implies ~0.33-0.35; circle implies slip ~0.54 — they
+BRACKET the real value, not decided. Agreed structure (not yet implemented): pure
+geometry (28deg wheel / 0.49m wheelbase) x a SLIP factor, replacing the single conflated
+constant. RESOLUTION = a CONTROLLED re-test (linearity +5/+15, symmetry -30) with the
+servo properly fed (YEP 20A BEC fitted Day 26), marking a WP at every speed/steer change.
+The bicycle model is a planning VISUALISATION only (not fed to cart execution), so this
+gates plan-trace trustworthiness, not live aiming. (Cross-ref calibration section #20/#21.)
+
+### I. "Prep" button — one-press nightly prep chain (DESIGN, not built)
+Chain the 7 prep steps into one press (operator idea, Day 31). Run order (each needs the
+ones above): 1 Get Sunset Time -> 2 Init Shoot -> 3 Generate GC Table -> 4 Push Astro to
+Cart -> 5 Push Track Paths to Cart -> 6 Fetch Gimbal Map -> 7 Render Plan View.
+- Steps 1-5 are nightly (date-bound); step 6 is location-bound (skip if Python\map.png
+  exists, or a "refresh map" checkbox); step 7 lands the operator on the dial.
+- On any step failure, STOP and report which step (don't push half a chain to the cart).
+- Camera/CCAPI absence is NOT a failure (Tv fallback) — Prep tolerates an absent camera.
+- DECIDE at build: does Prep require the cart online (steps 4/5 push)? A "cart online?"
+  check up front makes Prep safe to run Excel-only (1-3 + 7) when the GIGA is down.
+  Re-run safety: all steps idempotent (recompute + overwrite) — confirm holds for cart pushes.
+- When the cable strip becomes a standalone output, it slots in after Render (or as a
+  second output of the same press).
 
 ---
 
-## Comms-outage fallback architecture (Day 15 — resolved)
-
-Step 4 of #36d originally said "TABLE walks the table actively
-pushing Tv/ISO PUTs at row boundaries." Day-15 discussion
-identified this as a logical impossibility — if CCAPI is
-unreachable (which is why we're in TABLE), the cart cannot push
-Tv/ISO changes to the camera.
-
-Reframed as a layered fallback problem, then narrowed by
-operator's risk assessment.
-
-**Risks classified:**
-- Camera-side WiFi failure: accepted (Step D handles)
-- Cart-side WiFi failure: accepted (rare; pin-8 keeps firing)
-- External AP failure: accepted (pin-8 + TABLE keep photos
-  delivered; only operator UI capability is lost)
-
-**Architecture as it stands:**
-
-**Production v1 (current, sufficient for now).** External WiFi
-(Rosedale / field router) is the working comms path. When it
-fails — for any of the three reasons above — pin-8 keeps
-photos firing (Fallback 1), Step D detects the outage, and
-TABLE mode runs cart-side exposure walk. Camera stays frozen
-at flip-time Tv/ISO; photos are over/underexposed during
-outage; LRTimelapse fixes drift in post. The full shoot is
-delivered. Architecture is robust. Some risk is accepted by
-design.
-
-**Production v2 (future improvement, not blocking).** Move
-the camera link to wired Ethernet point-to-point. Camera WiFi
-disabled, external WiFi never reaches the camera. Cart still
-uses external WiFi for operator UI / Excel only. Tracked as
-#47. Optionally drops pin-8 in favour of CCAPI HTTP shutter
-over the wire (architectural principle #12 would retire).
-Camera-as-AP and USB+Pi+EDSDK options are no longer in the
-running — wired Ethernet is structurally cleaner.
-
-#36d Step 4 is closed by this framing. v1 already handles the
-outage cases acceptably; v2 explores improvements.
-
----
-
-## Day 17 update (added 23 May 2026)
-
-Diagnostic + build session. **Plan execution fully validated end-to-end
-across all designed segment types and stop styles.** Five bugs found
-and fixed via instrumentation; full diagnosis narrative in PROJECT_STATE
-Day-17 entry.
-
-**Headline.** All test banks green. The cart now executes any authored
-plan correctly:
-
-- MOVE segments at any speed, distance-ended, with steering
-- MOVE-to-MOVE transitions (tr=M smooth merge)
-- STOP segments (decel, emergency-halt, or 6-min decay) with operator-
-  authored hold duration counting from genuine rest
-- Operator-ended STOP segments
-- `/plan/stop` mid-segment (clean abort)
-- `/btn11` and `/btn12` mid-plan (stop cart without aborting plan)
-- `/plan/nudge ±100mm` extending / shrinking / past-zero
-
-**Bugs fixed (chronological):**
-
-1. **Bogus rear-Tic delta negation** in `planTick`, `planStatusCSV`,
-   `/plan/nudge`. Three `delta = -delta;` lines, justified by a stale
-   "rear Tic wired physically reversed" comment, made segment-complete
-   fire on the wrong sign. Forward MOVE segments would never complete.
-   Inserted by an uncommitted edit from a prior Claude session that
-   crashed before testing. Removed; verified empirically with
-   `/debug/tic` that both Tics count positive on cart-forward.
-2. **I²C "cliff"** — `planTick` was reading `ticRear.getCurrentPosition()`
-   every main-loop iteration. Sustained high-rate I²C polling caused
-   both Tics to simultaneously NACK on the bus (Wire err=2) after a
-   variable run time (7s / 17s / 128s observed). Once cliffed, Tic
-   comms dead for the rest of run; cart kept moving on last commanded
-   velocity. Throttled `planTick` to 100ms cadence; cliff did not
-   recur. Root cause not characterised — workfront #52.
-3. **STOP-segment duration timer counted from segment entry.** A 5s
-   STOP after 30 m/hr cruise actually held only ~1.5s at rest because
-   the Tic STOP_DECEL ramp ate 3.5s of the window. Added an "at-rest
-   gate" in `planTick` END_DURATION polling both Tic velocities every
-   250ms; counts duration only from the moment both reach 0.
-4. **Stop-style dispatcher (TR_S / TR_E / TR_D) pointless.** Each
-   stop case did `cartStop()` then immediately
-   `cartSetSpeed(speed_mhr)` — Tic accepted the latest target and
-   ignored the first. No actual stop happened. Rewrote dispatcher
-   with corrected M/S/E/D semantics: M for MOVE-to-MOVE, S/E/D for
-   STOP segments. STOP variants only initiate deceleration; the
-   at-rest gate handles the duration counting. All three converge
-   to "wait at 0 then count" — they differ only in HOW the cart
-   reaches 0.
-5. **Decay-loop unsigned-subtraction underflow.** When
-   `cartStartDecay()` is called from `planTick` (which runs at the
-   top of `cartLoop`), `cart_decay_start` is set to a `millis()`
-   later than `now` captured at the top of cartLoop. The next
-   `elapsed = now - cart_decay_start` underflows, fires the
-   decay-complete branch, calls `cartStop()` on the same iteration.
-   Result: decay-style stop instantly turned into emergency-style
-   stop. Fixed by guarding `elapsed` against negative-then-wrapped
-   values.
-
-**Authoring vocabulary, post-Day-17 (canonical):**
-
-| Tag | Used on | What it does |
-|---|---|---|
-| **M** (merge) | MOVE | Slam target speed; Tic accel/decel handles ramp. Default for MOVE. |
-| **S** (decel stop) | STOP | `cartSetSpeed(0)`; Tic STOP_DECEL ramps to rest (~5s from 30 m/hr). Then hold for `duration_ms`. Default for STOP. |
-| **E** (emergency) | STOP | `cartDeadStop()`; Tic haltAndHold for instant lock (~30ms). Then hold. |
-| **D** (decay) | STOP | `cartStartDecay()`; linear ramp from current speed to 0 over `cart_decay_ms` (6 min production). Then hold. |
-
-Authoring format unchanged: `s,VAL,steer,speed,end[,tr]` where the
-optional 6th field is the transition tag.
-
-**New endpoints:**
-- `/debug/decaytime` and `/debug/decaytime?ms=N` — get/set the global
-  `cart_decay_ms` (default 360000 / 6 min, clamped 1s–10min)
-
-**New globals (kept in production):**
-- `cart_decay_ms` (replaces `const CART_DECAY_MS`)
-- `plantick_dist_last_ms` (100ms read throttle)
-- At-rest gate state in `planTick` END_DURATION (per-segment statics)
-
-**Diagnostic instrumentation removed at end of session:**
-- PTICK 500ms probe in `planTick` END_DIST
-- PROBE 100ms sampler in `cartLoop` (post-stop)
-- DUR elapsed-since-rest probe
-- TR_DECAY pre/post-startDecay diagnostic prints
-- `stop_probe_*`, `plantick_probe_last_ms` globals
-
-Retained as production-grade defensive checks:
-- `getLastError()` after Tic position read in `planTick`, logs only
-  on non-zero error code — surfaces a cliff event immediately without
-  per-tick noise
-
-**Workfront status changes:**
-- **#5a Segment dispatcher** — DONE. M for MOVE, S/E/D for STOP all
-  verified end-to-end.
-- **#5a-related: ±100mm nudge** — DONE. `/plan/nudge?d=±N` working,
-  with past-zero segment-complete fallthrough.
-- **#48 (was bus fault on shutter)** — unrelated to Day-17 bugs,
-  not revisited.
-- **NEW #51 Remove Day-17 diagnostics** — DONE this session.
-- **NEW #52 I²C cliff** — partially resolved second-session.
-  Original avoidance (100ms throttle on planTick) extended cliff
-  onset from ~7s to ~3min but did not eliminate it; 1 Hz polling
-  pushed cliff out to ~11min but still hit. Throttling alone never
-  enough. Per Pololu docs (0J71/4.6): cause class is weak pull-ups
-  + long wires + standard clock. Two interventions applied:
-  (1) Architectural — MOVE segment completion is now time-based
-  open-loop. Zero Tic reads during a MOVE segment. Cliff cause
-  removed for the long-running case. STOP at-rest gate still polls
-  velocity at 250ms but only during the bounded ~5s decel window
-  (~20 reads per STOP, well below threshold).
-  (2) Defensive — `Wire.setClock(50000)` added in setup (Pololu
-  recommendation for marginal pull-ups).
-  **Still open:** hardware fix (external 10 kΩ pull-ups on SDA/SCL
-  per Pololu) — flagged as future work, no urgency now that the
-  problem is sidestepped.
-- **NEW #53 Calibration mismatch** — `CART_SPEED_SCALE = 58` (m/hr
-  → Tic velocity) and `565 steps/mm` distance calibration are
-  internally inconsistent by ~10%. Empirically chosen constants.
-  Not a practical problem at hyperlapse pixel tolerances. Could be
-  reconciled by remeasuring on a known-distance track.
-- **NEW #54 Gimbal slew overshoot** (Day 17, second session). Observed
-  during showastro tests: large-angle slews (e.g. home → 120° pan)
-  with default `time_for_action = 0x14` (2s) physically overshoot
-  target then correct. The DJI motor controller over-tunes for the
-  load when forced to move fast. Fix options:
-  (a) bump time_for_action to a slower fixed value (e.g. 0x40 = 6.4s)
-  (b) compute slew time from angular distance like panoIssueSlew
-      already does (line 2206 of sketch, `dur_ms = dmax / slew_dps × 1000`)
-  Option (b) is consistent with existing code and the more durable
-  fix. Apply to showastro / showastrooffset / /move endpoints.
-
-**Build lessons added to PREFERENCES (Day 17):**
-- A prior crashed Claude session can leave uncommitted edits in the
-  working tree. `git diff` against the latest commit before treating
-  local sketch as authoritative.
-- A code comment that explains a counterintuitive behaviour is
-  high-risk signal, not high-trust signal. Verify empirically before
-  reasoning from it.
-- I²C cliffs are quiet — no exception, no watchdog. Standardise
-  `getLastError()` checks for any code touching Tic comms.
-- `millis()` captured at the top of a cartLoop iteration is stale by
-  the time inner code completes. Sub-blocks may set their own
-  timestamps later in the same iteration; guard subtraction.
-- A "stop" command followed by an immediate "set speed" is identical
-  to "set speed" alone — the Tic accepts the latest target. To
-  actually stop and hold, there must be an in-between gate that
-  waits for rest.
-- **If the slave is reliable in doing what you commanded, don't keep
-  asking what it's doing.** The cliff symptom was caused by polling
-  the Tic for its position 10× per second — asking something the Tic
-  already knows and will execute faithfully. Replacing the poll with
-  a time-based estimate (commanded velocity × elapsed time) was
-  enough to remove the cliff cause entirely. Bigger lesson: when a
-  measurement-based feedback loop hits a hardware-bus problem, first
-  ask whether the measurement is necessary at all.
-- **Position-poll != real-world feedback.** Asking the Tic where the
-  cart is doesn't measure the cart — it measures the Tic's internal
-  step counter, which equals reality only when nothing slips. Open-
-  loop estimation makes the same assumption. No accuracy is lost by
-  removing the poll.
-
----
-
-## Day 18 update (added 24 May 2026)
-
-Giga capability validation (Steps 1, 2, 4, 5 of GIGA_MIGRATION_STRATEGY)
-PLUS Step 7 v2 sketch port complete. Step 3 (CAN) paused on cooked
-transceiver. Sketch went from 0 → 5667 lines in DJI_Ronin_Giga_v2.ino,
-section-by-section verbatim port from v1prod with Giga deltas applied.
-
-**Capability tests passed (Day 18 first half):**
-- **Step 1** Blink + Serial on Giga (COM12, 115200, LED + Serial.println).
-- **Step 2** WiFi on Rosedale at 192.168.1.116 after one-time
-  WiFiFirmwareUpdater run.
-- **Step 4** I²C Tic 14+15 at default speed on Wire (D20/D21) with
-  external 4.7 kΩ pull-ups. Pololu Tic library compiles + runs
-  unchanged.
-- **Step 5** CCAPI alive check + shutter trigger. Required two fixes
-  vs v1prod (see workfront #61 below): explicit `\r\n` on outbound
-  headers + Wire pin selection.
-- **Step 5b** Full CCAPI dynamic-range validation. Tv GET (522 bytes,
-  current `0\"3`, 60 abilities), ISO GET (253 bytes), liveview start,
-  luminance flipdetail. 5162-byte response parsed via FF 00 01 +
-  size:4 BE + JSON + FF FF framing. Mean luminance 144→247 (bright)
-  →16 (dark). Full headroom confirmed; 8 KB LUM_RESP_BUF_SIZE on
-  Giga handles the live histogram cleanly.
-
-**Step 3 paused.** SN65HVD230 transceiver killed by reversed
-3.3V/GND wiring. CAN-only test sketch (DJI_Giga_Step3_CAN.ino)
-ready to flash once new transceiver arrives (~5 days).
-
-**Step 7 sketch port (Day 18 second half) — DJI_Ronin_Giga_v2.ino.**
-
-Five open design questions resolved up-front via GIGA_DESIGN.md:
-
-1. **IP addressing during parallel.** Giga 192.168.1.95 on Rosedale
-   (DHCP-reserved by MAC). Uno stays on .97 until retirement.
-   Excel `dataArduinoIP` flips at cutover.
-2. **UI vs camera traffic.** Operator UI + Excel polling on WiFi
-   STA port 80. W5500 wired Ethernet (when arrives) for CCAPI only.
-3. **Shutter pin.** Pin-8 → D7 on Giga. 200ms HIGH pulse discipline
-   verbatim. Sacred; fires on shutter_mode==3 regardless of CCAPI.
-4. **Buffer sizes.** CartLog 64→128, GimbalLog 24→128. Operator's
-   20-50m recon × ~50 events leaves comfortable headroom.
-5. **String allocation.** snprintf for hot paths (/status,
-   /heartbeat, /cameramsg); String OK for cold paths.
-
-Port structure: 8 sections, 5667 lines total. Compiles + runs with
-STUB_CAN defined. All 57 v1prod endpoints ported. Full 3-screen
-browser UI verbatim. Path ordering verified for every startsWith
-chain (showastrooffset before showastro, movewatchdump before
-movewatch, /shutter/* before /shutter, /cartlog/clear before
-/cartlog, etc.).
-
-Section breakdown with Giga deltas:
-- §1 (~370): WiFi.h not WiFiS3.h; STUB_CAN/BNO/W5500 stubs;
-  LUM_HTTP_TIMEOUT_MS 10000→2000; buffer 4096→8192.
-- §2 (~510): Appendix A formula plumbing — no Giga changes.
-- §3 (~460): Buffer sizes bumped per resolved Q4 above.
-- §4 (~500): drainCANRx + sendFrame wrapped in `#ifndef STUB_CAN`.
-  All commands callable; frames built and silently dropped at the
-  sendFrame stub. Pano state machine + movewatch sampler.
-- §5 (~655): ccapiRequest with `\r\n` on outbound headers (Q1
-  resolved via build lesson #1). Binary-frame luminance parse.
-- §6 (~935): Plan executor with #52 time-based completion, at-rest
-  gate, pano helpers, pin-D7 backupShutter.
-- §7 (~200): setup + loop. `Wire.setClock` REMOVED (blocks Giga
-  per Day-18 finding). CAN.begin wrapped. **delay(1) at bottom of
-  loop()** per discipline #2.
-- §8 (~1860): handleHttpRequest body split 8a-8h:
-  - 8a skeleton + status/heartbeat/cameramsg/interval
-  - 8b move/home/gimbal pano/shutter/btn1-22
-  - 8c exposure/* + settings/astropos/trackpath/trackplan
-  - 8d cartlog/gimballog (+ /clear, /push variants)
-  - 8e plan/load/start/stop/status/nudge
-  - 8f gimbal/showastro/snapvar/showastrooffset
-  - 8g 17 debug endpoints (4 early-return + 13 chain)
-  - 8h browser UI catch-all (3 screens, all SVG icons, polling JS)
-
-**Workfront state changes:**
-
-- **#47 (Giga R1 migration) — Step 7 port complete.** Sketch ready
-  to flash. Smoke test against Excel still pending. Real-gimbal
-  validation pending CAN transceiver arrival.
-- **NEW #60 Step 3 transceiver hardware** — bench setup blocked by
-  cooked SN65HVD230. New transceiver in transit (~5 days). DJI_Giga_
-  Step3_CAN.ino sketch ready to flash on arrival. Compiles cleanly;
-  only hardware blocks the test.
-- **NEW #61 v2 build discipline (mbed-os failure modes)** — design
-  doc. Seven risks identified from v1prod patterns that may break
-  on Giga: long blocking calls, String allocation in hot paths,
-  ISR/network collision, no-yield loops, PROGMEM no-op, millis
-  rollover (already handled), no EEPROM. Six defensive disciplines
-  applied during Step 7 port: bounded timeouts ≤2s, delay(1)
-  bottom-of-loop, snprintf for hot paths, CAN RX in ring buffer
-  never network code, document F() no-op, multi-hour soak test
-  before declaring done. Most folded into the sketch; multi-hour
-  soak test still pending (see #63).
-- **NEW #62 Excel Camera.bas dead-code cleanup** — design doc.
-  Cart firmware has owned the per-photo exposure walk since #36b
-  (Day 12). Excel's Camera.bas luminance pipeline + per-photo CCAPI
-  walk is vestigial. Low risk, not blocking. Defer to Giga Excel
-  port pass when every HTTP endpoint is being repointed anyway.
-- **NEW #63 Multi-hour soak test of Giga v2 sketch** — close-out
-  test for #61 build discipline. Run a representative shoot
-  envelope (sunset → sunrise) against the flashed sketch with
-  Excel driving plan execution. Watch for blocking-call stalls,
-  heap fragmentation, mbed-os scheduler starvation, silent
-  WiFi disconnects. Pass criterion: photo cadence within tolerance
-  for the full duration with no LOOP-LONG spam and no
-  reconnects. Blocks on flash + smoke test landing first.
-- **NEW #64 Phase-time terminology cleanup.**
-  `dataPhase2aStart` / `2bStart` / `3Start` / `4aStart` / `4bStart`
-  / `5Start` are jargon from a prior session — not real astronomical
-  terms. They approximate real events (golden hour, civil dusk,
-  nautical dusk, astronomical dawn, civil dawn, sunrise) but the
-  offsets drift seasonally and don't match the standard
-  astrophotography vocabulary. Astro.bas can compute the real
-  events directly via `FindSunCrossing` at the appropriate
-  altitudes (-6° civil, -12° nautical, -18° astronomical). Replace
-  named ranges with real-event names, retire `CalculatePhaseTimes`.
-  Defer to Giga Excel port pass (same window as #62) — every
-  consumer of `dataPhaseXStart` will be reviewed anyway. Not
-  blocking.
-- **NEW #65 mbed WiFi accept() semantics — sketch fix landed.**
-  Day-18 smoke test exposed that Giga's mbed WiFi
-  `wifiServer.available()` is semantically `accept()` — returns
-  the client object as soon as the TCP three-way handshake
-  completes, BEFORE the HTTP request body arrives. v1prod's
-  Uno-WiFiS3 pattern (single-shot `if (client.available())`)
-  saw `req_len=0` always, fell through every if/else, landed in
-  the UI catch-all. Root-caused via ArduinoCore-mbed issue #766
-  (JAndrassy: "available() here works like Ethernet library's
-  accept()"). Fix: replaced single check with a
-  `while (client.connected()) { if (client.available()) ... else
-  delay(1); }` bounded at 2 seconds. Confirmed working: /status,
-  /heartbeat, /settings/astropos, /exposure/load all round-trip
-  cleanly. Documented as Day-18 build lesson #5. CLOSED.
-- **NEW #66 Empty-connection diagnostic cost.** Side-effect of
-  the #65 fix: any TCP socket that lands but never sends a
-  request (browser speculative pre-connect, port scan, stale
-  Excel WinHttp socket) costs ~3000ms wall-clock (2s wait + 1s
-  client.stop tear-down). Cosmetic only — real Excel polling
-  is unaffected and pin-D7 cadence is still guaranteed by the
-  sacred-pin discipline. Long-term: investigate non-blocking
-  accept + pending-client state machine (per ArduinoCore-mbed
-  #76 / #281 idiom — `sock->set_blocking(false)` + persistent
-  client state). Not blocking #63 soak test; revisit if
-  empty-connection rate becomes significant.
-
-**Build lessons from Day 18 (also in PREFERENCES):**
-
-1. **Giga mbed WiFi needs `\r\n` on outbound HTTP headers.** Canon
-   CCAPI rejects bare-LF with 400 + empty body. WiFiS3 was lenient;
-   mbed is strict per RFC. Use `print("...\r\n")` not `println`
-   for headers.
-2. **Giga has three I²C buses.** Pins near AREF are Wire1
-   (silkscreen reads SDA1/SCL1); default Wire is on D20/D21 at the
-   other end of the digital header. Wire1 instance vs Wire: read
-   the pin diagram.
-3. **External pull-ups on Wire are MANDATORY.** Giga doesn't apply
-   internal pull-ups for Wire. 4.7 kΩ to 3V3 — confirmed working.
-4. **`Wire.setClock()` blocks on Giga.** Don't call it. Default
-   100 kHz works fine with proper pull-ups.
-5. **mbed `wifiServer.available()` is `accept()`, not data-ready.**
-   Returns the client object as soon as TCP handshake completes,
-   BEFORE the HTTP request body arrives. v1prod's single-shot
-   `if (client.available())` check saw `req_len=0` always.
-   Canonical mbed pattern is a `while (client.connected())` loop
-   that waits for `client.available()` with `delay(1)` between
-   checks, bounded at 2 seconds. v1prod's Uno-WiFiS3 pattern is
-   NOT portable to mbed. Documented in #65.
-
-Sketch line count after port: 5667 (vs v1prod 6275). Denser, same
-features. All v1prod functionality reachable; CAN/BNO/W5500 paths
-covered by stubs until hardware arrives.
-
----
-
-
-
-Below is a record of what was tested and verified. Future regression
-tests should re-run these.
-
-### Test bank A — segment end conditions
-
-A1 (MOVE with END_DURATION) skipped — parser puts MOVE val into
-dist_mm, not duration_ms. Combination not designed for. The valid
-end conditions per type are MOVE→END_DIST, STOP→END_DURATION or
-END_OPERATOR.
-
-**A2 (STOP with END_DURATION).** ✓ Verified.
-- Plan: `n=4&s1=m,200,0,20,d&s2=s,5000,0,0,t&s3=m,200,0,20,d&s4=s,0,0,0,o`
-- Result: SEG 2 entered at 20 m/hr cruise, at-rest reached t+3545ms,
-  5s hold counted from rest, SEG 3 entered, cart re-accelerated to
-  20 m/hr cleanly. Total SEG 2 wall-clock: ~8.5s for "5-second STOP".
-
-**A3 (STOP with END_OPERATOR).** ✓ Verified as part of every other
-test (the trailing `s,0,0,0,o` segment).
-
-### Test bank B — STOP segment transition tags
-
-5-segment plan: MOVE 250mm @ 30 m/hr → STOP 5s (variant) → MOVE
-250mm @ 30 m/hr → STOP 5s (variant) → STOP operator-end.
-
-**B-S (default decel stop).** ✓ At-rest at t+5408ms / t+5306ms.
-Cart re-accelerated from full rest, drove SEG 3 cleanly. Re-stopped
-in SEG 4.
-
-**B-E (emergency stop, cartDeadStop).** ✓ At-rest at t+31ms / t+32ms.
-Cart re-accelerated from dead halt without issue.
-
-**B-D (decay stop).** ✓ With `cart_decay_ms=60000` (1 min) for
-test convenience. Cart maintained 30 m/hr at SEG 2 entry, then
-linearly decayed over 60s to 0. At-rest at t+60144ms. 5s hold then
-SEG 2 complete. Production default 360000ms (6 min) restored at
-end of session.
-
-### Test bank C — stop primitives mid-plan
-
-**C1 (`/plan/stop`).** ✓ Abort fires planAbort → cartStop. Cart
-decelerates via Tic STOP_DECEL ramp. Plan state → IDLE.
-
-**C2 (`/btn11` cartStop mid-MOVE).** ✓ Cart decelerates and stops
-(~5.4s). Plan state stays RUNNING — segment-complete via END_DIST
-will not fire because cart isn't moving. Operator must follow with
-`/plan/stop` to clean up. UX implication recorded for Execution
-screen design.
-
-**C3 (`/btn12` cartDeadStop mid-MOVE).** ✓ Sharp halt within ~50ms.
-Plan stays RUNNING (same as C2). Cart locked at last position
-(Tic haltAndHold prevents drift).
-
-### Test bank D — `/plan/nudge`
-
-**D1 (`+100mm`).** ✓ Plan: `m,250,0,30,d`. During cruise, nudged
-+100mm at delta=68499. `[Plan] NUDGE seg=1 delta_mm=100
-new_dist_mm=350 steps=70299/197750`. Target updated to 197750,
-cart continued, SEG 1 completed at delta=197824.
-
-**D2 (`-100mm` with plenty left).** ✓ Plan: `m,250,0,30,d`.
-Nudged -100mm at delta=50099. Target shrank to 84750. SEG 1
-completed at delta≥84750. Cart drove ~150mm total.
-
-**D3 (`-100mm` past zero).** ✓ Plan: `m,250,0,30,d`. Waited until
-delta=106849 (~189mm covered). Nudged -100mm. Handler logged:
-`NUDGE past zero — segment complete`. SEG 2 entered immediately.
-
-**D4 (nudge on STOP segment).** ✓ Plan with STOP+duration. Nudge
-request returned `ERROR: nudge only valid mid-MOVE`. Rejected
-cleanly.
-
-### Test bank E — multi-segment with steering
-
-**E1 (S-curve plan).** ✓ Plan: `m,300,-5,20,d` → `m,300,5,20,d`
-→ STOP. SEG 1 with steer=-5, SEG 2 with steer=+5, all completed.
-Steering ramps at 1°/sec (existing behaviour) so the -5 → +5
-transition takes ~10s.
-
----
-
-## Day 16 update (added 23 May 2026)
-
-Build session — three-screen UI v2 foundation delivered. Two screens
-real (Cart Recon, Gimbal Recon), one placeholder (Execution). See
-PROJECT_STATE Day-16 entry for full detail.
-
-**Headline:** UI_DESIGN_v2.md spec moved from design to running
-firmware. Cart Recon operator-verified end-to-end. Gimbal Recon UI
-fully laid out but captured rows are client-side only — production
-gap closed by new follow-up #49.
-
-**Sketch additions (v1prod):**
-- Server-side `?screen=cart|gimbal|exec` routing in the catch-all
-  HTML `else` block. Shared header (logo row + 4-tab bar) on every
-  screen. Day palette baked in CSS.
-- New state vars: `cart_motor_state` (1B), `cart_waypoint_count` (4B),
-  `cart_last_waypoint_steps` (4B). +9 bytes SRAM globals.
-- Hooks added: cartStop/cartDeadStop/cartSetSpeed/cartEnergise/
-  cartDeenergise all set `cart_motor_state` correctly. Decay completion
-  already calls cartStop() so covered.
-- New `'W'` event in CartLog (value = waypoint number).
-- New btn22 (Mark wpt) handler with confirm.
-- `/status` extended: v[10] motor state (0=DE-E, 1=STOP, 2=ENRG),
-  v[11] waypoint count, v[12] mm-since-last-waypoint.
-- Reset paths: btn19 log-start, btn21 Clear logs, /cartlog/clear all
-  zero the waypoint counter and reseat the rear_steps anchor.
-
-**New follow-ups:**
-- **#49** Gimbal Recon rich-row persistence (cart-side struct
-  extension + /gimballog/push endpoint). Smallest path to make
-  Gimbal Recon production-usable.
-- **#50** Excel astro position push to cart. Unlocks Show astro
-  and Snap var on Gimbal Recon.
-
-**JS escape-quote build lesson** added to PREFERENCES. Broken
-`\\'s` in a stub-alert string killed the entire script (live readout
-stuck on dashes). Each level of C++ → HTML → JS escape multiplies;
-easy to over-escape into a parser error far from the affected feature.
-
-**Hygiene:**
-- `UI_DESIGN_SUMMARY.md` (Day 10) moved to `ARCHIVE/` — superseded
-  by UI_DESIGN_v2 + Day-16 build.
-- `GIMBAL_VIZ.md` §3 / §9 / §10 annotated with superseded-by
-  callouts. Sections 1, 2, 4, 5, 6, 7, 8 remain authoritative
-  reference.
-
-**Closed / promoted this session:**
-- #10a Gimbal UI page — DELIVERED as Gimbal Recon screen (one URL
-  with ?screen= routing, not a separate URL as Day-8 had proposed).
-  Production-readiness pending #49.
-- #29 Mark Waypoint button — DELIVERED (btn22 + `'W'` CartLog event).
-- Old design assumptions in GIMBAL_VIZ.md §3 (Way# dropdown, yaw/pitch
-  nudge buttons, Extra 1/2 reserved fields) — formally retired.
-
-**Not changed this session:**
-- All execution-related workfronts (#5a dispatcher, ±100mm nudge,
-  PAUSE/RESUME, #40 BNO build) remain open. Execution screen
-  remains a placeholder pending these.
-
----
-
-
-
-## Day 15 update (added 22 May 2026)
-
-Build session. #36d Step D (TABLE → LIVE recovery) delivered and
-end-to-end verified. Three Day-14-era bugs surfaced and fixed
-during the build (see PROJECT_STATE day-15 entry for detail).
-
-**Headline:** TABLE is no longer one-way per shoot. WiFi outage
-mid-shoot now triggers FLIP to TABLE, photos continue on
-step-function exposure, every 60s a 1s ping checks if comms are
-back; on success the cart returns to LIVE and the standard
-luminance walk nudges Tv/ISO back into the dead zone. 64/64
-photos delivered across a full WiFi-off-then-on cycle.
-
-**New principle reinforced:** once in TABLE, no CCAPI call should
-originate from the cart except the Step-D ping. Gates applied at
-every origination site (fetch arm, fetch service, PROBING entry).
-Architectural rule, not a defensive patch.
-
-**Part 3 — v1 simplification (same day).** With Step 4 closed
-for v1, the per-flip table-row lookup that produced `exp_delta_t_rel`
-+ `last_table_tv` / `last_table_iso` had no consumer. Retired
-those state vars, `findTableRowForTv()`, `/debug/match` endpoint,
-and associated Serial logs / JSON fields. Sketch −143 lines
-(4986 → 4843). End-to-end verified 104/104 photos across full
-LIVE → PROBING → TABLE → Step D recovery → LIVE cycle. FLIP log
-and `/exposure/state` JSON clean at the wire. TABLE mode in v1
-is now operationally exactly what it needed to be: "don't talk
-to the camera, keep photos firing, ping every 60s."
-
-**Part 8 — Gimbal execution model + PAUSE semantics (design).**
-UI design session (Day-15 part 8) resolved how the gimbal half of
-the plan executes alongside the cart, and what the proposed
-PAUSE button does to both. This is design only — no firmware
-written yet. Builds on Day-8 GIMBAL_VIZ design and Day-9
-"operator-in-the-loop" architecture.
-
-*Cart execution semantics (from existing v1 sketch).* MOVE
-segments are **distance-driven** — cart drives until rear_steps
-delta covers the segment's `dist_mm`, at the segment's
-`speed_mhr`. Wall-clock time falls out. STOP segments are
-**duration-driven** — cart sits for `duration_ms`. No clock-driven
-MOVEs exist.
-
-*Gimbal plan linking.* Gimbal events are anchored to cart
-**waypoints** (cart distance), not wall-clock time. Example
-authoring: "pan-follow from cart way 2 to cart way 5" or "move
-from Ry 250° to Ry 110° between way 2 and way 5 (600mm)". The
-gimbal events that DON'T link to cart distance: astro targets
-(sunrise / sunset / MW) — those still fire on wall-clock astro
-time because the sky doesn't wait for the cart.
-
-*Move-to execution math.* For a "move yaw X° over Y mm" event:
-- DJI R SDK protocol resolution: 0.1° yaw, 100ms time
-  (`int16_t * 0.1f` per the sketch line 1381 etc.)
-- Plan provides: total yaw delta, total distance, start yaw
-- Execution computes the next nudge from
-  `target_yaw - last_commanded_yaw` against accumulated distance
-  from segment start — NOT from accumulated micro-increments.
-  Rounding errors don't drift across thousands of nudges.
-- Slow pan (5° / 600mm = 0.0083°/mm): one 0.1° nudge per ~12mm.
-  Distance accumulates with no nudge fire for many cart loops.
-- Fast pan (140° / 600mm = 0.233°/mm): one 0.1° nudge per ~0.43mm.
-  Tighter nudge cadence.
-- The combined plan tells execution the total distance and total
-  yaw; execution decides when each 0.1° fires.
-
-*Accuracy budget is loose.* Timelapse is post-processed for
-luminance, flicker, and stabilisation. Wind blows the rig left
-and right a bit anyway. The 0.1° yaw quantisation will look like
-microscopic stair-steps in raw output; post-stabilisation
-smooths them out completely. We don't need sub-0.1° resolution,
-ms-accurate timing, or fancy interpolation.
-
-*PAUSE semantics.* DEAD STOP button on Execution UI re-framed
-as PAUSE (toggle PAUSE ↔ RESUME). Use case: hazard ahead, 2 min
-freeze, then continue. Shoot continues throughout — photos keep
-firing on Tv cadence, no abort.
-
-- **PAUSE during a MOVE segment**: Tic ramps cart down via
-  STOP_DECEL_SETTING (smooth, photogenic). Cart sits at the
-  current rear_steps position with X mm still to go. Distance-
-  driven gimbal moves also pause (no distance progress = no
-  new yaw nudges fired). RESUME: Tic ramps back up via
-  ACCEL_SETTING, rear_steps continues from where it stopped,
-  segment end condition (delta ≥ target) is met when cart has
-  actually covered the remaining distance. Distance preserved.
-  Gimbal yaw resumes from its paused intermediate value.
-  Total wall-clock extends by however long the pause was.
-- **PAUSE during a STOP segment**: cart already at rest. The
-  STOP duration counter is frozen — segment won't auto-advance
-  until RESUME. Effective use: extend the hold past its
-  scheduled end. Subsequent segments still cover their full
-  distances, so cart still arrives at the right places.
-- **Astro events during pause**: sunrise / sunset / MW are
-  wall-clock-fired, independent of pause state. A pause that
-  pushes the cart through an astro window means the gimbal
-  goes to the astro position on schedule, regardless of where
-  the cart is. Acceptable: astro is what audience expects to
-  see on time; cart position is flexible.
-- **Pause during a hold-at-waypoint (gimbal hold)**: zero
-  effect on gimbal. Gimbal was already not moving. Photos keep
-  firing on identical-frame which at 1320× speedup = ~1 second
-  of audience-visual extra hold per 2-min pause. Indistinguishable
-  from planned hold being slightly longer.
-- **Pause during pan-follow**: zero effect. Pan-follow points
-  gimbal yaw to track cart heading; cart heading isn't changing
-  during pause; gimbal stays still.
-- **Pause during track-point** (move-to a fixed earth-frame
-  object): zero effect. Gimbal already pointed at object; cart
-  paused means parallax doesn't change; object stays in frame.
-- **Pause during move-to (distance-driven gimbal segment)**:
-  the interesting case. Gimbal yaw pauses at intermediate
-  value, audience sees a brief hold mid-move. Resumes when
-  cart resumes, completes the remaining yaw delta over the
-  remaining distance. Yaw will complete "on cart distance",
-  not "on time".
-
-*Real-but-not-often consequence.* Astro events are wall-clock-
-fired. A long pause near a scheduled astro event can push the
-cart into the astro window with a still-incomplete gimbal
-move-to. The gimbal will then need to jump from its
-mid-move intermediate yaw to the astro target. Whether this
-manifests as a jolt or is smoothed by the planner is a
-question for the gimbal-plan dispatcher (#5a) and the linking
-logic (Excel-side #46).
-
-*Status of this design.* Not built. Inputs to:
-- #5a Segment dispatcher + cubic evaluator (firmware)
-- #13 New Plan sheet schema (Excel — combined cart+gimbal plan)
-- #46 Gimbal authoring against cart row labels (Excel)
-- Execution UI (DEAD STOP renamed to PAUSE, toggles to RESUME)
-
-**Part 9 — Speed transition types + ±100mm nudge semantics (design).**
-Continuation of Day-15 Part 8. Adds the Excel-side speed-change
-authoring vocabulary and the cart-execution behaviour for the
-operator's ±100mm distance nudge during a running plan.
-
-*Four speed transition types per segment-to-segment boundary.*
-Excel emits the type per segment; cart dispatches in
-`planSegmentEnter()`. All four target functions already exist in
-the sketch — only the dispatcher and per-segment field are new.
-
-1. **Dead** — `cartDeadStop()` — Tic `haltAndHold`, motor locks at
-   current position, sharp stop. Used only when precision matters
-   more than smoothness.
-2. **Stop** — `cartStop()` — velocity factor → 0 immediately; Tic
-   uses its current deceleration setting (STOP_DECEL_SETTING) to
-   ramp down. Real-world acceptable for timelapse.
-3. **Decay** — distance-driven linear-decay-to-zero. Plan
-   specifies the decay distance; cart computes nudge factor
-   `current_speed ÷ remaining_distance` and drops speed at each
-   rear_steps increment. Recomputed if remaining distance changes
-   (see ±100mm below). NOT the existing 6-minute global
-   `cartStartDecay()` — that's manual-DEC-button behaviour.
-   The plan-side decay is distance-bounded and adaptive.
-4. **Smooth** — set the new target speed and let Tic's
-   ACCEL_SETTING / STOP_DECEL_SETTING handle the ramp inside the
-   next segment. "Slam it in and Tic will sort it out." This is
-   the default — most segment-to-segment transitions will be
-   smooth.
-
-*±100mm nudge buttons on Execution UI.* Operator can adjust the
-current MOVE segment's target distance by ±100mm. The Execution
-UI shows the ToGo readout (current `target - delta` in mm) and
-two buttons.
-
-- **Within-segment**: target shifts by ±100mm. Cart continues at
-  current segment speed. ToGo updates.
-- **−100mm past zero**: segment completes immediately
-  (`planSegmentComplete()` fires). Cart advances to next segment.
-  Behaviour at the boundary depends on the **next** segment's
-  speed transition type (above). Overshoot is small at slow
-  segment speeds (the use case for −100mm); at higher speeds it
-  could be larger but tap is less likely.
-- **+100mm with distance left**: target extends 100mm. Cart
-  continues; ToGo grows. No special handling.
-
-*Decay segments interact with ±100mm via recompute.* If the
-operator nudges a decay segment, the nudge factor is recomputed
-each time the remaining distance changes:
-- `−100mm during decay (plenty left)`: nudge factor recomputed,
-  decay drops to zero faster (steeper). Audience-perceived: cart
-  arrives at rest earlier than originally planned.
-- `+100mm during decay`: nudge factor recomputed, decay drops
-  more gently. Cart arrives at rest later.
-- `−100mm during decay past zero`: emergency `cartStop()`
-  fallback. Cart was already slow due to decay; overshoot
-  negligible (sub-mm).
-
-*Gimbal coupling on ±100mm.* Distance-driven gimbal segments
-(move-to with yaw delta) recompute their yaw-per-mm nudge factor
-the same way decay does:
-- New nudge factor = `(target_yaw − current_yaw) ÷ new_remaining_distance`
-- −100mm: yaw nudges accelerate to cover remaining delta in less
-  distance. +100mm: yaw nudges slow.
-- All other gimbal event types (PF, Lock, sun-track, astro
-  targets) are independent of cart distance and need no
-  recompute.
-
-*Excel prevents gimbal moves spanning cart STOP segments.*
-Distance-driven gimbal nudges only progress while cart distance
-progresses — so a gimbal Move-to cannot span a cart STOP (the
-gimbal would freeze mid-move during the stop, then resume,
-producing an unintended audience-visible hold). Authoring rule:
-each gimbal Move-to row may only cover consecutive cart MOVE
-segments. Excel detects a Move-to that crosses any STOP and
-errors at plan-bake time; operator splits the gimbal row into
-before/after pieces. This keeps cart-side execution simple — no
-"freeze during STOP / resume after STOP" logic needed.
-
-*Stranded gimbal on −100mm past zero.* Different problem.
-Operator-initiated cart shorten can end a MOVE segment while a
-distance-driven gimbal move-to is still in progress. Excel
-didn't anticipate this; the cart handles it locally with one
-simple rule: **gimbal carries on at its current yaw/sec rate.**
-
-- At the moment of strand, gimbal converts its last
-  `yaw/mm × cart_speed_at_strand` into a constant `yaw/sec` rate.
-- Gimbal continues nudging at that rate until it reaches the
-  intended end yaw of the abandoned move-to.
-- Then sits at end yaw (gimbal effectively becomes a hold).
-- Cart is doing whatever its next segment says, independently.
-- No snap. No reach into the next gimbal segment. No coupling
-  back to cart distance.
-
-Rare event. Not anticipated in Excel plan. Cart-side rule is
-self-contained.
-
-*Status.* Design only, not built. Same downstream consumers as
-Part 8: firmware #5a, Excel #13 and #46, UI execution screen.
-Additional cart-side need: Excel emits speed transition type in
-the segment string, sketch parses it, dispatcher in
-`planSegmentEnter()` selects between Dead / Stop / Decay /
-Smooth handlers.
-
----
-
-## Day 14 update (added 21 May 2026)
-
-Build session. #36d Table Mode + comms-recovery state machine
-delivered and end-to-end verified. See PROJECT_STATE day-14 entry
-for full detail.
-
-**Headline:** photos sacred verified through CCAPI outage. 14/14
-delivered. 1 photo delayed 12s on discovery, 3 photos delayed 1s
-during probe phase, post-TABLE-flip cadence clean.
-
-**Day-15 part 2 (architectural):** v1 (current Uno R4 + all-WiFi)
-declared production; sketch branched to `DJI_Ronin_UnoR4_v1prod.ino`
-(bug-fix only) and `DJI_Ronin_Giga_v2dev.ino` (v2 dev starting
-point). v2 = Giga R1 + Arduino Ethernet Shield 2, wired Ethernet
-point-to-point to camera, camera WiFi disabled. v2 build absorbs
-#22 Giga migration. Excel/UI shared across v1 and v2.
-
-**New follow-ups added** (see #36d entries below):
-- TABLE → LIVE recovery within a shoot (Step D, not yet built)
-- TABLE per-cycle PUT logic (Step 4 of original Day-13 plan,
-  design question added)
-- Dead-state cleanup from removed Day-12 logic (low priority)
-
-**Mental model retired:** "CCAPI activity stresses the camera" was
-Day-11 thinking, traced to 100ms pulse width (fixed Day 12). The
-constants built around being polite (`LUM_LIVEVIEW_RETRY_MS`,
-`FETCH_FAIL_BACKOFF_CYCLES`, `LUM_FAIL_THRESHOLD`) were solving a
-phantom; now gated or zeroed.
-
----
-
-## Day 13 update (added 21 May 2026)
-
-Two design resolutions in one session, both pure design (no code).
-
-### #40 BNO085 integration architecture resolved (all six questions)
-
-- **Anchor mechanism:** running scalar `gimbal_yaw_correction`
-  applied additively to earth-frame-tagged gimbal cubics only.
-  Pan-follow untouched. Cart drives its planned path blind — no
-  cart position/heading correction. Plan stream gains per-row
-  anchor flag + threshold + expected_cart_heading, and per-segment
-  earth-frame vs chassis-frame tag.
-- **Offset persistence (Q2):** Excel-pushed via Settings, NOT
-  EEPROM. Fits the existing Appendix A / yaw envelope push
-  pattern. Adelaide declination web-verified at +8.11°; bench
-  offset +9.16° implies ~+1° BNO mount angle on bench, within
-  ±3° BNO noise.
-- **Acc dropout (Q3):** two-attempt retry per anchor row (500mm
-  then 400mm before waypoint). If both fail, keep previous
-  correction. Photos sacred throughout.
-- **Cart→Excel feedback (Q5):** new CartLog event type `A` with
-  subtypes A_OK / A_SKIP / A_FAIL. Pulled via existing /cartlog.
-  Excel parser splits Type=A rows into a dedicated AnchorLog sheet
-  on import.
-- **Held over for build session:** stream format detail for the
-  anchor flag/threshold/expected_heading fields; frame-tag bit
-  position in Segment struct; ring buffer size + averaging window;
-  whether A events overload columns or add a status column.
-
-### #36d remaining subtasks resolved (Table Mode + Δt_rel offset)
-
-- **Outage detection:** 3 consecutive fetch fails → TABLE mode;
-  3 consecutive fetch successes → back to LIVE. Symmetric
-  threshold. Grounded in Appendix A data (peak rate 1/3 stop
-  per 60s, 3-miss-window ~18s well inside tolerance).
-- **Recovery smoothing — eliminated.** Monotonic per-phase walk
-  + post-fix in LRTimelapse makes smoothing both unnecessary and
-  counter-productive (delays return to truth). Not deferred —
-  removed entirely.
-- **Tv-format Canon translation — stale.** Cart already has
-  `TV_LADDER[]` (line 414, 60 Canon-format strings); Excel
-  pushes Appendix A in Canon format; verified Day 12. No work.
-- **Photo-loop integration:** new `exposure_mode` flag
-  (LIVE / TABLE). Photo loop untouched. "Formula" in the cart
-  is actually a step-function lookup table → renamed concept
-  to **Table Mode**.
-- **Δt_rel offset** (the key insight): at LIVE → TABLE handoff,
-  find table row matching `current_tv`; from then on, lookups
-  use `t_rel_now + Δt_rel`. Preserves the CCAPI loop's
-  accumulated wisdom about today's specific sky (e.g. an extra
-  stop slow because afternoon was overcast). Zero jolt at
-  handoff by construction.
-- **TABLE → LIVE return:** discard Δt_rel, existing
-  `adjustExposureByLuminance()` does one-step-per-fetch
-  catch-up walk. That walk IS the smoothing.
-- **Edge cases — closed without separate design pass.**
-  Candidates are implementation details, not design questions;
-  handle at build time per PREFERENCES discipline.
-- **Held over for build session:** exact `current_tv` →
-  table-row matching when no exact string match; whether ISO
-  shares Tv's Δt_rel; where wild-CCAPI rejection
-  (EXPOSURE_FALLBACK §6.6) sits.
-
-See PROJECT_STATE day-13 entry for full detail on both designs.
+> **Dated session-history blocks (Day 13 → Day 25) relocated to the archive.**
+> They were build narrative, not open work. Find them in
+> PROJECT_STATE_CONSOLIDATED.md under "WORKFRONTS history (relocated from
+> WORKFRONTS.md)". The numbered open-workfronts catalog continues below.
 
 ---
 
@@ -1119,17 +455,22 @@ USB+Pi+EDSDK options from earlier Day-15 research are no
 longer in the running — wired Ethernet is structurally
 cleaner than either.
 
-**#40 BNO085 integration (build phase).** Architecture resolved
-Day 13 (see above). Build work pending:
-- UART-RVC wiring on production cart (Serial1, 3.3V, GND, TX, RX)
-- Ring buffer + sample averaging
-- Plan stream extension: anchor flag, threshold,
-  expected_cart_heading, per-segment frame tag
-- `gimbal_yaw_correction` scalar + cubic-eval application
-- Two-attempt retry logic at 500mm / 400mm before waypoint
-- CartLog event type `A` (A_OK / A_SKIP / A_FAIL)
-- `/debug/imu` endpoint (offset, acc, raw_yaw, true_yaw)
-- Excel-pushed offset via Settings (named range `bnoOffsetDeg`)
+**#40 BNO085 integration (build phase).** SUPERSEDED by
+the #40 BNO085 section below — work from that single source.
+Status (Day 25): BNO is on the SHARED Wire bus (D20/D21, polled, no
+INT/RST), NOT the originally-planned UART-RVC. Hardware + read PROVEN
+and enabled (survives motors after the 2.2k pull-up fix; live read +
+360° turn reproducible under production load). DONE: `/debug/imu*`
+endpoints (offset/cal/raw_yaw/true_yaw/last_poll_ms_ago); CartLog `A`
+events; calibration method (off-cart figure-8 → `/savecal` → stored DCD;
+saved-DCD is the chosen path); cal rule ≥2 use / ≤1 keep-previous;
+stationary "duck off" read model (replaces the old 500/400 mm two-
+attempt retry). REMAINING for 3b: plan-stream `expected_cart_heading` +
+per-segment earth/chassis frame tag (confirmed absent in soak-v18) →
+then `gimbal_yaw_correction = (−true_yaw) − expected_cart_heading` on
+earth-frame cubics + Excel `bnoOffsetDeg` push (negate BNO yaw; offset =
+Adelaide declination +8.11° + ~+1° mount). `expected_cart_heading`
+source = Excel `BicycleModel.bas` (planned θ per anchor waypoint).
 
 **#43 Cart UI "Start New Log" button.** New endpoint
 `/cartlog/clear` (or similar). Cart UI button POSTs to it,
@@ -1256,8 +597,9 @@ cart sees cubic coefficients only."
 showastrooffset (prefix collision). Changed to
 `path == "/gimbal/showastro" || path.startsWith("/gimbal/showastro?")`.
 
-*Status:* cart side ✅ done. Excel side pending — see #55 for
-moon maths, #50-Excel for push button.
+*Status:* cart side ✅ done. Excel side ✅ done (Day 31) — moon now
+pushed, cart returned mask 127. ~~Excel side pending — see #55 for
+moon maths, #50-Excel for push button.~~ (Superseded by Day-31 block B.)
 
 **#55 Moon astronomy maths in Excel — CLOSED Day 18.** Full
 sun-equivalent treatment delivered: local Schlyter low-precision
@@ -1537,9 +879,10 @@ pano injection from cart UI during plan execution. Design only.
 
 ## Open workfronts — heading + gimbal stream
 
-**#40 BNO085 integration.** See "Cart firmware" section above
-for the full build-phase task list. Architecture resolved
-Day 13 (see top of file).
+**#40 BNO085 integration.** See the consolidated #40 BNO085 section below (single source of
+truth) and the "Cart firmware" #40 entry above.
+Architecture resolved Day 13; hardware+read proven and enabled Day 25;
+3b gated only on the plan-stream change.
 
 **#41 iPhone compass heading anchors at waypoints.** Storage in
 plan: new column on Sequence sheet, `Compass Heading (°N true)`,
@@ -1555,10 +898,252 @@ running.
 
 ---
 
+## #40 BNO085 — heading correction (CONSOLIDATED, single source)
+
+**Status (UPDATED Day 30): BNO is STUBBED (`STUB_BNO`, since Day 28); heading source is the iPhone
+compass, NOT the BNO.** Day 27 measured the BNO cold-boot heading as NOT trustworthy (raw yaw not
+magnetometer-locked across a true cold boot; `cal 0` every cold boot), so Day 28 stubbed it and moved
+to operator iPhone-compass entry (`/compass` -> `C` row, bound per WP). The heading frame was then
+UNIFIED to clockwise-POSITIVE on Day 30 (N 0 / E +90 / S 180 / W -90; see HEADING_CONVENTION.md), so
+the old `(−true_yaw)` negation below is SUPERSEDED - cart and gimbal now share the CW-positive frame
+and the 3b correction needs NO sign flip. 3b (earth-frame correction) remains the genuinely-new build
+(see "Phase 4 / 3b heading" in the gimbal-coordination open item). The historical BNO read/cal detail
+below is retained for reference only; it is not the live heading path.
+
+### 1. What #40 is
+
+Fold a real-world heading correction into the earth-frame gimbal cubics
+so gimbal aim is accurate against the world, while the cart drives blind
+on an approximate path. The correction (CW-positive frame, post-Day-30 unify):
+
+`gimbal_yaw_correction = real_heading − expected_cart_heading`  (+ Adelaide declination + mount offset)
+
+applied to earth-frame-tagged gimbal cubics only. Pan-follow and cart path untouched (cart drives
+blind). `real_heading` is the operator iPhone compass on approach (BNO stubbed); `expected_cart_heading`
+is the recon-compass floor pushed per WP. NO sign flip (cart + gimbal both CW-positive since Day 30).
+~~OLD (pre-Day-30, CW-negative, BNO-based): `gimbal_yaw_correction = (−true_yaw) − expected_cart_heading`;
+BNO yaw negated because BNO CW = negative. Superseded by the unify + BNO stub.~~
+- `expected_cart_heading` comes from the recon iPhone compass (`C` rows -> Plan col H), carried per WP.
+  NOT computed on the Giga. The build does not depend on the bicycle model being accurate — only on the
+  heading read being accurate at the anchor.
+
+### 2. Read model (confirmed)
+
+- **Anticipatory + stationary "duck off", not the old 500/400 mm crawl.**
+  The plan tells the cart, with lead time, when an earth-frame gimbal
+  move that benefits from a fresh correction is coming. So: park, settle,
+  take a generous averaged window (1–2 s of 10 Hz polled samples).
+- **Validity condition:** chassis heading at read-time must equal heading
+  at gimbal-move-time — read at the same parked waypoint the gimbal move
+  happens from. Plan structure must guarantee the gimbal move occurs
+  while the cart is parked at that known waypoint.
+- **Frequency:** ~3 anchors over a 12 h night — one before each
+  earth-frame gimbal move needing accurate real-world aim, not a
+  fixed-distance schedule. IMU otherwise idle (suits the Giga-safe
+  polled, no-interrupt sketch).
+- **Skip/fallback:** cal-accuracy didn't reach threshold within available
+  time → keep previous correction (A_SKIP / keep-previous).
+
+### 3. Calibration — method PROVEN, byte semantics settled
+
+The cart is ~13 kg, high CoG, ~70 × 400 mm footprint. **No figure-8s**
+on the assembled cart. Achievable motions: full horizontal yaw; pitch
+±45°; roll 30°.
+
+- **Figure-8 NOT required for the math** — varied orientations are what
+  mag cal needs; a slow full 360° yaw exposes a full circle of headings.
+  BUT the bolted cart in practice CANNOT drive the byte up by itself
+  (yaw + limited pitch never moved it off 0 in testing) — a confirmed
+  motion-diversity limit, not a field problem.
+- **Method proven end-to-end (Day 24):** BNO reaches cal 3 by free-air
+  figure-8 *off the fixed mount*, in the cart's field, electronics on.
+  `/debug/imu/savecal` → `stored:true` at cal 3, DCD written to flash.
+  **DCD persists across power cycles** — after reboot a small off-plane
+  wiggle snaps cal back to 3 instantly (a from-scratch cal would need a
+  full figure-8). Production build boots on the stored DCD.
+- **Key nuance — the cal-accuracy BYTE ≠ stored calibration.** The byte
+  reports *current confidence*, not whether a valid DCD is loaded. On a
+  mounted, stationary or flat-moving cart the byte reads 0–1 even though
+  the stored DCD is valid and heading is good. So the byte CANNOT be
+  read at boot to gate trust.
+- **Two-build workflow (the fix for boot-reset):**
+  - `#define BNO_CAL_CAPTURE` → cal session build: calibrateAll +
+    game-RV + mag on; figure-8 to 3; `/savecal`. DO NOT ship
+    (calibrateAll re-arms dynamic cal each boot and resets reported cal).
+  - `BNO_CAL_CAPTURE` commented out → production: rotation vector only,
+    runs on stored DCD.
+  - `endcal` dropped from the workflow (suspected to interfere with the
+    save; not needed — production never starts dynamic cal).
+- **Design decision (Day 25): saved-DCD is the calibration path.**
+  Converge once off-cart, `/savecal`, ship production on stored DCD.
+  Live-cart cal behaviour becomes real-world field data later, NOT a
+  current blocker and NOT chased on the bench further.
+- **Cal threshold rule (from datasheet + practice):** cal ≥2 → use the
+  reading (A_OK); cal ≤1 → skip, keep previous correction (A_SKIP). At
+  cal 1 the heading is unreliable enough that folding it in risks making
+  gimbal aim worse than the bicycle-model estimate alone.
+
+### 4. Motor-power stall — ~~RESOLVED (Day 25)~~ SUPERSEDED — see Day-25 part-2 correction at top
+> **NOTE (Day 25 pt 2):** the 2.2k-pull-up fix below was PREMATURE — it did
+> not hold; the stall reproduced under motors while building recon-heading.
+> Real cause = Tic I²C clock-stretch contention on the shared bus; real fix =
+> BNO moved to its own bus Wire2 (D8/D9). The diagnosis below (air-gap proving
+> 'not radiated') is still valid; only the 'conducted power noise → pull-ups'
+> conclusion is wrong. Kept for the record.
+
+
+**The Day-24 finding:** the BNO SHTP rotation-vector stream went silent
+and did not self-recover (needed a power-cycle) whenever main/motor
+power energised; with main off it streamed perfectly. Measured
+signature: `last_poll_ms_ago` climbing in lockstep with real time
+(6647 → 13812), `yaw_raw` frozen. Ruled out at the time:
+enumeration/boot intermittency (stream confirmed live immediately
+before) and GIGA-input brownout / USB sag (USB present and it still
+died).
+
+**Day-25 diagnosis — measured, single variable at each step:**
+
+1. **Air-gap test (radiated vs conducted).** Built a like-for-like spare
+   rig: spare GIGA ~2 cm from main, spare BNO ~2 cm from main BNO at the
+   same ~50 cm from motors, cable matched (30 cm, unshielded, untwisted),
+   spare on laptop power, cart on battery. Shared air only — power fully
+   isolated as the single removed variable. **Result: spare rode through
+   motors-energised flat** — `last_read_ms_ago` steady at ~75–78 ms,
+   never climbed, no stall, acc 3. **Conclusion: radiated field through
+   air is NOT sufficient to stall the BNO. The agent reaches the main
+   sensor via a conducted path** (the cart's shared bus or BNO 5V),
+   not by radiation. (Caveat retained: the surviving spare also had a
+   short clean bus + clean rail, so this rules radiated-EM out as
+   *sufficient* but does not by itself finger which conducted path.)
+2. **CAN datapoint (supporting asymmetry).** The gimbal CAN run is
+   similar length, similar proximity, untwisted, and has never stalled.
+   Consistent with protocol fragility: CAN is differential with CRC +
+   hardware retransmit (absorbs corruption); the BNO I²C SHTP stream is
+   single-ended and stateful (one corrupted sequence-numbered packet
+   wedges the whole stream until reset). Three protocols, same
+   environment, one victim: Tics survive (stateless/short), CAN survives
+   (differential/robust), only the BNO dies. Leans toward conducted
+   noise on the BNO's specific shared branch.
+3. **Fix applied — Tier 1, single change: pull-ups 4.7k → 2.2k** on the
+   BNO SDA/SCL to stiffen the I²C rising edges over the 30 cm run.
+   (Local 5V decoupling was the alternative Tier-1 lever; not used — no
+   caps on hand.)
+
+**Result — RESOLVED under full production load (Day 25):**
+- Bench sketch, motors energised: heartbeat flat (`last_read_ms_ago`
+  75–90 ms), no stall.
+- **Production build (soak-v18), motors energised AND running, full bus
+  load (Tic traffic, /status, soak logging, WiFi):** `/debug/imu` showed
+  `last_poll_ms_ago` small (23–107 ms) and `yaw_raw` tracking real
+  motion. No stall reproduced.
+- The 2.2k swap holding under production load points at the I²C-lines
+  path (edge integrity) over the BNO-5V path — consistent but NOT a
+  scope-confirmed discrimination. The lines-vs-5V scope split is no
+  longer needed for the fix; reserve it only if the stall ever returns.
+
+### 5. Read validation — PROVEN (Day 25)
+
+With motors running, production build:
+- **Stream live under load** — `/debug/imu` `last_poll_ms_ago` stayed
+  small across repeated pulls; `yaw_raw` changed with cart motion.
+- **Heading plumbing proven** — `/debug/imu/capture` set offset
+  (−58.35), then a full 360° cart turn: `true_yaw` tracked through the
+  full ±180 wrap (−84.7 → −177.8 → +92.2 → +4.2) and returned to within
+  ~4° of the 0° origin. Capture → offset → wrap → live-read-under-motion
+  all work and repeat.
+- **Limit:** cal stayed 0 throughout (no DCD saved this session, no
+  figure-8). So this proves the PLUMBING and repeatability, NOT absolute
+  heading accuracy. Absolute accuracy vs iPhone/compass waits on a
+  saved-DCD unit and is by-design a real-world field check.
+
+### 6. Endpoints (validation surface)
+
+`/debug/imu` returns live JSON: `yaw_raw`, `true_yaw` (after capture),
+`offset_set`, `pitch`, `roll`, `cal`, and `last_poll_ms_ago` (the stall
+instrument — grows without bound if the SHTP stream stalls).
+- `/debug/imu/capture` — set true-north offset (point front edge north
+  per iPhone with cal ≥2, then call).
+- `/debug/imu/savecal` — write DCD to BNO flash.
+- `/debug/imu/endcal` — (dropped from workflow; see §3).
+
+Note: `/status` carries NO live BNO heading — only the cal byte at
+idx 14. The `g_yaw/roll/pitch` at idx 0–2 are gimbal attitude from CAN,
+not the BNO. Use `/debug/imu` for all BNO read/validation.
+
+3a anchor samples go to `/cartlog` as `A` events (true_yaw×10 in value,
+cal in aux tail) — populated ONLY while executing a plan segment that
+carries the anchor flag; empty otherwise.
+
+### 7. Step status
+
+- **Step 2 (Phase-A ease-onto-curve):** BUILT + PROVEN (soak-v14).
+- **3a (anchor heading-sample instrumentation):** DONE + verified.
+  `PlanSegment` carries the `anchor` flag (token `a`, tail position);
+  while in an anchor segment the cart samples true_yaw + cal to CartLog
+  `A` events every 500 ms, record-only (Ry=Cy holds).
+- **Motor-power stall:** RESOLVED (Day 25 pt 2, BNO moved to Wire2/D8-D9 — NOT the 2.2k pull-ups, which did not hold). Was the
+  part-B block on 3b — now cleared.
+- **3b (fold the correction into earth-frame gimbal cubics):** STILL
+  BLOCKED — but the block is now ONLY the plan-stream change.
+  Confirmed by grep of soak-v18: `PlanSegment` has 8 fields (type,
+  dist_mm, duration_ms, steer_offset, speed_mhr, end_cond, transition,
+  anchor) — **no `expected_cart_heading`, no earth-frame/chassis frame
+  tag.** 3b cannot be built until the stream carries
+  `expected_cart_heading` + per-segment frame tag.
+
+### 8. Enable decision (Day 25)
+
+**BNO is ENABLED.** Hardware survives motors, read is live and
+reproducible under production load, calibration method is proven and the
+DCD path is chosen. Nothing electrical or cal-related blocks progress.
+
+**3b remains gated on ONE dependency: the plan-stream anchor fields.**
+
+### 9. Next workfront
+
+**Plan-stream change (#72-adjacent): add `expected_cart_heading` +
+per-segment earth-vs-chassis frame tag to `PlanSegment` and the s-string
+parser/pushers.** Per build-lesson 12, append new tokens at the TAIL of
+the positional surface (the `anchor` flag already set this precedent —
+order-independent tail token). Once the stream carries
+`expected_cart_heading`:
+
+Build 3b — the correction scalar + cubic-eval application
+(`gimbal_yaw_correction = (−true_yaw) − expected_cart_heading` on
+earth-frame cubics), Excel `bnoOffsetDeg` push, with the A_OK/A_SKIP cal
+gate (≥2 use, ≤1 keep-previous) and the stationary-settle averaged read.
+
+Then: Step 4 (pan-follow), leftover previewplan / Move-cubic Stage-4
+Excel pushers.
+
+### 10. Open (real-world, not bench)
+
+- Power-up-and-go: does normal field operation ever bring the cal byte
+  to 2, or is deliberate motion always needed — and what mounted-cart
+  motion achieves it in ~2 min?
+- Is cal 1 actually usable? If real-world heading at byte=1 is good
+  enough (DCD valid regardless of byte), the byte is safe to ignore —
+  retiring the "reject ≤1" rule and making the UI cal field unnecessary.
+- Heading vs truth (iPhone/compass) at cal 2 on the assembled cart —
+  does the Day-23 ±0.5°/negated-sign finding still hold? Has the offset
+  shifted from ~+9°?
+- Tics-on / motor-running during cal: energised captures the real field
+  (good), but a *running* motor is a *changing* field that may corrupt
+  the read (bad). Settle by observation — can the byte reach 2 with
+  motor running vs idle?
+- UI cal field: stays on Cart Recon UI for now; candidate for removal if
+  real-world says cal 1 is OK. `/debug/imu*` endpoints stay regardless.
+- LOOP-LONG favicon/empty-request stalls (1.6–2.6 s) still present;
+  harmless with camera off, still wants a request-read timeout before a
+  live shoot.
+
+---
+
 ## Open design decisions
 
 - Sunrise transition table (only sunset table reviewed to date).
 - Moon tracking in scope or out of scope for the gimbal Plan?
+  ✅ RESOLVED (Day 31): moon IS in scope; obeys goto-rise-and-wait.
 - Two reserved per-row inputs in Gimbal UI — TBD.
 - Velocity-band thresholds (0.05 / 0.3°/s) — confirm in practice;
   adjustable if first shoots suggest otherwise.

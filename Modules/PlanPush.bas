@@ -1,22 +1,22 @@
 Attribute VB_Name = "PlanPush"
 ' ============================================================
-' HyperLapse Cart — Plan Push (P7)
+' HyperLapse Cart â€” Plan Push (P7)
 '
 ' Reads the middle-zone Gimbal Plan and pushes it to the cart
 ' as a sequence of plan segments + TrackIntervals + (optionally)
 ' cubic path coefficients.
 '
 ' Public entry:
-'   PushGimbalPlan — Stage 2. Reads dataPlanPushDryRun, runs
+'   PushGimbalPlan â€” Stage 2. Reads dataPlanPushDryRun, runs
 '                    Phase 1 validation, reports collected errors.
 '                    No decomposition or push yet.
 '
 ' Stages (per Session E P7 design):
-'   1. Validate    — walk middle zone, collect errors, abort if any   [STAGE 2]
-'   2. Prerequisite — ensure track_<obj> cubics are loaded            [STAGE 3]
-'   3. Decompose   — each Plan row → cart-side segments + intervals   [STAGE 3]
-'   4. POST        — sequential GETs to cart endpoints                [STAGE 4]
-'   5. Summary     — report counts, log to Log sheet                  [Stage 5]
+'   1. Validate    â€” walk middle zone, collect errors, abort if any   [STAGE 2]
+'   2. Prerequisite â€” ensure track_<obj> cubics are loaded            [STAGE 3]
+'   3. Decompose   â€” each Plan row â†’ cart-side segments + intervals   [STAGE 3]
+'   4. POST        â€” sequential GETs to cart endpoints                [STAGE 4]
+'   5. Summary     â€” report counts, log to Log sheet                  [Stage 5]
 '
 ' Dry-run mode (Settings!dataPlanPushDryRun = TRUE):
 '   Phases 1-3 + 5 run. Phase 4 is skipped. Cart not contacted.
@@ -26,15 +26,15 @@ Attribute VB_Name = "PlanPush"
 '   Pings cart /status first; aborts cleanly if no response.
 '   All five phases run. Tells operator what was pushed.
 '
-' Day 21 (Session F) — Stage 1 skeleton.
-' Day 21 (Session F) — Stage 2 Phase 1 validation added.
-' Day 21 (Session F) — workfront #67 Phase 1: IsAstroTarget
+' Day 21 (Session F) â€” Stage 1 skeleton.
+' Day 21 (Session F) â€” Stage 2 Phase 1 validation added.
+' Day 21 (Session F) â€” workfront #67 Phase 1: IsAstroTarget
 ' accepts "gc" (new Plan token) and "mw" (cart wire protocol /
 ' back-compat).
-' Day 21 (Session F) — Stage 3 Phase 3 decompose added. One Log
+' Day 21 (Session F) â€” Stage 3 Phase 3 decompose added. One Log
 ' line per row describing the cart-side artifact (segment or
 ' TrackInterval). Astro endpoints evaluated via Astro.bas in
-' dry-run. Cubic coefficient computation deferred — Stage 3 emits
+' dry-run. Cubic coefficient computation deferred â€” Stage 3 emits
 ' only endpoint + duration summary, not the curve coefficients.
 ' ============================================================
 
@@ -61,16 +61,17 @@ Private Const COL_DPITCH      As Long = 25  ' Y
 Private Const COL_EASE        As Long = 26  ' Z
 Private Const COL_MOVE_T      As Long = 27  ' AA
 Private Const COL_NOTE        As Long = 28  ' AB
-
 Private Const LOG_CATEGORY As String = "P7"
 
 ' Cart-side track interval slot limit (sketch TRACK_PLAN_MAX,
 ' line ~951 on Giga v2). Plan validation warns if exceeded.
 Private Const TRACK_PLAN_MAX As Long = 10
+' Cart-side preview pose slot limit (sketch PREVIEW_PLAN_MAX).
+Private Const PREVIEW_PLAN_MAX As Long = 20
 
 
 ' ============================================================
-' Public — PushGimbalPlan
+' Public â€” PushGimbalPlan
 ' ============================================================
 Public Sub PushGimbalPlan()
     On Error GoTo ErrHandler
@@ -105,7 +106,7 @@ Public Sub PushGimbalPlan()
     LogP7 "Phase 1 OK: validation passed"
 
     ' --- Phase 3: Decompose ---
-    ' (Phase 2 prerequisites — track_<obj> push — is moot in dry-run
+    ' (Phase 2 prerequisites â€” track_<obj> push â€” is moot in dry-run
     ' and will land with Stage 4 real-push.)
     Dim segCount As Long, intervalCount As Long
     Phase3Decompose wsPlan, segCount, intervalCount
@@ -146,7 +147,7 @@ End Sub
 
 
 ' ============================================================
-' Phase 1 — Validate
+' Phase 1 â€” Validate
 ' Walks middle zone, emits one Log line per row with errors,
 ' returns total count of rows that had at least one error.
 '
@@ -156,7 +157,7 @@ End Sub
 '   - No populated rows after the END row (END is the sentinel)
 '
 ' Row-level checks (per populated row):
-'   - Fires at (col Q) not blank/error  — anchor resolved
+'   - Fires at (col Q) not blank/error  â€” anchor resolved
 '   - Action (col S) is one of the 6 known values
 '   - Target sensible for the Action
 '   - Rate present where the Action needs one
@@ -217,7 +218,7 @@ End Function
 
 
 ' ============================================================
-' Phase 3 — Decompose
+' Phase 3 â€” Decompose
 ' Walks middle-zone rows in order, emits one Log line per row
 ' describing the cart-side artifact(s) that would be pushed.
 ' Increments segCount / intervalCount as it goes.
@@ -225,7 +226,7 @@ End Function
 ' Per Session E decomposition table:
 '   Pan Follow     -> PANFOLLOW segment, ts..te
 '   Lock           -> HOLD segment at current pose, ts..te
-'   Move (marker)  -> CUBIC slew to (Ry+Δyaw, Rp+Δpitch), ts..te
+'   Move (marker)  -> CUBIC slew to (Ry+Î”yaw, Rp+Î”pitch), ts..te
 '   Move (astro)   -> CUBIC slew to (yaw, pitch) from astro eval, ts..te
 '   Track full     -> TrackInterval mode=F, ts..te, obj, offY, offP
 '   Track-yaw      -> TrackInterval mode=Y, ts..te, obj, offY, Rp(abs)
@@ -235,7 +236,7 @@ End Function
 '   - Astro endpoint preview uses Astro.bas direct astronomy
 '     (small residual vs. cart's fitted-cubic eval; ~7px at 14mm
 '     per WORKFRONTS #58, below visible threshold).
-'   - Cubic coefficients NOT computed in Stage 3 (deferred — needs
+'   - Cubic coefficients NOT computed in Stage 3 (deferred â€” needs
 '     ease-band -> frames -> seconds conversion which isn't built).
 '     Each CUBIC line just states endpoint + duration.
 ' ============================================================
@@ -245,7 +246,7 @@ Private Sub Phase3Decompose(ByVal ws As Worksheet, _
     segCount = 0
     intervalCount = 0
 
-    ' Read cart heading once — used by every astro-target eval
+    ' Read cart heading once â€” used by every astro-target eval
     Dim cartHeading As Double
     cartHeading = ReadCartHeading()
 
@@ -305,7 +306,7 @@ Private Sub Phase3Decompose(ByVal ws As Worksheet, _
                 Dim endNote As String
 
                 If IsAstroTarget(target) Then
-                    ' Astro snapshot — evaluate at ts (Fires-at)
+                    ' Astro snapshot â€” evaluate at ts (Fires-at)
                     Dim okAstro As Boolean
                     okAstro = EvalAstro(target, CDbl(ts), cartHeading, _
                                         endYaw, endPitch)
@@ -320,7 +321,7 @@ Private Sub Phase3Decompose(ByVal ws As Worksheet, _
                         endNote = "[astro " & target & " BELOW HORIZON]"
                     End If
                 Else
-                    ' Marker — use authored Ry/Rp + deltas
+                    ' Marker â€” use authored Ry/Rp + deltas
                     Dim ry As Double, rp As Double
                     ry = SafeDouble(ws.Cells(rowIdx, COL_RY).value)
                     rp = SafeDouble(ws.Cells(rowIdx, COL_RP).value)
@@ -376,7 +377,10 @@ End Sub
 '   gc   -> GetGCGimbalAngles    (workfront #67)
 '   mw   -> GetGCGimbalAngles    (back-compat per #67 Phase 1)
 ' ============================================================
-Private Function EvalAstro(ByVal target As String, ByVal atTime As Double, _
+' Public so the interval pusher (TrackPlanPush) can compute absolute
+' astro Move endpoints — a Move to an astro point needs the object's
+' pose at the fire time, same evaluator the preview/decompose use.
+Public Function EvalAstro(ByVal target As String, ByVal atTime As Double, _
                             ByVal cartHeading As Double, _
                             ByRef yaw As Double, ByRef pitch As Double) As Boolean
     ' Direct call (not Application.Run) so ByRef yaw/pitch propagate
@@ -399,7 +403,7 @@ End Function
 
 ' Read cart heading from Settings (degrees, 0=North). Falls back
 ' to 0 if name missing. Per Day-21 discussion: this is the
-' shoot-start heading, set by operator, not live telemetry —
+' shoot-start heading, set by operator, not live telemetry â€”
 ' Excel has no return channel from the cart.
 Private Function ReadCartHeading() As Double
     On Error GoTo Defaulting
@@ -425,7 +429,7 @@ Private Function FmtTime(ByVal v As Variant) As String
 End Function
 
 
-' Safe Double parse — 0 for blank/non-numeric.
+' Safe Double parse â€” 0 for blank/non-numeric.
 Private Function SafeDouble(ByVal v As Variant) As Double
     If IsEmpty(v) Then SafeDouble = 0: Exit Function
     If IsNumeric(v) Then SafeDouble = CDbl(v) Else SafeDouble = 0
@@ -534,11 +538,11 @@ End Function
 
 
 ' ============================================================
-' Helpers — predicates
+' Helpers â€” predicates
 ' ============================================================
 
 ' Treats "", "-", and various dash characters as blank.
-' Hardcoding em-dash by ChrW since literal "—" doesn't survive
+' Hardcoding em-dash by ChrW since literal "â€”" doesn't survive
 ' .bas round-trips (Day 21 lesson, fixed in PlanAuthoring too).
 Private Function IsTargetBlank(ByVal target As String) As Boolean
     Dim t As String: t = Trim(target)
@@ -554,9 +558,9 @@ End Function
 ' else is treated as a marker.
 '
 ' Plan-side token is "gc" (workfront #67 Phase 1). We also accept
-' "mw" defensively — the cart wire protocol still uses "mw", and
+' "mw" defensively â€” the cart wire protocol still uses "mw", and
 ' a pre-rename plan or copy-paste from older notes might carry it.
-Private Function IsAstroTarget(ByVal target As String) As Boolean
+Public Function IsAstroTarget(ByVal target As String) As Boolean
     Select Case LCase(Trim(target))
         Case "sun", "moon", "gc", "mw"
             IsAstroTarget = True
@@ -565,7 +569,7 @@ Private Function IsAstroTarget(ByVal target As String) As Boolean
     End Select
 End Function
 
-' Rate cell — non-blank string. Don't enforce band-name membership
+' Rate cell â€” non-blank string. Don't enforce band-name membership
 ' here (operator may use a custom value); just non-blank, non-dash.
 Private Function IsRateValid(ByVal rate As String) As Boolean
     Dim t As String: t = Trim(rate)
@@ -592,7 +596,7 @@ Private Function AppendErr(ByVal cur As String, ByVal msg As String) As String
     End If
 End Function
 
-' Em-dash returned via ChrW so the .bas source stays ASCII —
+' Em-dash returned via ChrW so the .bas source stays ASCII â€”
 ' avoids encoding loss during VBE export/import round-trips.
 ' Same pattern used in PlanAuthoring.bas (Day 21 lesson).
 Private Function EmDash() As String
@@ -602,7 +606,7 @@ End Function
 
 ' ============================================================
 ' Read the dry-run flag from Settings. Defaults to TRUE
-' (the safer choice) if the name is missing or unreadable —
+' (the safer choice) if the name is missing or unreadable â€”
 ' no scenario where missing-name should surprise the operator
 ' with a real cart push.
 ' ============================================================
@@ -626,7 +630,7 @@ End Function
 
 
 ' ============================================================
-' Log helper — writes to the Log sheet via Utils.LogEvent.
+' Log helper â€” writes to the Log sheet via Utils.LogEvent.
 ' Silent if Utils isn't loaded.
 ' ============================================================
 Private Sub LogP7(ByVal msg As String)
@@ -634,3 +638,246 @@ Private Sub LogP7(ByVal msg As String)
     Application.Run "Utils.LogEvent", LOG_CATEGORY, msg
     On Error GoTo 0
 End Sub
+
+
+' ============================================================
+' PushPreviewPlanToCart — preview-pose pusher (Step-1 leftover)
+'
+' Walks the gimbal plan and pushes ONE representative preview pose per
+' GP to /settings/previewplan, in order. The operator steps these on
+' demand (PREV/NEXT by GP) to verify start/Ry-Cy geometry and to route
+' cables against the actual rotations.
+'
+' Per-GP pose mapping (confirmed Day 24 pt B):
+'   Move (marker)  -> Ry+dyaw, Rp+dpitch                (GP-start)
+'   Move (astro)   -> EvalAstro(target, fire) + d       (GP-start)
+'   Track          -> EvalAstro(target, ts) + d         (GP-start)
+'                  +  EvalAstro(target, te) + d         (continuation)
+'   Track-yaw      -> EvalAstro(target, ts).yaw+dyaw, pitch=Rp (GP-start)
+'                  +  EvalAstro(target, te).yaw+dyaw, pitch=Rp (continuation)
+'   Pan Follow     -> dyaw, dpitch  (goto-yaw at current heading) (GP-start)
+'   Lock           -> Ry+dyaw, Rp+dpitch  (held bearing)          (GP-start)
+'   END            -> previous pose, held                          (GP-start)
+'
+' A Track GP emits TWO entries (start + end) so the operator sees the
+' whole sweep the track will make. Continuations carry &start=0 so the
+' future Execution-UI PREV/NEXT hops by GP and steps through them.
+'
+' Cart contract: /settings/previewplan?idx=N&yaw=&pitch=&label=&start=1|0
+'   idx=0 resets; idx must == current count (sequential). Cap = 20.
+' Dry-run via Settings!dataPlanPushDryRun, like CartPlanPush/TrackPlanPush.
+' ============================================================
+Public Sub PushPreviewPlanToCart()
+    On Error GoTo ErrHandler
+
+    Dim dryRun As Boolean: dryRun = ReadDryRunFlag()
+    Dim mode As String: mode = IIf(dryRun, "DRY RUN", "REAL PUSH")
+    LogP7 "--- PushPreviewPlanToCart start (" & mode & ") ---"
+
+    Dim ws As Worksheet: Set ws = ThisWorkbook.Sheets("Plan")
+    Dim cartHeading As Double: cartHeading = ReadCartHeading()
+
+    ' Collect populated GP rows in order (for te look-ahead).
+    Dim rows() As Long: ReDim rows(0 To PLAN_MAX_ROWS)
+    Dim nRows As Long: nRows = 0
+    Dim r As Long
+    For r = PLAN_FIRST_ROW To PLAN_FIRST_ROW + PLAN_MAX_ROWS - 1
+        If Not IsEmpty(ws.Cells(r, COL_ANCHOR_TYPE).value) Then
+            rows(nRows) = r: nRows = nRows + 1
+        End If
+    Next r
+    If nRows = 0 Then
+        LogP7 "FAILED: no gimbal plan rows."
+        MsgBox "No gimbal plan rows found.", vbExclamation, "PushPreviewPlanToCart"
+        Exit Sub
+    End If
+
+    ' Build flat preview-pose list (yaw, pitch, label, gp_start).
+    Dim pYaw() As Double, pPitch() As Double, pLabel() As String, pStart() As Boolean
+    ReDim pYaw(0 To PREVIEW_PLAN_MAX): ReDim pPitch(0 To PREVIEW_PLAN_MAX)
+    ReDim pLabel(0 To PREVIEW_PLAN_MAX): ReDim pStart(0 To PREVIEW_PLAN_MAX)
+    Dim n As Long: n = 0
+    Dim lastY As Double, lastP As Double          ' for END (held) + safety
+    Dim errCount As Long: errCount = 0
+
+    Dim i As Long
+    For i = 0 To nRows - 1
+        Dim rowIdx As Long: rowIdx = rows(i)
+        Dim act As String: act = UCase(Trim(CStr(ws.Cells(rowIdx, COL_ACTION).value)))
+        Dim lbl As String: lbl = Left$(CStr(ws.Cells(rowIdx, COL_STEP).value), 11)
+        Dim tgt As String: tgt = LCase(Trim(CStr(ws.Cells(rowIdx, COL_TARGET).value)))
+        Dim dyaw As Double: dyaw = SafeDouble(ws.Cells(rowIdx, COL_DYAW).value)
+        Dim dpit As Double: dpit = SafeDouble(ws.Cells(rowIdx, COL_DPITCH).value)
+        Dim ts As Double: ts = SafeDouble(ws.Cells(rowIdx, COL_FIRES_AT).value)
+        Dim te As Double
+        If i < nRows - 1 Then te = SafeDouble(ws.Cells(rows(i + 1), COL_FIRES_AT).value) Else te = ts
+
+        Dim y As Double, p As Double, y2 As Double, p2 As Double
+        Dim hasCont As Boolean: hasCont = False
+
+        Select Case act
+            Case "MOVE"
+                If IsAstroTarget(tgt) Then
+                    If Not EvalAstro(tgt, ts, cartHeading, y, p) Then _
+                        LogP7 "  NOTE " & lbl & ": astro '" & tgt & "' below horizon at fire time"
+                    y = y + dyaw: p = p + dpit
+                Else
+                    y = SafeDouble(ws.Cells(rowIdx, COL_RY).value) + dyaw
+                    p = SafeDouble(ws.Cells(rowIdx, COL_RP).value) + dpit
+                End If
+
+            Case "TRACK"
+                If Not EvalAstro(tgt, ts, cartHeading, y, p) Then _
+                    LogP7 "  NOTE " & lbl & ": astro '" & tgt & "' below horizon at ts"
+                y = y + dyaw: p = p + dpit
+                If Not EvalAstro(tgt, te, cartHeading, y2, p2) Then _
+                    LogP7 "  NOTE " & lbl & ": astro '" & tgt & "' below horizon at te"
+                y2 = y2 + dyaw: p2 = p2 + dpit
+                hasCont = True
+
+            Case "TRACK-YAW"
+                Dim rp As Double: rp = SafeDouble(ws.Cells(rowIdx, COL_RP).value)
+                If Not EvalAstro(tgt, ts, cartHeading, y, p) Then _
+                    LogP7 "  NOTE " & lbl & ": astro '" & tgt & "' below horizon at ts"
+                y = y + dyaw: p = rp
+                If Not EvalAstro(tgt, te, cartHeading, y2, p2) Then _
+                    LogP7 "  NOTE " & lbl & ": astro '" & tgt & "' below horizon at te"
+                y2 = y2 + dyaw: p2 = rp
+                hasCont = True
+
+            Case "PAN FOLLOW"
+                y = dyaw: p = dpit          ' goto-yaw at current heading
+
+            Case "LOCK"
+                y = SafeDouble(ws.Cells(rowIdx, COL_RY).value) + dyaw
+                p = SafeDouble(ws.Cells(rowIdx, COL_RP).value) + dpit
+
+            Case "END"
+                y = lastY: p = lastP        ' held = previous pose
+
+            Case Else
+                LogP7 "  skip " & lbl & ": action '" & act & "' has no preview pose"
+                GoTo NextRow
+        End Select
+
+        ' Emit GP-start entry.
+        If n > PREVIEW_PLAN_MAX - 1 Then
+            LogP7 "  ERROR: preview poses exceed PREVIEW_PLAN_MAX=" & PREVIEW_PLAN_MAX
+            errCount = errCount + 1
+            GoTo DonePruning
+        End If
+        pYaw(n) = y: pPitch(n) = p: pLabel(n) = lbl: pStart(n) = True
+        lastY = y: lastP = p
+        LogP7 "  GP-start " & lbl & " (" & act & ") yaw=" & Format(y, "0.0") & _
+              " pitch=" & Format(p, "0.0")
+        n = n + 1
+
+        ' Emit continuation entry for Track GPs (end-of-sweep pose).
+        If hasCont Then
+            If n > PREVIEW_PLAN_MAX - 1 Then
+                LogP7 "  ERROR: preview poses exceed PREVIEW_PLAN_MAX=" & PREVIEW_PLAN_MAX
+                errCount = errCount + 1
+                GoTo DonePruning
+            End If
+            pYaw(n) = y2: pPitch(n) = p2: pLabel(n) = Left$(lbl & "e", 11): pStart(n) = False
+            lastY = y2: lastP = p2
+            LogP7 "    continuation " & pLabel(n) & " yaw=" & Format(y2, "0.0") & _
+                  " pitch=" & Format(p2, "0.0")
+            n = n + 1
+        End If
+NextRow:
+    Next i
+
+DonePruning:
+    If errCount > 0 Then
+        LogP7 "FAILED: " & errCount & " error(s). Aborting."
+        MsgBox errCount & " preview error(s). See Log.", vbExclamation, "PushPreviewPlanToCart"
+        Exit Sub
+    End If
+    If n = 0 Then
+        LogP7 "No preview poses built."
+        MsgBox "No preview poses built from the plan.", vbInformation, "PushPreviewPlanToCart"
+        Exit Sub
+    End If
+    LogP7 "Built " & n & " preview pose(s)."
+
+    If dryRun Then
+        LogP7 "--- PushPreviewPlanToCart end (DRY RUN, not sent) ---"
+        MsgBox "DRY RUN: " & n & " preview pose(s) built, not sent." & vbCrLf & _
+               "See Log for the per-pose breakdown.", vbInformation, "PushPreviewPlanToCart"
+        Exit Sub
+    End If
+
+    Dim arduinoIP As String: arduinoIP = ReadArduinoIPPP()
+    If arduinoIP = "" Then
+        MsgBox "Cart IP not set in Settings.", vbExclamation, "PushPreviewPlanToCart": Exit Sub
+    End If
+    If Not CartAlivePP(arduinoIP) Then
+        LogP7 "ABORT: cart /status no response at " & arduinoIP
+        MsgBox "Cart not responding at " & arduinoIP & ". Push aborted.", _
+               vbExclamation, "PushPreviewPlanToCart": Exit Sub
+    End If
+
+    Dim http As Object: Set http = CreateObject("WinHttp.WinHttpRequest.5.1")
+    Dim k As Long, okAll As Boolean: okAll = True
+    For k = 0 To n - 1
+        Dim url As String
+        url = arduinoIP & "/settings/previewplan?idx=" & k & _
+              "&yaw=" & Format(pYaw(k), "0.00") & _
+              "&pitch=" & Format(pPitch(k), "0.00") & _
+              "&label=" & pLabel(k) & _
+              "&start=" & IIf(pStart(k), "1", "0")
+        LogP7 "GET " & url
+        Dim sc As Long, resp As String
+        On Error Resume Next
+        http.Open "GET", url, False
+        http.Send
+        sc = http.Status
+        resp = CStr(http.responseText)
+        On Error GoTo ErrHandler
+        If sc = 200 Then
+            LogP7 "  OK " & resp
+        Else
+            LogP7 "  HTTP " & sc & " " & resp: okAll = False: Exit For
+        End If
+    Next k
+
+    If okAll Then
+        LogP7 "--- PushPreviewPlanToCart end (REAL PUSH, " & n & " poses) ---"
+        MsgBox n & " preview pose(s) pushed. Step with PREV/NEXT (or /preview/step).", _
+               vbInformation, "PushPreviewPlanToCart"
+    Else
+        MsgBox "Preview push failed mid-way. See Log.", vbExclamation, "PushPreviewPlanToCart"
+    End If
+    Exit Sub
+
+ErrHandler:
+    LogP7 "ERROR: " & Err.Description
+    MsgBox "Error in PushPreviewPlanToCart:" & vbCrLf & vbCrLf & Err.Description, _
+           vbCritical, "PushPreviewPlanToCart"
+End Sub
+
+' Transport (preview pusher) — PlanPush had no Phase-4 transport; these
+' mirror CartPlanPush/TrackPlanPush. Suffixed PP to avoid clashing with
+' any same-named privates if modules are later merged.
+Private Function ReadArduinoIPPP() As String
+    On Error Resume Next
+    Dim ip As String
+    ip = Trim(CStr(ThisWorkbook.Sheets("Settings").Range("dataArduinoIP").value))
+    On Error GoTo 0
+    If ip = "" Then
+        ReadArduinoIPPP = ""
+    Else
+        If LCase(Left(ip, 7)) <> "http://" Then ip = "http://" & ip
+        ReadArduinoIPPP = ip
+    End If
+End Function
+
+Private Function CartAlivePP(ByVal arduinoIP As String) As Boolean
+    Dim http As Object: Set http = CreateObject("WinHttp.WinHttpRequest.5.1")
+    On Error Resume Next
+    http.Open "GET", arduinoIP & "/status", False
+    http.Send
+    CartAlivePP = (http.Status = 200)
+    On Error GoTo 0
+End Function

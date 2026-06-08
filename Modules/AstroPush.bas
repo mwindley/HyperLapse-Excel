@@ -1,6 +1,6 @@
 Attribute VB_Name = "AstroPush"
 ' ============================================================
-' HyperLapse Cart â€” AstroPush module (Day 17, Workfront #50)
+' HyperLapse Cart                     AstroPush module (Day 17, Workfront #50)
 '
 ' PURPOSE
 '   Pushes today's astro keypoint positions to the cart's
@@ -14,11 +14,13 @@ Attribute VB_Name = "AstroPush"
 '   MW rise:   first moment in dark window where MW core alt > 0
 '   MW mid:    time of max MW core altitude within dark window
 '   MW end:    last moment in dark window where MW core alt > 0
-'   Moon:      NOT PUSHED (deferred per Workfront #55 â€” no moon
-'              maths in Astro.bas yet).
+'   Moon:      cubic fitted over the dark window (astroDusk..darkEnd),
+'              same as MW (#55 closed Day 24 pt B). No horizon gating:
+'              below-horizon stretches yield steep-down pitch the gimbal
+'              clamps; preview shows it; operator owns shootability.
 '
 ' FRAME
-'   Yaw values pushed are EARTH FRAME (real-world azimuth, 0Â°=N).
+'   Yaw values pushed are EARTH FRAME (real-world azimuth, 0         =N).
 '   Cart applies its own cart-heading correction at command time
 '   (under Ry=Cy shortcut today; will use BNO offset post-#40).
 '   This module does NOT subtract dataCartHeading.
@@ -53,28 +55,27 @@ Public Sub PushAstroToCart()
     darkEnd = setSheet.Range("dataPhase4aStart").value
     arduinoIP = CStr(setSheet.Range("dataArduinoIP").value)
 
-    ' Workaround for #57 (shoot-date anchor not yet implemented):
-    ' CalculatePhaseTimes uses today's sunrise for Phase 4a, which
-    ' for a dusk-to-dawn shoot is in the past. If darkEnd is before
-    ' darkStart, shift it by 24h (assume operator means tomorrow's
-    ' dawn, the bookend of tonight's dark window).
+    ' Workaround for #57 (shoot-date anchor not yet implemented).
     If darkEnd < astroDusk Then
-        darkEnd = darkEnd + 1#   ' +1 day
+        darkEnd = darkEnd + 1#
         LogEvent "ASTROPUSH", "darkEnd shifted +24h (workaround #57)"
     End If
 
     If sunriseTime = 0 Or sunsetTime = 0 Then
-        LogEvent "ASTROPUSH", "Sun times missing â€” run Get Sunset Time first"
+        LogEvent "ASTROPUSH", "Sun times missing - run Get Sunset Time first"
         MsgBox "Sunset/sunrise times not set. Click 'Get Sunset Time' first.", _
                vbExclamation
         Exit Sub
     End If
     If astroDusk = 0 Or darkEnd = 0 Then
-        LogEvent "ASTROPUSH", "Astro dusk or phase 4a missing â€” run Init Shoot first"
+        LogEvent "ASTROPUSH", "Astro dusk or phase 4a missing - run Init Shoot first"
         MsgBox "Astronomical dusk / phase 4a not set. Run Init Shoot first.", _
                vbExclamation
         Exit Sub
     End If
+
+    Dim deg As String
+    deg = Chr(176)
 
     ' --- 2. Sun rise / sun set positions -----------------------------------
     Dim sunRiseAz As Double, sunRiseAlt As Double
@@ -111,6 +112,35 @@ Public Sub PushAstroToCart()
                  " yaw=" & Format(mwEndAz, "0.0") & " pitch=" & Format(mwEndAlt, "0.0")
     End If
 
+    ' --- 3b. Moon rise / set within the shoot envelope ---------------------
+    ' FetchMoonTimesForNight stores dataMoonriseTime / dataMoonsetTime
+    ' (0 = no such crossing in the window). Push only the ones that exist.
+    FetchMoonTimesForNight Int(Now())
+    Dim moonRiseTime As Date, moonSetTime As Date
+    moonRiseTime = setSheet.Range("dataMoonriseTime").value
+    moonSetTime = setSheet.Range("dataMoonsetTime").value
+
+    Dim moonRiseAz As Double, moonRiseAlt As Double
+    Dim moonSetAz As Double, moonSetAlt As Double
+    Dim haveMoonRise As Boolean, haveMoonSet As Boolean
+    haveMoonRise = (moonRiseTime > 0)
+    haveMoonSet = (moonSetTime > 0)
+
+    If haveMoonRise Then
+        GetMoonAzAltAtTime moonRiseTime, moonRiseAz, moonRiseAlt
+        LogEvent "ASTROPUSH", "Moon rise " & Format(moonRiseTime, "HH:nn") & _
+                 " yaw=" & Format(moonRiseAz, "0.0") & " pitch=" & Format(moonRiseAlt, "0.0")
+    Else
+        LogEvent "ASTROPUSH", "Moon rise: none in window"
+    End If
+    If haveMoonSet Then
+        GetMoonAzAltAtTime moonSetTime, moonSetAz, moonSetAlt
+        LogEvent "ASTROPUSH", "Moon set  " & Format(moonSetTime, "HH:nn") & _
+                 " yaw=" & Format(moonSetAz, "0.0") & " pitch=" & Format(moonSetAlt, "0.0")
+    Else
+        LogEvent "ASTROPUSH", "Moon set: none in window"
+    End If
+
     ' --- 4. Build URL ------------------------------------------------------
     Dim qs As String
     qs = "?sry=" & Format(sunRiseAz, "0.00") & _
@@ -125,6 +155,14 @@ Public Sub PushAstroToCart()
              "&mmp=" & Format(mwMidAlt, "0.00") & _
              "&mey=" & Format(mwEndAz, "0.00") & _
              "&mep=" & Format(mwEndAlt, "0.00")
+    End If
+    If haveMoonRise Then
+        qs = qs & "&mnry=" & Format(moonRiseAz, "0.00") & _
+                  "&mnrp=" & Format(moonRiseAlt, "0.00")
+    End If
+    If haveMoonSet Then
+        qs = qs & "&mnsy=" & Format(moonSetAz, "0.00") & _
+                  "&mnsp=" & Format(moonSetAlt, "0.00")
     End If
 
     ' --- 5. HTTP push ------------------------------------------------------
@@ -145,21 +183,28 @@ Public Sub PushAstroToCart()
 
     If sc = 200 Then
         LogEvent "ASTROPUSH", "OK " & respText
+        Dim moonMsg As String
+        If haveMoonRise Then moonMsg = moonMsg & "Moon rise: " & _
+            Format(moonRiseAz, "0.0") & deg & " / " & Format(moonRiseAlt, "0.0") & deg & vbCrLf
+        If haveMoonSet Then moonMsg = moonMsg & "Moon set:  " & _
+            Format(moonSetAz, "0.0") & deg & " / " & Format(moonSetAlt, "0.0") & deg & vbCrLf
+        If moonMsg = "" Then moonMsg = "Moon: no rise/set in tonight's window" & vbCrLf
+
         MsgBox "Astro pushed to cart." & vbCrLf & vbCrLf & _
-               "Sun rise:  " & Format(sunRiseAz, "0.0") & "Â° / " & Format(sunRiseAlt, "0.0") & "Â°" & vbCrLf & _
-               "Sun set:   " & Format(sunSetAz, "0.0") & "Â° / " & Format(sunSetAlt, "0.0") & "Â°" & vbCrLf & _
+               "Sun rise:  " & Format(sunRiseAz, "0.0") & deg & " / " & Format(sunRiseAlt, "0.0") & deg & vbCrLf & _
+               "Sun set:   " & Format(sunSetAz, "0.0") & deg & " / " & Format(sunSetAlt, "0.0") & deg & vbCrLf & _
                IIf(mwOK, _
-                  "MW rise:   " & Format(mwRiseAz, "0.0") & "Â° / " & Format(mwRiseAlt, "0.0") & "Â°" & vbCrLf & _
-                  "MW mid:    " & Format(mwMidAz, "0.0") & "Â° / " & Format(mwMidAlt, "0.0") & "Â°" & vbCrLf & _
-                  "MW end:    " & Format(mwEndAz, "0.0") & "Â° / " & Format(mwEndAlt, "0.0") & "Â°", _
-                  "MW: not above horizon in dark window"), _
+                  "MW rise:   " & Format(mwRiseAz, "0.0") & deg & " / " & Format(mwRiseAlt, "0.0") & deg & vbCrLf & _
+                  "MW mid:    " & Format(mwMidAz, "0.0") & deg & " / " & Format(mwMidAlt, "0.0") & deg & vbCrLf & _
+                  "MW end:    " & Format(mwEndAz, "0.0") & deg & " / " & Format(mwEndAlt, "0.0") & deg & vbCrLf, _
+                  "MW: not above horizon in dark window" & vbCrLf) & _
+               moonMsg, _
                vbInformation, "Push Astro to Cart"
     Else
         LogEvent "ASTROPUSH", "HTTP " & sc & " " & respText
         MsgBox "Push failed. HTTP " & sc & vbCrLf & respText, vbExclamation
     End If
 End Sub
-
 ' ============================================================
 ' Push tracking paths (cubic polynomials) to cart
 '
@@ -169,13 +214,13 @@ End Sub
 '
 ' Time origin t=0 is the moment of push (cart records millis() at
 ' receipt). VBA fits with t in seconds from Now() at the start of
-' this sub â€” by the time HTTP arrives at cart, "now" has advanced
+' this sub                     by the time HTTP arrives at cart, "now" has advanced
 ' ~50ms which is negligible.
 '
 ' Windows:
-'   sun:  sunset â†’ sunrise (next day if needed)
-'   mw:   astroDusk â†’ darkEnd (next day if needed)
-'   moon: NOT PUSHED (deferred per #55)
+'   sun:  sunset                     sunrise (next day if needed)
+'   mw:   astroDusk                     darkEnd (next day if needed)
+'   moon: astroDusk -> darkEnd (same window as mw)
 ' ============================================================
 Public Sub PushTrackPathsToCart()
     LogEvent "TRACKPUSH", "=== PushTrackPathsToCart ==="
@@ -205,7 +250,7 @@ Public Sub PushTrackPathsToCart()
     Dim t0 As Date
     t0 = Now()
 
-    ' Sun: fit cubic over sunset â†’ sunrise window
+    ' Sun: fit cubic over sunset                     sunrise window
     Dim sunOK As Boolean
     sunOK = FitAndPushTrackPath("sun", t0, sunsetTime, sunriseTime, arduinoIP)
 
@@ -213,10 +258,18 @@ Public Sub PushTrackPathsToCart()
     Dim mwOK As Boolean
     mwOK = FitAndPushTrackPath("mw", t0, astroDusk, darkEnd, arduinoIP)
 
+    ' Moon: fit cubic over the SAME dark window as MW (#55 closed Day 24
+    ' pt B). No horizon gating: if the moon is below the horizon for part
+    ' or all of the window the cubic simply asks for a steep-down pitch,
+    ' which the gimbal's own pitch limit clamps and preview makes visible.
+    ' Operator owns plan shootability.
+    Dim moonOK As Boolean
+    moonOK = FitAndPushTrackPath("moon", t0, astroDusk, darkEnd, arduinoIP)
+
     Dim summary As String
-    summary = "Sun: " & IIf(sunOK, "pushed", "FAILED") & vbCrLf & _
-              "MW:  " & IIf(mwOK, "pushed", "FAILED") & vbCrLf & _
-              "Moon: skipped (#55 pending)"
+    summary = "Sun:  " & IIf(sunOK, "pushed", "FAILED") & vbCrLf & _
+              "MW:   " & IIf(mwOK, "pushed", "FAILED") & vbCrLf & _
+              "Moon: " & IIf(moonOK, "pushed", "FAILED")
     MsgBox summary, vbInformation, "Push Track Paths to Cart"
 End Sub
 
@@ -231,7 +284,7 @@ Private Function FitAndPushTrackPath(ByVal objName As String, _
 
     ' Number of segments per object. 4 is the cart's SRAM-imposed limit
     ' (TRACK_SEGS_MAX in firmware). With 3-hour segments over a 12-hour
-    ' window the cubic still struggles near MW zenith — accuracy may
+    ' window the cubic still struggles near MW zenith          accuracy may
     ' degrade there; verify with CheckTrackFitResiduals.
     Const N_SEGMENTS As Long = 2
 
@@ -269,7 +322,7 @@ Private Function FitAndPushTrackPath(ByVal objName As String, _
 
         ReDim ti(0 To nSamples - 1) As Double
         ReDim yi(0 To nSamples - 1) As Double
-        ReDim pi(0 To nSamples - 1) As Double
+        ReDim PI(0 To nSamples - 1) As Double
 
         Dim i As Long, az As Double, alt As Double
         i = 0
@@ -279,12 +332,14 @@ Private Function FitAndPushTrackPath(ByVal objName As String, _
                 GetSunAzAltAtTime t, az, alt
             ElseIf objName = "mw" Then
                 GetGCAzAltAtTime t, az, alt
+            ElseIf objName = "moon" Then
+                GetMoonAzAltAtTime t, az, alt
             Else
                 FitAndPushTrackPath = False
                 Exit Function
             End If
             yi(i) = az
-            pi(i) = alt
+            PI(i) = alt
             i = i + 1
         Next t
 
@@ -311,7 +366,7 @@ Private Function FitAndPushTrackPath(ByVal objName As String, _
         hasFreeze = False
         Dim fk As Long
         For fk = 0 To nSamples - 1
-            If pi(fk) > FREEZE_PITCH_THRESHOLD Then
+            If PI(fk) > FREEZE_PITCH_THRESHOLD Then
                 hasFreeze = True
                 freezeYaw = yi(fk)
                 Exit For
@@ -331,7 +386,7 @@ Private Function FitAndPushTrackPath(ByVal objName As String, _
                 Exit For
             End If
         End If
-        If Not FitCubic(ti, pi, ap) Then
+        If Not FitCubic(ti, PI, ap) Then
             LogEvent "TRACKPUSH", objName & " seg " & segIdx & " pitch fit failed"
             allOK = False
             Exit For
@@ -346,6 +401,13 @@ Private Function FitAndPushTrackPath(ByVal objName As String, _
              "&ts=" & ts & "&te=" & te & _
              "&ay0=" & ay(0) & "&ay1=" & ay(1) & "&ay2=" & ay(2) & "&ay3=" & ay(3) & _
              "&ap0=" & ap(0) & "&ap1=" & ap(1) & "&ap2=" & ap(2) & "&ap3=" & ap(3)
+        ' Model B: on seg=0, send rt0 = the cubic's real-time t0 as
+        ' epoch-ms. Cart evaluates the cubic at (real_now - rt0). MUST
+        ' use the SAME epoch reference (UTC ms) as the /settings/realtime
+        ' anchor the Execution UI hands in, or astro pointing will be off.
+        If segIdx = 0 Then
+            qs = qs & "&rt0=" & Format(DateToEpochMs(t0), "0")
+        End If
 
         Dim http As Object
         Set http = CreateObject("WinHttp.WinHttpRequest.5.1")
@@ -421,23 +483,23 @@ Private Function FitCubic(ByRef ti() As Double, _
     Next i
 
     ' Assemble augmented 4x5 matrix [M | b]
-    Dim M(0 To 3, 0 To 4) As Double
-    M(0, 0) = S0: M(0, 1) = S1: M(0, 2) = S2: M(0, 3) = S3: M(0, 4) = Sy
-    M(1, 0) = S1: M(1, 1) = S2: M(1, 2) = S3: M(1, 3) = S4: M(1, 4) = Sty
-    M(2, 0) = S2: M(2, 1) = S3: M(2, 2) = S4: M(2, 3) = S5: M(2, 4) = St2y
-    M(3, 0) = S3: M(3, 1) = S4: M(3, 2) = S5: M(3, 3) = S6: M(3, 4) = St3y
+    Dim m(0 To 3, 0 To 4) As Double
+    m(0, 0) = S0: m(0, 1) = S1: m(0, 2) = S2: m(0, 3) = S3: m(0, 4) = Sy
+    m(1, 0) = S1: m(1, 1) = S2: m(1, 2) = S3: m(1, 3) = S4: m(1, 4) = Sty
+    m(2, 0) = S2: m(2, 1) = S3: m(2, 2) = S4: m(2, 3) = S5: m(2, 4) = St2y
+    m(3, 0) = S3: m(3, 1) = S4: m(3, 2) = S5: m(3, 3) = S6: m(3, 4) = St3y
 
     ' Gaussian elimination with partial pivoting
     Dim p As Long, k As Long, j As Long, maxAbs As Double, swap As Double
     Dim factor As Double
     For p = 0 To 3
         ' Find pivot row
-        maxAbs = Abs(M(p, p))
+        maxAbs = Abs(m(p, p))
         Dim pivotRow As Long
         pivotRow = p
         For k = p + 1 To 3
-            If Abs(M(k, p)) > maxAbs Then
-                maxAbs = Abs(M(k, p))
+            If Abs(m(k, p)) > maxAbs Then
+                maxAbs = Abs(m(k, p))
                 pivotRow = k
             End If
         Next k
@@ -448,29 +510,29 @@ Private Function FitCubic(ByRef ti() As Double, _
         ' Swap rows if needed
         If pivotRow <> p Then
             For j = 0 To 4
-                swap = M(p, j)
-                M(p, j) = M(pivotRow, j)
-                M(pivotRow, j) = swap
+                swap = m(p, j)
+                m(p, j) = m(pivotRow, j)
+                m(pivotRow, j) = swap
             Next j
         End If
         ' Eliminate below
         For k = p + 1 To 3
-            factor = M(k, p) / M(p, p)
+            factor = m(k, p) / m(p, p)
             For j = p To 4
-                M(k, j) = M(k, j) - factor * M(p, j)
+                m(k, j) = m(k, j) - factor * m(p, j)
             Next j
         Next k
     Next p
 
-    ' Back-substitute into caller's pre-sized array (no ReDim — caller
+    ' Back-substitute into caller's pre-sized array (no ReDim          caller
     ' passes fixed-size array, ReDim on that fires error 10).
     For p = 3 To 0 Step -1
         Dim s As Double
-        s = M(p, 4)
+        s = m(p, 4)
         For j = p + 1 To 3
-            s = s - M(p, j) * coeff(j)
+            s = s - m(p, j) * coeff(j)
         Next j
-        coeff(p) = s / M(p, p)
+        coeff(p) = s / m(p, p)
     Next p
 
     FitCubic = True
@@ -488,7 +550,7 @@ End Function
 ' the geometric horizon crossing) rather than exactly 0.
 ' Acceptable at 14mm wide-angle.
 '
-' Returns False if MW core never exceeds 0Â° within the window.
+' Returns False if MW core never exceeds 0          within the window.
 ' ============================================================
 Private Function FindMWKeypoints(ByVal darkStart As Date, _
                                   ByVal darkEnd As Date, _
@@ -530,7 +592,7 @@ Private Function FindMWKeypoints(ByVal darkStart As Date, _
                 midAz = az
                 midAlt = alt
             End If
-            ' Always update end â€” last above-horizon sample
+            ' Always update end                     last above-horizon sample
             endTime = t
             endAz = az
             endAlt = alt
@@ -547,7 +609,7 @@ End Function
 ' (per-segment cubic) but instead of pushing, prints worst
 ' residual per segment, plus full sample dump.
 '
-' Usage from Immediate: CheckTrackFitResiduals "mw"  or  "sun"
+' Usage from Immediate: CheckTrackFitResiduals "mw"  or  "sun"  or  "moon"
 ' ============================================================
 Public Sub CheckTrackFitResiduals(ByVal objName As String)
     Const N_SEGMENTS As Long = 2
@@ -571,6 +633,9 @@ Public Sub CheckTrackFitResiduals(ByVal objName As String)
         winStart = sunsetTime
         winEnd = sunriseTime
     ElseIf objName = "mw" Then
+        winStart = astroDusk
+        winEnd = darkEnd
+    ElseIf objName = "moon" Then
         winStart = astroDusk
         winEnd = darkEnd
     Else
@@ -611,7 +676,7 @@ Public Sub CheckTrackFitResiduals(ByVal objName As String)
 
         ReDim ti(0 To nSamples - 1) As Double
         ReDim yi(0 To nSamples - 1) As Double
-        ReDim pi(0 To nSamples - 1) As Double
+        ReDim PI(0 To nSamples - 1) As Double
 
         Dim i As Long, az As Double, alt As Double
         i = 0
@@ -621,9 +686,11 @@ Public Sub CheckTrackFitResiduals(ByVal objName As String)
                 GetSunAzAltAtTime t, az, alt
             ElseIf objName = "mw" Then
                 GetGCAzAltAtTime t, az, alt
+            ElseIf objName = "moon" Then
+                GetMoonAzAltAtTime t, az, alt
             End If
             yi(i) = az
-            pi(i) = alt
+            PI(i) = alt
             i = i + 1
         Next t
 
@@ -639,7 +706,7 @@ Public Sub CheckTrackFitResiduals(ByVal objName As String)
 
         Dim ay(0 To 3) As Double, ap(0 To 3) As Double
         If Not FitCubic(ti, yi, ay) Then Debug.Print "  seg " & segIdx & " yaw fail": GoTo NextSeg
-        If Not FitCubic(ti, pi, ap) Then Debug.Print "  seg " & segIdx & " pit fail": GoTo NextSeg
+        If Not FitCubic(ti, PI, ap) Then Debug.Print "  seg " & segIdx & " pit fail": GoTo NextSeg
 
         Dim worstY As Double, worstP As Double
         worstY = 0: worstP = 0
@@ -651,21 +718,21 @@ Public Sub CheckTrackFitResiduals(ByVal objName As String)
             fp = ap(0) + ap(1) * ti(i) + ap(2) * t2 + ap(3) * t3
             Dim dy As Double, dp As Double
             dy = yi(i) - fy
-            dp = pi(i) - fp
+            dp = PI(i) - fp
             If Abs(dy) > Abs(worstY) Then worstY = dy
             If Abs(dp) > Abs(worstP) Then worstP = dp
         Next i
         Debug.Print "  seg " & segIdx & " " & Format(segStart, "HH:nn") & "-" & _
                     Format(segEnd, "HH:nn") & "  worstY=" & Format(worstY, "0.00") & _
-                    "Â°  worstP=" & Format(worstP, "0.00") & "Â°"
+                    "           worstP=" & Format(worstP, "0.00") & "         "
         If Abs(worstY) > Abs(globalWorstY) Then globalWorstY = worstY
         If Abs(worstP) > Abs(globalWorstP) Then globalWorstP = worstP
 NextSeg:
     Next segIdx
 
     Debug.Print ""
-    Debug.Print "GLOBAL worst yaw:   " & Format(globalWorstY, "0.00") & "Â°"
-    Debug.Print "GLOBAL worst pitch: " & Format(globalWorstP, "0.00") & "Â°"
+    Debug.Print "GLOBAL worst yaw:   " & Format(globalWorstY, "0.00") & "         "
+    Debug.Print "GLOBAL worst pitch: " & Format(globalWorstP, "0.00") & "         "
 End Sub
 
 ' ============================================================
@@ -750,7 +817,7 @@ End Sub
 ' ============================================================
 ' Diagnostic: try single-cubic-with-freeze fit
 '
-' Excludes samples where pitch > pitchThreshold (e.g. 80°) from
+' Excludes samples where pitch > pitchThreshold (e.g. 80    ) from
 ' the yaw fit. Fits one cubic to the remaining yaw samples and
 ' a separate cubic to all pitch samples. Reports worst residual
 ' on the non-freeze samples for yaw, and on all samples for pitch.
@@ -839,7 +906,7 @@ Public Sub CheckTrackFreezeFit(ByVal objName As String, _
         iA = iA + 1
     Next t
 
-    ' Unwrap yaw across non-freeze samples — but since these may be
+    ' Unwrap yaw across non-freeze samples          but since these may be
     ' disjoint with a gap, unwrap independently within each contiguous
     ' chunk. Simpler: walk all non-freeze, unwrap relative to previous.
     Dim k As Long
@@ -887,7 +954,7 @@ Public Sub CheckTrackFreezeFit(ByVal objName As String, _
 
     Debug.Print "=== Single cubic + freeze for " & objName & " ==="
     Debug.Print "Window: " & Format(winStart, "HH:nn") & " -> " & Format(winEnd, "HH:nn")
-    Debug.Print "Pitch threshold: " & pitchThreshold & "Â°"
+    Debug.Print "Pitch threshold: " & pitchThreshold & "         "
     If haveFreeze Then
         Debug.Print "Freeze region: " & Format(freezeStart, "HH:nn") & " -> " & _
                     Format(freezeEnd, "HH:nn")
@@ -895,6 +962,27 @@ Public Sub CheckTrackFreezeFit(ByVal objName As String, _
         Debug.Print "No freeze region (pitch never exceeded threshold)"
     End If
     Debug.Print "Samples: " & nAll & " total, " & nNonFreeze & " used for yaw fit"
-    Debug.Print "Worst yaw residual (non-freeze): " & Format(worstY, "0.00") & "Â°"
-    Debug.Print "Worst pitch residual (all):      " & Format(worstP, "0.00") & "Â°"
+    Debug.Print "Worst yaw residual (non-freeze): " & Format(worstY, "0.00") & "         "
+    Debug.Print "Worst pitch residual (all):      " & Format(worstP, "0.00") & "         "
 End Sub
+
+' ============================================================
+' Convert a VBA Date to epoch-ms (milliseconds since 1970-01-01).
+'
+' Model B (#57): rt0 sent to the cart must use the SAME epoch
+' reference as the /settings/realtime anchor handed in by the
+' Execution UI. Both should be UTC epoch-ms. This helper treats the
+' Date as UTC: if the realtime anchor is also fed UTC epoch-ms, they
+' agree and astro pointing is correct.
+'
+' NOTE: VBA Now()/Date is LOCAL time. If the realtime anchor is fed
+' LOCAL epoch-ms instead, change BOTH consistently. The only hard
+' requirement is that rt0 and the anchor share one convention          the
+' cart just subtracts them, so a constant offset cancels as long as
+' it's the same on both. (Kept simple: serial-date * day-ms.)
+' ============================================================
+Private Function DateToEpochMs(ByVal d As Date) As Double
+    ' VBA serial date 0 = 1899-12-30. Unix epoch = 1970-01-01 =
+    ' serial 25569. ms = (serial - 25569) * 86400 * 1000.
+    DateToEpochMs = (CDbl(d) - 25569#) * 86400# * 1000#
+End Function

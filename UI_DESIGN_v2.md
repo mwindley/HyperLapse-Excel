@@ -155,6 +155,18 @@ Day-10 design said to drop):
 
 ## Gimbal Recon — body
 
+> **Vocabulary note (added Day 25):** the event-type list in this
+> section is the OLD 7-type Gimbal Recon set (PF / Lock / Move /
+> Track sun / Sunrise / Sunset / MW). It is superseded for the *plan*
+> layer by the current 6-type GP set — **Pan Follow / Lock / Move /
+> Track / Track-yaw / END** — see PLAN_AUTHORING.md and
+> GIMBAL_EXECUTION_CAPABILITIES.md (the living references). The names
+> below are the field *capture* labels and still broadly map (PF→Pan
+> Follow, Move→Move, Track sun/Sunrise/Sunset/MW→Track/Move with an
+> astro target), but do NOT treat the 7-type set here as the current
+> authoring vocabulary. The screen layout/palette below is still the
+> canonical UI reference; only the action-type taxonomy is stale.
+
 **Live readout** (one line, monospace, small):
 - `live · Ry 118.7° · Cy 273° · p 34.2°`
 - Ry = real-world yaw (gimbal frame + BNO cart yaw)

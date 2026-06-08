@@ -1,6 +1,6 @@
 Attribute VB_Name = "Cart"
 ' ============================================================
-' HyperLapse Cart - Cart Log Processing Module
+' HyperLapse Cart — Cart Log Processing Module
 '
 ' Handles:
 '   1. Cart log retrieval from Arduino (/cartlog endpoint)
@@ -10,7 +10,7 @@ Attribute VB_Name = "Cart"
 '
 ' WORKFLOW:
 '   Scout run (3pm, ~30 mins at 100 m/hr):
-'     - Press btn19 (* Cart) on phone UI to start recording
+'     - Press btn19 (● Cart) on phone UI to start recording
 '     - Drive path at 100 m/hr
 '     - Press btn19 again to stop
 '     - Run GetCartLog to retrieve events
@@ -27,10 +27,6 @@ Attribute VB_Name = "Cart"
 ' ============================================================
 
 Option Explicit
-
-' Rear-axle distance per Tic step (m). Matches BicycleModel.bas
-' (day-8 straight-line calibration, 1.77 um/step).
-Private Const M_PER_STEP As Double = 0.00000178
 
 ' ============================================================
 ' Log retrieval
@@ -56,35 +52,26 @@ Public Sub GetCartLog()
     response = Trim(http.responseText)
     Set http = Nothing
     
-    ' Robust empty check: the cart may append CR/LF to the EMPTY
-    ' sentinel, and VBA Trim() does NOT strip vbCr/vbLf. Test a
-    ' separate stripped copy so `response` stays intact for Split.
-    Dim respChk As String
-    respChk = Replace(Replace(response, vbCr, ""), vbLf, "")
-    If respChk = "" Or respChk = "EMPTY" Then
+    If response = "" Or response = "EMPTY" Then
         LogEvent "CART", "GetCartLog: no new events"
         Exit Sub
     End If
     
-    ' Load CartLog sheet, then wipe it - fresh each pull (Day 28): stops two
-    ' recon runs stacking, and clears stray col 12-15 leftovers from a prior
-    ' import/ProcessCartLog. Only reached after the non-empty check above, so
-    ' an empty buffer exits earlier and leaves the sheet untouched.
+    ' Append to CartLog sheet
     Dim ws As Worksheet
     Set ws = Sheets("CartLog")
-    ws.Cells.Clear
     
-    ' Headers (sheet was just cleared, so write them every time)
-    ws.Cells(1, 1).value = "Timestamp"
-    ws.Cells(1, 2).value = "Type"
-    ws.Cells(1, 3).value = "Value"
-    ws.Cells(1, 4).value = "Description"
-    ws.Cells(1, 5).value = "RearSteps"      ' day-8: TIC rear position at event
-    ws.Cells(1, 6).value = "FrontSteps"     ' day-8: TIC front position at event
-    ws.Cells(1, 12).value = "BNO heading (deg)"   ' #40 recon-heading (Day 25)
-    ws.Cells(1, 13).value = "BNO cal"             ' #40 recon-heading (Day 25)
-    ws.Cells(1, 14).value = "iPhone compass (deg)"  ' C-row deg (Day 27 v33)
-    ws.Cells(1, 15).value = "Compass WP"            ' C-row bound waypoint
+    ' Add header if sheet is empty
+    If ws.Cells(1, 1).value = "" Then
+        ws.Cells(1, 1).value = "Timestamp"
+        ws.Cells(1, 2).value = "Type"
+        ws.Cells(1, 3).value = "Value"
+        ws.Cells(1, 4).value = "Description"
+        ws.Cells(1, 5).value = "RearSteps"      ' day-8: TIC rear position at event
+        ws.Cells(1, 6).value = "FrontSteps"     ' day-8: TIC front position at event
+        ws.Cells(1, 12).value = "BNO heading (deg)"   ' #40 recon-heading (Day 25)
+        ws.Cells(1, 13).value = "BNO cal"             ' #40 recon-heading (Day 25)
+    End If
     
     Dim NextRow As Long
     NextRow = ws.Cells(ws.rows.count, 1).End(xlUp).row + 1
@@ -94,6 +81,9 @@ Public Sub GetCartLog()
     Dim i As Integer
     Dim newRows As Integer
     newRows = 0
+    ' --- DIAG (temporary) — remove after diagnosis.
+    LogEvent "CART", "DIAG len=" & Len(response) & " lines=" & (UBound(lines) + 1) & _
+             " hasCR=" & (InStr(response, Chr(13)) > 0) & " hasLF=" & (InStr(response, Chr(10)) > 0)
     
     For i = 0 To UBound(lines)
         Dim line As String
@@ -114,31 +104,11 @@ Public Sub GetCartLog()
                 If UBound(fields) >= 4 Then
                     ws.Cells(NextRow, 6).value = CDbl(fields(4))  ' front_steps
                 End If
-                ' #40 recon-heading (Day 25): 'A' rows carry a measured BNO
-                ' heading (value = true_yaw x10) + cal (field 5 / aux). Land
-                ' them in tail cols 12/13 so ProcessCartLog (which overwrites
-                ' cols 5-11) cannot stomp them.
                 If fields(1) = "A" Then
                     ws.Cells(NextRow, 12).value = CDbl(fields(2)) / 10#
                     If UBound(fields) >= 5 Then
                         ws.Cells(NextRow, 13).value = CDbl(fields(5))
                     End If
-                End If
-                ' Operator iPhone-compass 'C' rows (firmware soak-v33, Day 27):
-                ' value (field 2) = degrees as typed, VERBATIM, no conversion;
-                ' field 5 / aux = the waypoint number this reading binds to.
-                ' Land deg in tail col 14 and the bound WP in col 15 - both
-                ' sit past col 11, so ProcessCartLog (clears E:K) cannot stomp
-                ' them, same as the BNO 'A' cols 12/13. Also give a readable
-                ' description (overrides the generic "C=..." from EventDescription).
-                If fields(1) = "C" Then
-                    Dim cWp As Long
-                    cWp = 0
-                    If UBound(fields) >= 5 Then cWp = CLng(fields(5))
-                    ws.Cells(NextRow, 4).value = "iPhone compass " & _
-                        CDbl(fields(2)) & " -> WP" & cWp
-                    ws.Cells(NextRow, 14).value = CDbl(fields(2))   ' deg verbatim
-                    ws.Cells(NextRow, 15).value = cWp               ' bound WP
                 End If
                 NextRow = NextRow + 1
                 newRows = newRows + 1
@@ -147,24 +117,10 @@ Public Sub GetCartLog()
     Next i
     
     ' Format timestamp column
-    ws.Columns(1).NumberFormat = "@"  ' Text - keep HH:MM:SS as string
+    ws.Columns(1).NumberFormat = "@"  ' Text — keep HH:MM:SS as string
     ws.Columns("A:F").AutoFit
     
     LogEvent "CART", "GetCartLog: " & newRows & " events retrieved"
-    ' Day 25: /cartlog is now NON-CLEARING. Clear the cart buffer
-    ' ONLY after a confirmed import (newRows > 0) via the surgical
-    ' /cartlog/clearcart (does NOT touch gimbal log / recording).
-    ' A stray read can no longer destroy recon data.
-    If newRows > 0 Then
-        On Error Resume Next
-        Dim httpClr As Object
-        Set httpClr = CreateObject("WinHttp.WinHttpRequest.5.1")
-        httpClr.Open "GET", ARDUINO_IP() & "/cartlog/clearcart", False
-        httpClr.Send
-        LogEvent "CART", "GetCartLog: buffer cleared after import (" & httpClr.responseText & ")"
-        Set httpClr = Nothing
-        On Error GoTo ErrHandler
-    End If
     Exit Sub
 ErrHandler:
     LogEvent "CART", "GetCartLog error: " & Err.Description
@@ -179,9 +135,9 @@ Private Function EventDescription(ByVal evtType As String, ByVal value As Double
             Dim offset As Integer
             offset = CInt(value) - 98   ' 98 = CART_STEERING_CENTRE
             If offset > 0 Then
-                EventDescription = "Steer right " & offset & " deg"
+                EventDescription = "Steer right " & offset & Chr(176)
             ElseIf offset < 0 Then
-                EventDescription = "Steer left " & Abs(offset) & " deg"
+                EventDescription = "Steer left " & Abs(offset) & Chr(176)
             Else
                 EventDescription = "Steer centre"
             End If
@@ -193,12 +149,12 @@ Private Function EventDescription(ByVal evtType As String, ByVal value As Double
 End Function
 
 ' ============================================================
-' Log post-processing - calculate distances
+' Log post-processing — calculate distances
 ' ============================================================
 
 ' Process CartLog sheet into distance segments
 ' Reads events, calculates time between events, derives distances
-' Writes processed segments to CartLog cols G onwards; preserves E:F (raw steps)
+' Writes processed segments to CartLog sheet columns E onwards
 Public Sub ProcessCartLog()
     On Error GoTo ErrHandler
     
@@ -209,28 +165,21 @@ Public Sub ProcessCartLog()
     lastRow = ws.Cells(ws.rows.count, 1).End(xlUp).row
     
     If lastRow < 2 Then
-        MsgBox "CartLog sheet is empty - retrieve log first.", vbExclamation
+        MsgBox "CartLog sheet is empty — retrieve log first.", vbExclamation
         Exit Sub
     End If
     
-    ' Day 25: distance derives from ACTUAL rear-axle steps (RearSteps col 5
-    ' x M_PER_STEP), NOT speed x time. Day 28: col 5 is no longer cleared
-    ' here, so RearSteps/FrontSteps survive - read col 5 live in the loop.
-
-    ' Clear previous processing. Day 28: clear ONLY G:K (cols this sub +
-    ' replay own) so cols 5/6 RearSteps/FrontSteps (read by BicycleModel/
-    ' Smooth) and 12-15 (headings) survive. Duration/Scout moved to P:Q.
-    ws.Range("G1:K" & lastRow).Clear
-    ws.Range("P1:Q" & lastRow).Clear
+    ' Clear previous processing
+    ws.Range("E1:K" & lastRow).Clear
     
-    ' Add segment headers (leave col 5/6 RearSteps/FrontSteps headers alone)
+    ' Add segment headers
+    ws.Cells(1, 5).value = "Duration (s)"
+    ws.Cells(1, 6).value = "Scout speed"
     ws.Cells(1, 7).value = "Distance (m)"
     ws.Cells(1, 8).value = "Replay speed"
     ws.Cells(1, 9).value = "Replay time (s)"
     ws.Cells(1, 10).value = "Replay start"
     ws.Cells(1, 11).value = "Replay end"
-    ws.Cells(1, 16).value = "Duration (s)"   ' relocated from col 5 (Day 28)
-    ws.Cells(1, 17).value = "Scout speed"    ' relocated from col 6 (Day 28)
     
     ' Parse events and calculate segments
     Dim currentSpeed As Double
@@ -257,17 +206,13 @@ Public Sub ProcessCartLog()
             Dim durationSecs As Double
             durationSecs = TimestampDiff(prevTime, evtTime)
             
-            ' Distance from ACTUAL rear-axle travel: step delta x M_PER_STEP.
-            ' (Was speed*time, an estimate that read ~0 on short/ramped
-            ' segments even though the wheels turned. Day 25 fix.)
+            ' Distance = speed * time (speed in m/hr, time in seconds)
             Dim distanceM As Double
-            distanceM = (SafeDouble(ws.Cells(i, 5).value) _
-                       - SafeDouble(ws.Cells(i - 1, 5).value)) * M_PER_STEP
-            If distanceM < 0 Then distanceM = 0   ' guard step wrap/reset
+            distanceM = currentSpeed * (durationSecs / 3600)
             
-            ws.Cells(i - 1, 16).value = Round(durationSecs, 1)   ' Duration -> P
-            ws.Cells(i - 1, 17).value = currentSpeed             ' Scout speed -> Q
-            ws.Cells(i - 1, 7).value = Round(distanceM, 3)       ' Distance stays G
+            ws.Cells(i - 1, 5).value = Round(durationSecs, 1)
+            ws.Cells(i - 1, 6).value = currentSpeed
+            ws.Cells(i - 1, 7).value = Round(distanceM, 2)
         End If
         
         ' Update current state
@@ -282,8 +227,8 @@ Public Sub ProcessCartLog()
     Next i
     
     ' Format
-    ws.Columns("E:Q").AutoFit
-    ws.Range("H2:H" & lastRow).Interior.Color = RGB(255, 255, 204)  ' Yellow - operator fills these
+    ws.Columns("E:K").AutoFit
+    ws.Range("H2:H" & lastRow).Interior.Color = RGB(255, 255, 204)  ' Yellow — operator fills these
     
     LogEvent "CART", "ProcessCartLog: " & (lastRow - 1) & " events processed"
     
@@ -378,7 +323,7 @@ Public Sub GenerateReplayPlan()
                     If replaySpd > 0 Then
                         duration = (distance / replaySpd) * 3600  ' seconds
                     Else
-                        ' Default - use same speed as scout run
+                        ' Default — use same speed as scout run
                         duration = (distance / evtValue) * 3600
                     End If
                     
@@ -387,7 +332,7 @@ Public Sub GenerateReplayPlan()
                     wsDst.Cells(dstRow, 2).value = "SPEED"
                     wsDst.Cells(dstRow, 3).value = IIf(replaySpd > 0, replaySpd, evtValue)
                     wsDst.Cells(dstRow, 4).value = "Segment " & (i - 1) & _
-                                                   " - " & Round(distance, 1) & "m"
+                                                   " — " & Round(distance, 1) & "m"
                     wsDst.Cells(dstRow, 5).value = Round(duration, 0)
                     wsDst.Cells(dstRow, 6).value = Round(distance, 2)
                     
@@ -400,13 +345,13 @@ Public Sub GenerateReplayPlan()
                 End If
                 
             Case "T"
-                ' Steering change - insert at current time
+                ' Steering change — insert at current time
                 Dim steerOffset As Integer
                 steerOffset = CInt(evtValue) - 98
                 wsDst.Cells(dstRow, 1).value = currentTime
                 wsDst.Cells(dstRow, 2).value = "STEER"
                 wsDst.Cells(dstRow, 3).value = steerOffset
-                wsDst.Cells(dstRow, 4).value = "Steer " & IIf(steerOffset >= 0, "+" & steerOffset, steerOffset) & " deg"
+                wsDst.Cells(dstRow, 4).value = "Steer " & IIf(steerOffset >= 0, "+" & steerOffset, steerOffset) & Chr(176)
                 dstRow = dstRow + 1
                 
             Case "X"
@@ -469,8 +414,8 @@ Public Sub GetGimbalLogToSheet()
     ' Add headers if empty
     If ws.Cells(1, 1).value = "" Then
         ws.Cells(1, 1).value = "Timestamp"
-        ws.Cells(1, 2).value = "Yaw (deg)"
-        ws.Cells(1, 3).value = "Pitch (deg)"
+        ws.Cells(1, 2).value = "Yaw (°)"
+        ws.Cells(1, 3).value = "Pitch (°)"
         ws.Cells(1, 4).value = "Notes"
     End If
     
@@ -513,14 +458,10 @@ End Sub
 ' Calculate seconds between two HH:MM:SS timestamp strings
 Private Function TimestampDiff(ByVal t1 As String, ByVal t2 As String) As Double
     On Error GoTo ErrHandler
-    ' Day 25 fix: cart timestamps are plain elapsed HH:MM:SS strings.
-    ' The old CDate("00:00:00 " & t) form throws a type mismatch (caught
-    ' by the handler -> returned 0 -> all durations/distances were 0).
-    ' TimeValue parses HH:MM:SS directly.
     Dim d1 As Date
     Dim d2 As Date
-    d1 = TimeValue(t1)
-    d2 = TimeValue(t2)
+    d1 = CDate("00:00:00 " & t1)
+    d2 = CDate("00:00:00 " & t2)
     ' Handle midnight crossing
     Dim diff As Double
     diff = (d2 - d1) * 86400#
@@ -547,7 +488,7 @@ Public Sub ClearGimbalLog()
     End If
 End Sub
 
-' Show summary of CartLog - total distance, segments, duration
+' Show summary of CartLog — total distance, segments, duration
 Public Sub CartLogSummary()
     Dim ws As Worksheet
     Set ws = Sheets("CartLog")
@@ -586,7 +527,8 @@ Public Sub CartLogSummary()
            vbInformation, "CartLog Summary"
 End Sub
 
-' Coerce a cell value to Double, 0 on blank/non-numeric.
-Private Function SafeDouble(ByVal v As Variant) As Double
-    If IsNumeric(v) Then SafeDouble = CDbl(v) Else SafeDouble = 0#
-End Function
+
+
+
+
+

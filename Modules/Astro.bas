@@ -21,16 +21,16 @@ Attribute VB_Name = "Astro"
 '
 ' References:
 '   Jean Meeus, "Astronomical Algorithms" 2nd ed.
-'   Galactic centre: RA 17h 45m 40s, Dec -29� 00' 28"
+'   Galactic centre: RA 17h 45m 40s, Dec -29  00' 28"
 ' ============================================================
 
 Option Explicit
 
-' â”€â”€ Galactic centre coordinates (J2000) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+'                  Galactic centre coordinates (J2000)                                                                                                                                                                                 
 Private Const GC_RA_DEG   As Double = 266.4167    ' 17h 45m 40s in degrees
-Private Const GC_DEC_DEG  As Double = -29.0078    ' -29� 00' 28"
+Private Const GC_DEC_DEG  As Double = -29.0078    ' -29  00' 28"
 
-' â”€â”€ Constants â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+'                  Constants                                                                                                                                                                                                                                                                                                                                                                                                 
 Private Const PI     As Double = 3.14159265358979
 Private Const DEG2RAD As Double = PI / 180#
 Private Const RAD2DEG As Double = 180# / PI
@@ -98,7 +98,7 @@ Public Function GetSunGimbalAngles(ByVal atTime As Date, _
     gimbalYaw = AzimuthToGimbalYaw(az, cartHeading)
     gimbalPitch = alt   ' pitch = altitude above horizon
     
-    GetSunGimbalAngles = (alt > -5)  ' True if sun within 5� of horizon
+    GetSunGimbalAngles = (alt > -5)  ' True if sun within 5  of horizon
     
     LogEvent "ASTRO", "Sun at " & Format(atTime, "HH:nn:ss") & _
              ": az=" & Format(az, "0.0") & Chr(176) & _
@@ -157,6 +157,14 @@ End Sub
 
 ' Generate a table of Milky Way galactic centre positions
 ' for the night, written to a new sheet or range for planning
+Public Sub GenerateGCTable()" to its "End Sub", and paste this over it.
+'
+' Change vs the original: adds Moon Az (col G), Moon Alt (col H), and
+' Moon above horizon (col I), filled from the private GetMoonPosition
+' exactly as GC/Sun are filled. AutoFit range widened A:F -> A:I.
+' Everything else is unchanged.
+' =====================================================================
+
 Public Sub GenerateGCTable()
     Dim ws As Worksheet
     On Error Resume Next
@@ -166,54 +174,60 @@ Public Sub GenerateGCTable()
         ws.Name = "AstroTable"
     End If
     On Error GoTo 0
-    
+
     ws.Cells.Clear
     ws.Cells(1, 1).value = "Time"
-    ws.Cells(1, 2).value = "GC Az ("  & Chr(176) & ")"
+    ws.Cells(1, 2).value = "GC Az (" & Chr(176) & ")"
     ws.Cells(1, 3).value = "GC Alt (" & Chr(176) & ")"
     ws.Cells(1, 4).value = "Sun Az (" & Chr(176) & ")"
     ws.Cells(1, 5).value = "Sun Alt (" & Chr(176) & ")"
     ws.Cells(1, 6).value = "GC above horizon"
-    
+    ws.Cells(1, 7).value = "Moon Az (" & Chr(176) & ")"
+    ws.Cells(1, 8).value = "Moon Alt (" & Chr(176) & ")"
+    ws.Cells(1, 9).value = "Moon above horizon"
+
     Dim cartHeading As Double
     cartHeading = Sheets("Settings").Range("dataCartHeading").value
-    
+
     ' Table from 4pm today to 8am tomorrow, every 15 minutes
     Dim startTime As Date
     startTime = CDate(Int(Now()) + TimeValue("16:00:00"))
-    
+
     Dim row As Integer
     row = 2
     Dim t As Date
     For t = startTime To startTime + 1 Step (15 / 1440)   ' 15 minute steps
         Dim gcAz As Double, gcAlt As Double
         Dim sunAz As Double, sunAlt As Double
-        Dim gcYaw As Double, gcPitch As Double
-        
+        Dim moonAz As Double, moonAlt As Double
+
         GetGCPosition t, gcAz, gcAlt
         GetSunPosition t, sunAz, sunAlt
-        
+        GetMoonPosition t, moonAz, moonAlt
+
         ws.Cells(row, 1).value = Format(t, "HH:nn")
         ws.Cells(row, 2).value = Round(gcAz, 1)
         ws.Cells(row, 3).value = Round(gcAlt, 1)
         ws.Cells(row, 4).value = Round(sunAz, 1)
         ws.Cells(row, 5).value = Round(sunAlt, 1)
         ws.Cells(row, 6).value = IIf(gcAlt > 0, "YES", "no")
+        ws.Cells(row, 7).value = Round(moonAz, 1)
+        ws.Cells(row, 8).value = Round(moonAlt, 1)
+        ws.Cells(row, 9).value = IIf(moonAlt > 0, "YES", "no")
         row = row + 1
     Next t
-    
+
     ' Format
     ws.Columns(1).NumberFormat = "hh:mm"
-    ws.Columns("A:F").AutoFit
-    
+    ws.Columns("A:I").AutoFit
+
     LogEvent "ASTRO", "GC table generated -- " & (row - 2) & " rows"
     MsgBox "Astro table generated on AstroTable sheet.", vbInformation
 End Sub
-
 ' ============================================================
 ' Sun position calculation
 ' Based on Jean Meeus "Astronomical Algorithms"
-' Accurate to within ~1� for dates 2000-2100
+' Accurate to within ~1  for dates 2000-2100
 ' ============================================================
 
 Private Sub GetSunPosition(ByVal atTime As Date, _
@@ -362,18 +376,18 @@ End Sub
 
 ' Convert Excel date/time to Julian Day Number
 Private Function DateToJulian(ByVal dt As Date) As Double
-    Dim y As Integer, M As Integer, d As Integer
+    Dim y As Integer, m As Integer, d As Integer
     Dim hr As Double, mn As Double, sc As Double
     y = Year(dt)
-    M = Month(dt)
+    m = Month(dt)
     d = Day(dt)
     hr = Hour(dt)
     mn = Minute(dt)
     sc = Second(dt)
     
-    If M <= 2 Then
+    If m <= 2 Then
         y = y - 1
-        M = M + 12
+        m = m + 12
     End If
     
     Dim a As Long, B As Long
@@ -381,7 +395,7 @@ Private Function DateToJulian(ByVal dt As Date) As Double
     B = 2 - a + Int(a / 4)
     
     DateToJulian = Int(365.25 * (y + 4716)) + _
-                   Int(30.6001 * (M + 1)) + _
+                   Int(30.6001 * (m + 1)) + _
                    d + B - 1524.5 + _
                    (hr + mn / 60# + sc / 3600#) / 24#
 End Function
@@ -444,7 +458,7 @@ End Function
 ' the existing RADecToAltAz helper.
 ' ============================================================
 
-' Public wrappers — match the GetSun* pattern
+' Public wrappers     match the GetSun* pattern
 Public Function GetMoonAzimuth() As Double
     Dim az As Double, alt As Double
     GetMoonPosition Now, az, alt
@@ -476,7 +490,7 @@ Public Function GetMoonGimbalAngles(ByVal atTime As Date, _
     gimbalYaw = AzimuthToGimbalYaw(az, cartHeading)
     gimbalPitch = alt
 
-    GetMoonGimbalAngles = (alt > -5)  ' True if moon within 5� of horizon
+    GetMoonGimbalAngles = (alt > -5)  ' True if moon within 5  of horizon
 
     LogEvent "ASTRO", "Moon at " & Format(atTime, "HH:nn:ss") & _
              ": az=" & Format(az, "0.0") & Chr(176) & _
@@ -485,10 +499,10 @@ Public Function GetMoonGimbalAngles(ByVal atTime As Date, _
              " pitch=" & Format(gimbalPitch, "0.0") & Chr(176)
 End Function
 
-' ─── Moon position core ──────────────────────────────────────
+'           Moon position core                                                                                                                   
 ' Returns local-sky azimuth (deg from N clockwise) and altitude
 ' (deg above horizon) at the given local time. Below horizon
-' returns negative altitude — caller's responsibility to decide
+' returns negative altitude     caller's responsibility to decide
 ' what to do with it.
 Private Sub GetMoonPosition(ByVal atTime As Date, _
                              ByRef azimuth As Double, _
@@ -515,22 +529,22 @@ Private Sub GetMoonPosition(ByVal atTime As Date, _
     Dim w  As Double    ' Argument of perigee
     Dim a  As Double    ' Mean distance (Earth radii)
     Dim e  As Double    ' Eccentricity
-    Dim M  As Double    ' Mean anomaly
+    Dim m  As Double    ' Mean anomaly
     NN = NormalizeDeg(125.1228 - 0.0529538083 * d)
     ii = 5.1454
     w = NormalizeDeg(318.0634 + 0.1643573223 * d)
     a = 60.2666
     e = 0.0549
-    M = NormalizeDeg(115.3654 + 13.0649929509 * d)
+    m = NormalizeDeg(115.3654 + 13.0649929509 * d)
 
     ' Solve Kepler (1st-order, sufficient for moon's small e)
     Dim E1 As Double
-    E1 = M + RAD2DEG * e * Sin(M * DEG2RAD) * (1 + e * Cos(M * DEG2RAD))
+    E1 = m + RAD2DEG * e * Sin(m * DEG2RAD) * (1 + e * Cos(m * DEG2RAD))
     Dim E0 As Double
     Dim iter As Integer
     For iter = 1 To 10
         E0 = E1
-        E1 = E0 - (E0 - RAD2DEG * e * Sin(E0 * DEG2RAD) - M) / _
+        E1 = E0 - (E0 - RAD2DEG * e * Sin(E0 * DEG2RAD) - m) / _
                   (1 - e * Cos(E0 * DEG2RAD))
         If Abs(E1 - E0) < 0.001 Then Exit For
     Next iter
@@ -567,14 +581,14 @@ Private Sub GetMoonPosition(ByVal atTime As Date, _
     ws_ = NormalizeDeg(282.9404 + 0.0000470935 * d)
     Ms = NormalizeDeg(356.047 + 0.9856002585 * d)
     Ls = NormalizeDeg(ws_ + Ms)                       ' Sun mean longitude
-    Lm = NormalizeDeg(NN + w + M)                      ' Moon mean longitude
+    Lm = NormalizeDeg(NN + w + m)                      ' Moon mean longitude
 
     Dim Mm As Double, Dm As Double, f As Double
-    Mm = M                                              ' Moon mean anomaly
+    Mm = m                                              ' Moon mean anomaly
     Dm = NormalizeDeg(Lm - Ls)                          ' Mean elongation
     f = NormalizeDeg(Lm - NN)                          ' Argument of latitude
 
-    ' Longitude perturbations (degrees) — only the largest terms
+    ' Longitude perturbations (degrees)     only the largest terms
     Dim dLon As Double
     dLon = -1.274 * Sin((Mm - 2 * Dm) * DEG2RAD) _
          + 0.658 * Sin(2 * Dm * DEG2RAD) _
@@ -588,7 +602,7 @@ Private Sub GetMoonPosition(ByVal atTime As Date, _
          - 0.031 * Sin((Mm + Ms) * DEG2RAD)
     eclLon = NormalizeDeg(eclLon + dLon)
 
-    ' Latitude perturbations (degrees) — largest terms
+    ' Latitude perturbations (degrees)     largest terms
     Dim dLat As Double
     dLat = -0.173 * Sin((f - 2 * Dm) * DEG2RAD) _
          - 0.055 * Sin((Mm - f - 2 * Dm) * DEG2RAD) _
@@ -612,7 +626,7 @@ Private Sub GetMoonPosition(ByVal atTime As Date, _
     ra = NormalizeDeg(RAD2DEG * Atn2(ye, xe))
     dec = RAD2DEG * Atn2(ze, Sqr(xe * xe + ye * ye))
 
-    ' Greenwich Sidereal Time → Local Sidereal Time
+    ' Greenwich Sidereal Time     Local Sidereal Time
     ' Use the same formula as GetSunPosition for consistency.
     Dim N_d As Double
     N_d = jd - 2451545#                ' Days since J2000.0
@@ -626,19 +640,19 @@ Private Sub GetMoonPosition(ByVal atTime As Date, _
     If ha > 180 Then ha = ha - 360
 
     ' Reduce equatorial to topocentric (parallax correction).
-    ' Moon's parallax is ~1 degree max — non-trivial for our
+    ' Moon's parallax is ~1 degree max     non-trivial for our
     ' tolerance. Schlyter eq for topocentric correction:
     '   mpar = asin(1/r) where r is distance in Earth radii.
     Dim mpar As Double
     mpar = RAD2DEG * Asin(1# / r)
 
-    ' Geocentric → topocentric via simple correction:
+    ' Geocentric     topocentric via simple correction:
     '   alt_topo = alt - mpar*cos(alt)
     ' We'll apply this AFTER converting to alt/az, since the
     ' correction is in altitude.
     RADecToAltAz ha, dec, lat, altitude, azimuth
 
-    ' Parallax correction in altitude (Schlyter §16)
+    ' Parallax correction in altitude (Schlyter   16)
     altitude = altitude - mpar * Cos(altitude * DEG2RAD)
 End Sub
 
@@ -651,13 +665,13 @@ End Sub
 ' -1 = setting past target) within the day starting at dayStart.
 '
 ' Used to compute, without internet:
-'   Sunrise/Sunset      → targetAltitude = -0.833 (refraction)
-'   Civil dawn/dusk     → targetAltitude = -6
-'   Nautical dawn/dusk  → targetAltitude = -12
-'   Astro dawn/dusk     → targetAltitude = -18
+'   Sunrise/Sunset          targetAltitude = -0.833 (refraction)
+'   Civil dawn/dusk         targetAltitude = -6
+'   Nautical dawn/dusk      targetAltitude = -12
+'   Astro dawn/dusk         targetAltitude = -18
 '
-' direction = +1 means "rising past target" (alt < target → alt > target)
-' direction = -1 means "setting past target" (alt > target → alt < target)
+' direction = +1 means "rising past target" (alt < target     alt > target)
+' direction = -1 means "setting past target" (alt > target     alt < target)
 '
 ' Returns 0 (= zero date) if no crossing exists in the day
 ' (e.g. polar night for astro twilight).
@@ -685,11 +699,11 @@ Public Function FindSunCrossing(ByVal dayStart As Date, _
             prevDiff = prevAlt - targetAltitude
             curDiff = alt - targetAltitude
             If direction > 0 And prevDiff < 0 And curDiff >= 0 Then
-                ' Rising crossing — bisect between prevT and t
+                ' Rising crossing     bisect between prevT and t
                 FindSunCrossing = BisectSunAltitude(prevT, t, targetAltitude)
                 Exit Function
             ElseIf direction < 0 And prevDiff > 0 And curDiff <= 0 Then
-                ' Setting crossing — bisect
+                ' Setting crossing     bisect
                 FindSunCrossing = BisectSunAltitude(prevT, t, targetAltitude)
                 Exit Function
             End If
