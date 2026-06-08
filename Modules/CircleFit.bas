@@ -1,6 +1,6 @@
 Attribute VB_Name = "CircleFit"
 ' ============================================================
-' HyperLapse Cart — Circle Fit Module
+' HyperLapse Cart - Circle Fit Module
 '
 ' PURPOSE
 '   Process the 8-point ground-truth measurements from cart
@@ -18,28 +18,28 @@ Attribute VB_Name = "CircleFit"
 '   3. Operator types peg-relative (x, y) measurements + commanded
 '      servo offset into the sheet
 '   4. Live cells report: R_measured, centre offset, scatter,
-'      implied δ_wheel, implied SERVO_TO_DEG
+'      implied d_wheel, implied SERVO_TO_DEG
 '   5. Operator can save the sheet as a row in a results log over
 '      multiple tests (left/right turns, different servo values,
 '      different surfaces)
 '
 ' MATHS
 '   Best-fit circle from N points via algebraic Kasa method:
-'     minimise Σ (x_i² + y_i² + D·x_i + E·y_i + F)²
+'     minimise Sum (x_i2 + y_i2 + D*x_i + E*y_i + F)2
 '     gives linear system; solve for D, E, F
 '     centre (cx, cy) = (-D/2, -E/2)
-'     radius R = sqrt(cx² + cy² - F)
+'     radius R = sqrt(cx2 + cy2 - F)
 '
 '   This isn't the optimal geometric fit (Pratt or Taubin are
 '   tighter for noisy data) but for ~30-100mm measurement
 '   accuracy and 8 points spread around a full circle, Kasa is
-'   plenty accurate. Implementation is also simple — just a 3x3
+'   plenty accurate. Implementation is also simple - just a 3x3
 '   matrix solve.
 '
 '   Implied wheel angle:
-'     δ_wheel = atan(WHEELBASE / R_measured)
+'     d_wheel = atan(WHEELBASE / R_measured)
 '   Implied servo-to-wheel ratio:
-'     SERVO_TO_DEG_NEW = δ_wheel / |servo_commanded|
+'     SERVO_TO_DEG_NEW = d_wheel / |servo_commanded|
 '
 ' SHEET LAYOUT
 '   Single sheet "Calibration" with:
@@ -47,15 +47,15 @@ Attribute VB_Name = "CircleFit"
 '     - Input block: 8 rows for (x_i, y_i) measurements, peg-
 '       relative; cell for commanded servo offset
 '     - Output block: live formulas for centre, R, scatter,
-'       δ_wheel, SERVO_TO_DEG, comparison to current constant
+'       d_wheel, SERVO_TO_DEG, comparison to current constant
 '
 ' PUBLIC ENTRY POINTS
-'   InitCalibrationSheet  — build the sheet
-'   MatchWaypointsToLog   — scan CartLog for W events, populate
+'   InitCalibrationSheet  - build the sheet
+'   MatchWaypointsToLog   - scan CartLog for W events, populate
 '                           the log-comparison block
-'   FitCircle             — UDF: =FitCircle(xRange, yRange, what)
+'   FitCircle             - UDF: =FitCircle(xRange, yRange, what)
 '                           what = "cx", "cy", "r", "scatter_mm"
-'   TraceAtLogRow         — UDF: =TraceAtLogRow(logRowNum, "x_mm"|"y_mm")
+'   TraceAtLogRow         - UDF: =TraceAtLogRow(logRowNum, "x_mm"|"y_mm")
 '                           returns integrated x/y in mm at the time
 '                           of the given CartLog row
 ' ============================================================
@@ -89,7 +89,7 @@ Private Const ROW_OUT_WHEEL   As Long = 30
 Private Const ROW_OUT_RATIO   As Long = 31
 Private Const ROW_OUT_COMPARE As Long = 32
 
-' Log-comparison block — pairs ground-measured (x,y) to bicycle-model
+' Log-comparison block - pairs ground-measured (x,y) to bicycle-model
 ' integrated (x,y) at each waypoint event
 Private Const ROW_LOG_HDR     As Long = 35
 Private Const ROW_LOG_INSTR   As Long = 36
@@ -101,19 +101,19 @@ Private Const ROW_LOG_MAXDELT As Long = 49
 Private Const ROW_LOG_RMSDELT As Long = 50
 
 Private Const COL_LABEL  As Long = 2  ' B
-Private Const COL_VALUE  As Long = 3  ' C — for metadata
+Private Const COL_VALUE  As Long = 3  ' C - for metadata
 Private Const COL_X      As Long = 3  ' C
 Private Const COL_Y      As Long = 4  ' D
 ' Log-comparison columns
-Private Const COL_WP_LOG_ROW As Long = 3   ' C — log row number
-Private Const COL_WP_X_LOG   As Long = 4   ' D — integrated x (mm)
-Private Const COL_WP_Y_LOG   As Long = 5   ' E — integrated y (mm)
-Private Const COL_WP_DELTAX  As Long = 6   ' F — measured x - log x
-Private Const COL_WP_DELTAY  As Long = 7   ' G — measured y - log y
-Private Const COL_WP_DIST    As Long = 8   ' H — sqrt(dx² + dy²)
+Private Const COL_WP_LOG_ROW As Long = 3   ' C - log row number
+Private Const COL_WP_X_LOG   As Long = 4   ' D - integrated x (mm)
+Private Const COL_WP_Y_LOG   As Long = 5   ' E - integrated y (mm)
+Private Const COL_WP_DELTAX  As Long = 6   ' F - measured x - log x
+Private Const COL_WP_DELTAY  As Long = 7   ' G - measured y - log y
+Private Const COL_WP_DIST    As Long = 8   ' H - sqrt(dx2 + dy2)
 
 ' ============================================================
-' Public — one-shot setup
+' Public - one-shot setup
 ' ============================================================
 
 Public Sub InitCalibrationSheet()
@@ -168,7 +168,7 @@ Public Sub InitCalibrationSheet()
     ws.Cells(ROW_NOTES, COL_LABEL).value = "Notes"
     ws.Cells(ROW_NOTES, COL_VALUE).value = ""
 
-    ' Input block — 8 (x, y) measurements
+    ' Input block - 8 (x, y) measurements
     ws.Cells(ROW_INPUT_HDR, COL_LABEL).value = "-- Rear-axle (x, y) measurements (peg = origin, mm) --"
     ws.Cells(ROW_INPUT_HDR, COL_LABEL).Font.Bold = True
     ws.Cells(ROW_INPUT_HDR, COL_LABEL).Font.Italic = True
@@ -181,12 +181,12 @@ Public Sub InitCalibrationSheet()
     Dim i As Long
     For i = 0 To 7
         ws.Cells(ROW_INPUT_FIRST + i, COL_LABEL).value = "Point " & (i + 1) & _
-            " (approx " & (i * 45) & "°)"
+            " (approx " & (i * 45) & " deg)"
         Call CellFormat(ws.Cells(ROW_INPUT_FIRST + i, COL_X), "FormatYellow")
         Call CellFormat(ws.Cells(ROW_INPUT_FIRST + i, COL_Y), "FormatYellow")
     Next i
 
-    ' Output block — live calibration results
+    ' Output block - live calibration results
     ws.Cells(ROW_OUTPUT_HDR, COL_LABEL).value = "-- Calibration results (computed live) --"
     ws.Cells(ROW_OUTPUT_HDR, COL_LABEL).Font.Bold = True
     ws.Cells(ROW_OUTPUT_HDR, COL_LABEL).Font.Italic = True
@@ -210,7 +210,7 @@ Public Sub InitCalibrationSheet()
     ws.Cells(ROW_OUT_DIAM, COL_VALUE).Formula = "=2*" & _
         ws.Cells(ROW_OUT_R, COL_VALUE).Address
 
-    ws.Cells(ROW_OUT_SCATTER, COL_LABEL).value = "Radius scatter ± (mm)"
+    ws.Cells(ROW_OUT_SCATTER, COL_LABEL).value = "Radius scatter +/- (mm)"
     ws.Cells(ROW_OUT_SCATTER, COL_VALUE).Formula = "=FitCircle(" & xR & "," & yR & ",""scatter_mm"")"
 
     ws.Cells(ROW_OUT_OFFSET, COL_LABEL).value = "Centre offset from peg (mm)"
@@ -244,9 +244,9 @@ Public Sub InitCalibrationSheet()
     ws.Cells(ROW_LOG_TBL_HDR, COL_WP_LOG_ROW).value = "CartLog row"
     ws.Cells(ROW_LOG_TBL_HDR, COL_WP_X_LOG).value = "x_log (mm)"
     ws.Cells(ROW_LOG_TBL_HDR, COL_WP_Y_LOG).value = "y_log (mm)"
-    ws.Cells(ROW_LOG_TBL_HDR, COL_WP_DELTAX).value = "Δx (mm)"
-    ws.Cells(ROW_LOG_TBL_HDR, COL_WP_DELTAY).value = "Δy (mm)"
-    ws.Cells(ROW_LOG_TBL_HDR, COL_WP_DIST).value = "|Δ| (mm)"
+    ws.Cells(ROW_LOG_TBL_HDR, COL_WP_DELTAX).value = "dx (mm)"
+    ws.Cells(ROW_LOG_TBL_HDR, COL_WP_DELTAY).value = "dy (mm)"
+    ws.Cells(ROW_LOG_TBL_HDR, COL_WP_DIST).value = "|d| (mm)"
 
     Dim k As Long
     For k = ROW_LOG_TBL_HDR To ROW_LOG_TBL_HDR
@@ -267,11 +267,11 @@ Public Sub InitCalibrationSheet()
 
         ws.Cells(r, COL_LABEL).value = "Waypoint " & (j + 1)
 
-        ' Log row number — yellow editable, defaults blank; populated by
+        ' Log row number - yellow editable, defaults blank; populated by
         ' MatchWaypointsToLog sub or operator override.
         Call CellFormat(ws.Cells(r, COL_WP_LOG_ROW), "FormatYellow")
 
-        ' x_log, y_log — look up timestamp at CartLog!A{logrow}, find
+        ' x_log, y_log - look up timestamp at CartLog!A{logrow}, find
         ' nearest Trace row by timestamp, return Trace x/y converted to mm.
         ' Bottom-line formula uses helper UDF TraceXatLogRow / TraceYatLogRow.
         ws.Cells(r, COL_WP_X_LOG).Formula = _
@@ -301,11 +301,11 @@ Public Sub InitCalibrationSheet()
     distRange = ws.Range(ws.Cells(ROW_LOG_FIRST, COL_WP_DIST), _
                          ws.Cells(ROW_LOG_LAST, COL_WP_DIST)).Address
 
-    ws.Cells(ROW_LOG_MAXDELT, COL_LABEL).value = "Max |Δ| across 8 points (mm)"
+    ws.Cells(ROW_LOG_MAXDELT, COL_LABEL).value = "Max |d| across 8 points (mm)"
     ws.Cells(ROW_LOG_MAXDELT, COL_VALUE).Formula = _
         "=IFERROR(MAX(" & distRange & "),"""")"
 
-    ws.Cells(ROW_LOG_RMSDELT, COL_LABEL).value = "RMS |Δ| across 8 points (mm)"
+    ws.Cells(ROW_LOG_RMSDELT, COL_LABEL).value = "RMS |d| across 8 points (mm)"
     ws.Cells(ROW_LOG_RMSDELT, COL_VALUE).Formula = _
         "=IFERROR(SQRT(SUMSQ(" & distRange & ")/COUNT(" & distRange & ")),"""")"
 
@@ -355,12 +355,12 @@ Public Sub MatchWaypointsToLog()
         Exit Sub
     End If
 
-    ' Walk CartLog. Assume event-type column is B (col 2) — confirms
+    ' Walk CartLog. Assume event-type column is B (col 2) - confirms
     ' by reading the header row 1; if not found, prompts the operator.
     ' Cart.bas writes CartLog with this layout: A=timestamp, B=event_type,
     ' C=value, D=description. Verify by inspecting row 1 header text.
     Dim lastRow As Long
-    lastRow = wsLog.Cells(wsLog.Rows.count, 1).End(xlUp).Row
+    lastRow = wsLog.Cells(wsLog.rows.count, 1).End(xlUp).row
 
     Dim foundRows() As Long
     ReDim foundRows(1 To 16)   ' room for up to 16 W events
@@ -402,7 +402,7 @@ Public Sub MatchWaypointsToLog()
 End Sub
 
 ' ============================================================
-' UDF — look up integrated (x_mm, y_mm) at the time of a CartLog row
+' UDF - look up integrated (x_mm, y_mm) at the time of a CartLog row
 ' ============================================================
 
 ' Given a CartLog row number, find the timestamp at that row, then
@@ -443,7 +443,7 @@ Public Function TraceAtLogRow(ByVal logRow As Variant, _
 
     ' Find Trace row whose column-A timestamp is closest to tSec.
     Dim lastTraceRow As Long
-    lastTraceRow = wsTrace.Cells(wsTrace.Rows.count, 1).End(xlUp).Row
+    lastTraceRow = wsTrace.Cells(wsTrace.rows.count, 1).End(xlUp).row
     If lastTraceRow < 3 Then
         TraceAtLogRow = CVErr(xlErrNA)
         Exit Function
@@ -500,13 +500,13 @@ Private Function HmsTextToSec(ByVal s As String) As Double
 End Function
 
 ' ============================================================
-' UDF — best-fit circle through N points (Kasa algebraic method)
+' UDF - best-fit circle through N points (Kasa algebraic method)
 ' ============================================================
 
 ' Returns one of: cx, cy, r, scatter_mm
-'   cx, cy   — centre (peg-relative mm)
-'   r        — fitted radius (mm)
-'   scatter_mm — standard deviation of |point_i - centre| from r (mm)
+'   cx, cy   - centre (peg-relative mm)
+'   r        - fitted radius (mm)
+'   scatter_mm - standard deviation of |point_i - centre| from r (mm)
 Public Function FitCircle(ByVal xRange As Range, _
                           ByVal yRange As Range, _
                           ByVal what As String) As Variant
@@ -538,10 +538,10 @@ Public Function FitCircle(ByVal xRange As Range, _
         Exit Function
     End If
 
-    ' Kasa fit: minimize sum of (x²+y² + Dx + Ey + F)²
-    ' Linear system A·[D,E,F]ᵀ = b where:
-    '   A = [[Σx², Σxy, Σx], [Σxy, Σy², Σy], [Σx, Σy, n]]
-    '   b = -[Σx(x²+y²), Σy(x²+y²), Σ(x²+y²)]
+    ' Kasa fit: minimize sum of (x2+y2 + Dx + Ey + F)2
+    ' Linear system A*[D,E,F]T = b where:
+    '   A = [[Sumx2, Sumxy, Sumx], [Sumxy, Sumy2, Sumy], [Sumx, Sumy, n]]
+    '   b = -[Sumx(x2+y2), Sumy(x2+y2), Sum(x2+y2)]
     Dim Sx As Double, Sy As Double, Sxx As Double, Syy As Double, Sxy As Double
     Dim Sxz As Double, Syz As Double, Sz As Double
     Dim x As Double, y As Double, z As Double
@@ -585,22 +585,22 @@ Public Function FitCircle(ByVal xRange As Range, _
     End If
 
     ' Cramer's rule
-    Dim D As Double, E As Double, F As Double
-    D = (b1 * (m22 * m33 - m23 * m32) _
+    Dim d As Double, e As Double, f As Double
+    d = (b1 * (m22 * m33 - m23 * m32) _
        - m12 * (b2 * m33 - m23 * b3) _
        + m13 * (b2 * m32 - m22 * b3)) / det
-    E = (m11 * (b2 * m33 - m23 * b3) _
+    e = (m11 * (b2 * m33 - m23 * b3) _
        - b1 * (m21 * m33 - m23 * m31) _
        + m13 * (m21 * b3 - b2 * m31)) / det
-    F = (m11 * (m22 * b3 - b2 * m32) _
+    f = (m11 * (m22 * b3 - b2 * m32) _
        - m12 * (m21 * b3 - b2 * m31) _
        + b1 * (m21 * m32 - m22 * m31)) / det
 
     Dim cx As Double, cy As Double, r As Double
-    cx = -D / 2
-    cy = -E / 2
+    cx = -d / 2
+    cy = -e / 2
     Dim discr As Double
-    discr = cx * cx + cy * cy - F
+    discr = cx * cx + cy * cy - f
     If discr < 0 Then
         FitCircle = "#BAD_FIT"
         Exit Function

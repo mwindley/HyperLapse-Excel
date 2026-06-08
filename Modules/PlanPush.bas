@@ -1,22 +1,22 @@
 Attribute VB_Name = "PlanPush"
 ' ============================================================
-' HyperLapse Cart â€” Plan Push (P7)
+' HyperLapse Cart - Plan Push (P7)
 '
 ' Reads the middle-zone Gimbal Plan and pushes it to the cart
 ' as a sequence of plan segments + TrackIntervals + (optionally)
 ' cubic path coefficients.
 '
 ' Public entry:
-'   PushGimbalPlan â€” Stage 2. Reads dataPlanPushDryRun, runs
+'   PushGimbalPlan - Stage 2. Reads dataPlanPushDryRun, runs
 '                    Phase 1 validation, reports collected errors.
 '                    No decomposition or push yet.
 '
 ' Stages (per Session E P7 design):
-'   1. Validate    â€” walk middle zone, collect errors, abort if any   [STAGE 2]
-'   2. Prerequisite â€” ensure track_<obj> cubics are loaded            [STAGE 3]
-'   3. Decompose   â€” each Plan row â†’ cart-side segments + intervals   [STAGE 3]
-'   4. POST        â€” sequential GETs to cart endpoints                [STAGE 4]
-'   5. Summary     â€” report counts, log to Log sheet                  [Stage 5]
+'   1. Validate    - walk middle zone, collect errors, abort if any   [STAGE 2]
+'   2. Prerequisite - ensure track_<obj> cubics are loaded            [STAGE 3]
+'   3. Decompose   - each Plan row -> cart-side segments + intervals   [STAGE 3]
+'   4. POST        - sequential GETs to cart endpoints                [STAGE 4]
+'   5. Summary     - report counts, log to Log sheet                  [Stage 5]
 '
 ' Dry-run mode (Settings!dataPlanPushDryRun = TRUE):
 '   Phases 1-3 + 5 run. Phase 4 is skipped. Cart not contacted.
@@ -26,15 +26,15 @@ Attribute VB_Name = "PlanPush"
 '   Pings cart /status first; aborts cleanly if no response.
 '   All five phases run. Tells operator what was pushed.
 '
-' Day 21 (Session F) â€” Stage 1 skeleton.
-' Day 21 (Session F) â€” Stage 2 Phase 1 validation added.
-' Day 21 (Session F) â€” workfront #67 Phase 1: IsAstroTarget
+' Day 21 (Session F) - Stage 1 skeleton.
+' Day 21 (Session F) - Stage 2 Phase 1 validation added.
+' Day 21 (Session F) - workfront #67 Phase 1: IsAstroTarget
 ' accepts "gc" (new Plan token) and "mw" (cart wire protocol /
 ' back-compat).
-' Day 21 (Session F) â€” Stage 3 Phase 3 decompose added. One Log
+' Day 21 (Session F) - Stage 3 Phase 3 decompose added. One Log
 ' line per row describing the cart-side artifact (segment or
 ' TrackInterval). Astro endpoints evaluated via Astro.bas in
-' dry-run. Cubic coefficient computation deferred â€” Stage 3 emits
+' dry-run. Cubic coefficient computation deferred - Stage 3 emits
 ' only endpoint + duration summary, not the curve coefficients.
 ' ============================================================
 
@@ -71,7 +71,7 @@ Private Const PREVIEW_PLAN_MAX As Long = 20
 
 
 ' ============================================================
-' Public â€” PushGimbalPlan
+' Public - PushGimbalPlan
 ' ============================================================
 Public Sub PushGimbalPlan()
     On Error GoTo ErrHandler
@@ -106,7 +106,7 @@ Public Sub PushGimbalPlan()
     LogP7 "Phase 1 OK: validation passed"
 
     ' --- Phase 3: Decompose ---
-    ' (Phase 2 prerequisites â€” track_<obj> push â€” is moot in dry-run
+    ' (Phase 2 prerequisites - track_<obj> push - is moot in dry-run
     ' and will land with Stage 4 real-push.)
     Dim segCount As Long, intervalCount As Long
     Phase3Decompose wsPlan, segCount, intervalCount
@@ -147,7 +147,7 @@ End Sub
 
 
 ' ============================================================
-' Phase 1 â€” Validate
+' Phase 1 - Validate
 ' Walks middle zone, emits one Log line per row with errors,
 ' returns total count of rows that had at least one error.
 '
@@ -157,7 +157,7 @@ End Sub
 '   - No populated rows after the END row (END is the sentinel)
 '
 ' Row-level checks (per populated row):
-'   - Fires at (col Q) not blank/error  â€” anchor resolved
+'   - Fires at (col Q) not blank/error  - anchor resolved
 '   - Action (col S) is one of the 6 known values
 '   - Target sensible for the Action
 '   - Rate present where the Action needs one
@@ -218,7 +218,7 @@ End Function
 
 
 ' ============================================================
-' Phase 3 â€” Decompose
+' Phase 3 - Decompose
 ' Walks middle-zone rows in order, emits one Log line per row
 ' describing the cart-side artifact(s) that would be pushed.
 ' Increments segCount / intervalCount as it goes.
@@ -226,7 +226,7 @@ End Function
 ' Per Session E decomposition table:
 '   Pan Follow     -> PANFOLLOW segment, ts..te
 '   Lock           -> HOLD segment at current pose, ts..te
-'   Move (marker)  -> CUBIC slew to (Ry+Î”yaw, Rp+Î”pitch), ts..te
+'   Move (marker)  -> CUBIC slew to (Ry+-yaw, Rp+-pitch), ts..te
 '   Move (astro)   -> CUBIC slew to (yaw, pitch) from astro eval, ts..te
 '   Track full     -> TrackInterval mode=F, ts..te, obj, offY, offP
 '   Track-yaw      -> TrackInterval mode=Y, ts..te, obj, offY, Rp(abs)
@@ -236,7 +236,7 @@ End Function
 '   - Astro endpoint preview uses Astro.bas direct astronomy
 '     (small residual vs. cart's fitted-cubic eval; ~7px at 14mm
 '     per WORKFRONTS #58, below visible threshold).
-'   - Cubic coefficients NOT computed in Stage 3 (deferred â€” needs
+'   - Cubic coefficients NOT computed in Stage 3 (deferred - needs
 '     ease-band -> frames -> seconds conversion which isn't built).
 '     Each CUBIC line just states endpoint + duration.
 ' ============================================================
@@ -246,7 +246,7 @@ Private Sub Phase3Decompose(ByVal ws As Worksheet, _
     segCount = 0
     intervalCount = 0
 
-    ' Read cart heading once â€” used by every astro-target eval
+    ' Read cart heading once - used by every astro-target eval
     Dim cartHeading As Double
     cartHeading = ReadCartHeading()
 
@@ -306,7 +306,7 @@ Private Sub Phase3Decompose(ByVal ws As Worksheet, _
                 Dim endNote As String
 
                 If IsAstroTarget(target) Then
-                    ' Astro snapshot â€” evaluate at ts (Fires-at)
+                    ' Astro snapshot - evaluate at ts (Fires-at)
                     Dim okAstro As Boolean
                     okAstro = EvalAstro(target, CDbl(ts), cartHeading, _
                                         endYaw, endPitch)
@@ -321,7 +321,7 @@ Private Sub Phase3Decompose(ByVal ws As Worksheet, _
                         endNote = "[astro " & target & " BELOW HORIZON]"
                     End If
                 Else
-                    ' Marker â€” use authored Ry/Rp + deltas
+                    ' Marker - use authored Ry/Rp + deltas
                     Dim ry As Double, rp As Double
                     ry = SafeDouble(ws.Cells(rowIdx, COL_RY).value)
                     rp = SafeDouble(ws.Cells(rowIdx, COL_RP).value)
@@ -378,7 +378,7 @@ End Sub
 '   mw   -> GetGCGimbalAngles    (back-compat per #67 Phase 1)
 ' ============================================================
 ' Public so the interval pusher (TrackPlanPush) can compute absolute
-' astro Move endpoints — a Move to an astro point needs the object's
+' astro Move endpoints - a Move to an astro point needs the object's
 ' pose at the fire time, same evaluator the preview/decompose use.
 Public Function EvalAstro(ByVal target As String, ByVal atTime As Double, _
                             ByVal cartHeading As Double, _
@@ -403,7 +403,7 @@ End Function
 
 ' Read cart heading from Settings (degrees, 0=North). Falls back
 ' to 0 if name missing. Per Day-21 discussion: this is the
-' shoot-start heading, set by operator, not live telemetry â€”
+' shoot-start heading, set by operator, not live telemetry -
 ' Excel has no return channel from the cart.
 Private Function ReadCartHeading() As Double
     On Error GoTo Defaulting
@@ -429,7 +429,7 @@ Private Function FmtTime(ByVal v As Variant) As String
 End Function
 
 
-' Safe Double parse â€” 0 for blank/non-numeric.
+' Safe Double parse - 0 for blank/non-numeric.
 Private Function SafeDouble(ByVal v As Variant) As Double
     If IsEmpty(v) Then SafeDouble = 0: Exit Function
     If IsNumeric(v) Then SafeDouble = CDbl(v) Else SafeDouble = 0
@@ -538,11 +538,11 @@ End Function
 
 
 ' ============================================================
-' Helpers â€” predicates
+' Helpers - predicates
 ' ============================================================
 
 ' Treats "", "-", and various dash characters as blank.
-' Hardcoding em-dash by ChrW since literal "â€”" doesn't survive
+' Hardcoding em-dash by ChrW since literal "-" doesn't survive
 ' .bas round-trips (Day 21 lesson, fixed in PlanAuthoring too).
 Private Function IsTargetBlank(ByVal target As String) As Boolean
     Dim t As String: t = Trim(target)
@@ -558,7 +558,7 @@ End Function
 ' else is treated as a marker.
 '
 ' Plan-side token is "gc" (workfront #67 Phase 1). We also accept
-' "mw" defensively â€” the cart wire protocol still uses "mw", and
+' "mw" defensively - the cart wire protocol still uses "mw", and
 ' a pre-rename plan or copy-paste from older notes might carry it.
 Public Function IsAstroTarget(ByVal target As String) As Boolean
     Select Case LCase(Trim(target))
@@ -569,7 +569,7 @@ Public Function IsAstroTarget(ByVal target As String) As Boolean
     End Select
 End Function
 
-' Rate cell â€” non-blank string. Don't enforce band-name membership
+' Rate cell - non-blank string. Don't enforce band-name membership
 ' here (operator may use a custom value); just non-blank, non-dash.
 Private Function IsRateValid(ByVal rate As String) As Boolean
     Dim t As String: t = Trim(rate)
@@ -596,7 +596,7 @@ Private Function AppendErr(ByVal cur As String, ByVal msg As String) As String
     End If
 End Function
 
-' Em-dash returned via ChrW so the .bas source stays ASCII â€”
+' Em-dash returned via ChrW so the .bas source stays ASCII -
 ' avoids encoding loss during VBE export/import round-trips.
 ' Same pattern used in PlanAuthoring.bas (Day 21 lesson).
 Private Function EmDash() As String
@@ -606,7 +606,7 @@ End Function
 
 ' ============================================================
 ' Read the dry-run flag from Settings. Defaults to TRUE
-' (the safer choice) if the name is missing or unreadable â€”
+' (the safer choice) if the name is missing or unreadable -
 ' no scenario where missing-name should surprise the operator
 ' with a real cart push.
 ' ============================================================
@@ -630,7 +630,7 @@ End Function
 
 
 ' ============================================================
-' Log helper â€” writes to the Log sheet via Utils.LogEvent.
+' Log helper - writes to the Log sheet via Utils.LogEvent.
 ' Silent if Utils isn't loaded.
 ' ============================================================
 Private Sub LogP7(ByVal msg As String)
@@ -641,7 +641,7 @@ End Sub
 
 
 ' ============================================================
-' PushPreviewPlanToCart — preview-pose pusher (Step-1 leftover)
+' PushPreviewPlanToCart - preview-pose pusher (Step-1 leftover)
 '
 ' Walks the gimbal plan and pushes ONE representative preview pose per
 ' GP to /settings/previewplan, in order. The operator steps these on
@@ -857,7 +857,7 @@ ErrHandler:
            vbCritical, "PushPreviewPlanToCart"
 End Sub
 
-' Transport (preview pusher) — PlanPush had no Phase-4 transport; these
+' Transport (preview pusher) - PlanPush had no Phase-4 transport; these
 ' mirror CartPlanPush/TrackPlanPush. Suffixed PP to avoid clashing with
 ' any same-named privates if modules are later merged.
 Private Function ReadArduinoIPPP() As String

@@ -1,6 +1,6 @@
 Attribute VB_Name = "Smooth"
 ' ============================================================
-' HyperLapse Cart — Smooth Selection Module (workfront #44)
+' HyperLapse Cart - Smooth Selection Module (workfront #44)
 '
 ' PURPOSE
 '   Take a wobbly multi-row segment of CartLog (operator's drive recon)
@@ -28,7 +28,7 @@ Attribute VB_Name = "Smooth"
 '                              (preserves total distance)
 '   Selection boundary = arc boundary. Neighbouring rows untouched.
 '
-' MATHS — chord-to-arc inverse
+' MATHS - chord-to-arc inverse
 '   Given (x0, y0, theta0) at start and (x1, y1, theta1) at end:
 '     chord_dx  = x1 - x0
 '     chord_dy  = y1 - y0
@@ -47,7 +47,7 @@ Attribute VB_Name = "Smooth"
 '                    "Steer left 5 deg" convention used in existing log).
 '
 ' HIDDEN PROPOSAL STORAGE on CartLog
-'   Q1: "PendingProposal"  (label, also acts as flag — non-empty => pending)
+'   Q1: "PendingProposal"  (label, also acts as flag - non-empty => pending)
 '   Q2: start_row          (Excel row index of first selected row)
 '   Q3: end_row            (Excel row index of last selected row)
 '   Q4: steering_value     (the value to write in column C of start row)
@@ -90,7 +90,7 @@ Private Const STATUS_BANNER_CELL As String = "J1"
 ' Sentinel string written to PROP_FLAG_CELL to mark "proposal pending".
 Private Const PROP_FLAG_TEXT As String = "PendingProposal"
 
-' Number of (x, y) samples in the overlay arc — keep low; the chart
+' Number of (x, y) samples in the overlay arc - keep low; the chart
 ' draws a smooth curve regardless because it's only 30+ points across
 ' a few metres of arc.
 Private Const ARC_SAMPLE_COUNT As Long = 30
@@ -104,13 +104,13 @@ Private Const PI As Double = 3.14159265358979
 ' Stash of the last "data row" selection on CartLog. Written by the
 ' Worksheet_SelectionChange handler in the CartLog sheet's code
 ' module; read by btnSmoothSelection. Public so the sheet can write
-' to it from outside this module — VBA needs Public variables for
+' to it from outside this module - VBA needs Public variables for
 ' cross-module write access.
 Public gLastCartLogSelection As String
 
 
 ' ============================================================
-' BUTTON 1 — Smooth Selection
+' BUTTON 1 - Smooth Selection
 ' ============================================================
 '
 ' Reads operator's current Selection on CartLog. Maps first and last
@@ -136,7 +136,7 @@ Public Sub btnSmoothSelection()
     Dim selAddress As String
     selAddress = gLastCartLogSelection
 
-    ' DIAGNOSTIC — temporary, remove once this works.
+    ' DIAGNOSTIC - temporary, remove once this works.
     Debug.Print "[Smooth] selAddress = '" & selAddress & "'"
     LogEvent "SMOOTH", "selAddress='" & selAddress & "'"
 
@@ -154,8 +154,8 @@ Public Sub btnSmoothSelection()
     ' Find first and last DATA rows in the selection. Header row 1 is
     ' excluded; we only operate on rows >= 2.
     Dim firstRow As Long, lastRow As Long
-    firstRow = sel.Row
-    lastRow = sel.Row + sel.Rows.count - 1
+    firstRow = sel.row
+    lastRow = sel.row + sel.rows.count - 1
     If firstRow < 2 Then firstRow = 2
     If lastRow < firstRow Then
         MsgBox "Selection looks empty. Highlight at least one data row.", _
@@ -163,13 +163,13 @@ Public Sub btnSmoothSelection()
         Exit Sub
     End If
     If lastRow = firstRow Then
-        MsgBox "Selection is a single row — nothing to smooth." & vbCrLf & _
+        MsgBox "Selection is a single row - nothing to smooth." & vbCrLf & _
                "Highlight at least 2 rows (start and end of the wobble).", _
                vbExclamation, "Smooth Selection"
         Exit Sub
     End If
 
-    ' Refuse if a proposal is already pending — operator must commit
+    ' Refuse if a proposal is already pending - operator must commit
     ' or discard first. Avoids confusion about which one is "current".
     If wsLog.Range(PROP_FLAG_CELL).value = PROP_FLAG_TEXT Then
         MsgBox "A proposal is already pending. Commit or Discard it first.", _
@@ -240,7 +240,7 @@ Public Sub btnSmoothSelection()
     ' Write the arc XY samples for the chart overlay.
     Call WriteArcSamples(wsLog, x0, y0, theta0_rad, R_m, dtheta_rad)
 
-    ' Status banner — visible above the chart.
+    ' Status banner - visible above the chart.
     Dim banner As String
     If Abs(dtheta_rad) < ARC_STRAIGHT_TINY Then
         banner = "PROPOSAL PENDING: rows " & firstRow & "-" & lastRow & _
@@ -249,7 +249,7 @@ Public Sub btnSmoothSelection()
     Else
         banner = "PROPOSAL PENDING: rows " & firstRow & "-" & lastRow & _
                  " -> R=" & Format(Abs(R_m), "0.0") & "m, " & _
-                 "steer " & Format(steering_deg, "0.0") & "°, " & _
+                 "steer " & Format(steering_deg, "0.0") & " deg, " & _
                  "deviation " & Format(deviation_mm, "0") & "mm"
     End If
     wsLog.Range(STATUS_BANNER_CELL).value = banner
@@ -259,7 +259,7 @@ Public Sub btnSmoothSelection()
 
     LogEvent "SMOOTH", "Proposal: rows " & firstRow & "-" & lastRow & _
              " R=" & Format(R_m, "0.00") & "m steer=" & _
-             Format(steering_deg, "0.00") & "° dev=" & _
+             Format(steering_deg, "0.00") & " deg dev=" & _
              Format(deviation_mm, "0") & "mm"
     Exit Sub
 
@@ -270,7 +270,7 @@ End Sub
 
 
 ' ============================================================
-' BUTTON 2 — Commit Smooth
+' BUTTON 2 - Commit Smooth
 ' ============================================================
 '
 ' Apply the pending proposal: replace CartLog rows [start..end] with
@@ -296,7 +296,7 @@ Public Sub btnCommitSmooth()
 
     ' Capture the data we keep from the original rows:
     '   - startRow's RearSteps (the "enter the arc here" reference)
-    '   - endRow's RearSteps (the "exit the arc here" reference —
+    '   - endRow's RearSteps (the "exit the arc here" reference -
     '     preserves total distance travelled across the selection)
     Dim startRearSteps As Double, endRearSteps As Double
     Dim startTimestamp As String, endTimestamp As String
@@ -329,7 +329,7 @@ Public Sub btnCommitSmooth()
 
     ' Delete the rows in between.
     If endRow - startRow >= 2 Then
-        wsLog.Rows((startRow + 1) & ":" & (endRow - 1)).Delete Shift:=xlUp
+        wsLog.rows((startRow + 1) & ":" & (endRow - 1)).Delete Shift:=xlUp
     End If
 
     ' Clear the proposal cells now that the change is committed.
@@ -349,7 +349,7 @@ End Sub
 
 
 ' ============================================================
-' BUTTON 3 — Discard Smooth
+' BUTTON 3 - Discard Smooth
 ' ============================================================
 '
 ' Throw away the pending proposal. Clear hidden cells + status banner
@@ -362,7 +362,7 @@ Public Sub btnDiscardSmooth()
     Set wsLog = Sheets("CartLog")
 
     If wsLog.Range(PROP_FLAG_CELL).value <> PROP_FLAG_TEXT Then
-        ' Nothing to discard — silently no-op rather than nag.
+        ' Nothing to discard - silently no-op rather than nag.
         Exit Sub
     End If
 
@@ -382,7 +382,7 @@ End Sub
 
 
 ' ============================================================
-' Internal — proposal storage helpers
+' Internal - proposal storage helpers
 ' ============================================================
 
 Private Sub ClearProposal(ByVal wsLog As Worksheet)
@@ -399,7 +399,7 @@ End Sub
 
 
 ' ============================================================
-' Internal — arc maths
+' Internal - arc maths
 ' ============================================================
 
 ' Compute the single-arc replacement: given two endpoint poses,
@@ -422,7 +422,7 @@ Private Sub ComputeArc(ByVal x0 As Double, ByVal y0 As Double, _
     dtheta = NormaliseSignedRad(theta1 - theta0)
 
     If Abs(dtheta) < ARC_STRAIGHT_TINY Then
-        ' Near-straight — large-radius arc treated as chord.
+        ' Near-straight - large-radius arc treated as chord.
         R_m = 1000000#                 ' "very large"
         arc_length = chord
         steering_deg = 0#
@@ -451,7 +451,7 @@ Private Function EstimateDeviation(ByVal wsTrace As Worksheet, _
     Dim maxDev As Double
     maxDev = 0#
 
-    ' Arc centre — perpendicular to initial heading, distance R.
+    ' Arc centre - perpendicular to initial heading, distance R.
     Dim cx As Double, cy As Double
     cx = x0 + R_m * Cos(theta0 + PI / 2#)
     cy = y0 + R_m * Sin(theta0 + PI / 2#)
@@ -463,7 +463,7 @@ Private Function EstimateDeviation(ByVal wsTrace As Worksheet, _
     ' Distance from each such Trace (x,y) to the arc = | dist_to_centre - |R| |.
     ' Near-straight case (R huge): use perpendicular distance to chord.
     Dim lastTraceRow As Long
-    lastTraceRow = wsTrace.Cells(wsTrace.Rows.count, 1).End(xlUp).Row
+    lastTraceRow = wsTrace.Cells(wsTrace.rows.count, 1).End(xlUp).row
 
     Dim r As Long
     For r = 2 To lastTraceRow
@@ -473,8 +473,8 @@ Private Function EstimateDeviation(ByVal wsTrace As Worksheet, _
             Dim cr As Long
             cr = CLng(cartRow)
             If cr >= firstRow And cr <= lastRow Then
-                Dim px As Double, py As Double
-                px = wsTrace.Cells(r, 2).value
+                Dim PX As Double, py As Double
+                PX = wsTrace.Cells(r, 2).value
                 py = wsTrace.Cells(r, 3).value
                 Dim dev As Double
                 If absR > 100000# Then
@@ -483,12 +483,12 @@ Private Function EstimateDeviation(ByVal wsTrace As Worksheet, _
                     Dim hx As Double, hy As Double
                     hx = Cos(theta0): hy = Sin(theta0)
                     Dim relx As Double, rely As Double
-                    relx = px - x0: rely = py - y0
+                    relx = PX - x0: rely = py - y0
                     ' perp = | rely*hx - relx*hy |
                     dev = Abs(rely * hx - relx * hy)
                 Else
                     Dim dx As Double, dy As Double
-                    dx = px - cx: dy = py - cy
+                    dx = PX - cx: dy = py - cy
                     dev = Abs(Sqr(dx * dx + dy * dy) - absR)
                 End If
                 If dev > maxDev Then maxDev = dev
@@ -559,7 +559,7 @@ End Sub
 
 
 ' ============================================================
-' Internal — Trace lookup
+' Internal - Trace lookup
 ' ============================================================
 
 ' Find the Trace row whose CartLogRow (column H) equals the given
@@ -570,7 +570,7 @@ Private Function FindTracePointForCartLogRow(ByVal wsTrace As Worksheet, _
                                               ByRef y_out As Double, _
                                               ByRef theta_rad_out As Double) As Boolean
     Dim lastTraceRow As Long
-    lastTraceRow = wsTrace.Cells(wsTrace.Rows.count, 1).End(xlUp).Row
+    lastTraceRow = wsTrace.Cells(wsTrace.rows.count, 1).End(xlUp).row
 
     Dim r As Long
     For r = 2 To lastTraceRow
@@ -591,7 +591,7 @@ End Function
 
 
 ' ============================================================
-' Internal — chart overlay
+' Internal - chart overlay
 ' ============================================================
 
 ' Re-draw the TraceChart with the wobbly trace as series 1, and (if
@@ -599,7 +599,7 @@ End Function
 ' from the hidden S2:T(...) range.
 '
 ' This is a thin wrapper that calls back into IntegrateBicycle's
-' chart refresh — but we need to add the overlay ourselves because
+' chart refresh - but we need to add the overlay ourselves because
 ' RefreshTraceChart only knows about the single trace series.
 Private Sub RefreshChartWithOverlay(ByVal wsLog As Worksheet, _
                                      ByVal wsTrace As Worksheet)
@@ -614,7 +614,7 @@ Private Sub RefreshChartWithOverlay(ByVal wsLog As Worksheet, _
     Next co
 
     If cobj Is Nothing Then
-        ' No chart yet — let IntegrateBicycle build one, then we add overlay.
+        ' No chart yet - let IntegrateBicycle build one, then we add overlay.
         Call IntegrateBicycle
         For Each co In wsLog.ChartObjects
             If co.Name = "TraceChart" Then
@@ -635,15 +635,15 @@ Private Sub RefreshChartWithOverlay(ByVal wsLog As Worksheet, _
         If wsLog.Range(PROP_FLAG_CELL).value = PROP_FLAG_TEXT Then
             ' Find the last populated arc sample row.
             Dim lastArcRow As Long
-            lastArcRow = wsLog.Cells(wsLog.Rows.count, "S").End(xlUp).Row
+            lastArcRow = wsLog.Cells(wsLog.rows.count, "S").End(xlUp).row
             If lastArcRow >= 2 Then
                 .SeriesCollection.NewSeries
                 With .SeriesCollection(2)
                     .Name = "Proposed arc"
                     .XValues = wsLog.Range("S2:S" & lastArcRow)
-                    .Values = wsLog.Range("T2:T" & lastArcRow)
+                    .values = wsLog.Range("T2:T" & lastArcRow)
                     .MarkerStyle = xlMarkerStyleNone
-                    With .Format.Line
+                    With .Format.line
                         .Visible = msoTrue
                         .Weight = 2.5
                         .ForeColor.RGB = RGB(220, 60, 30)    ' red-orange
@@ -656,7 +656,7 @@ End Sub
 
 
 ' ============================================================
-' Setup — paints the three button cells and status banner on CartLog
+' Setup - paints the three button cells and status banner on CartLog
 ' ============================================================
 '
 ' Run once after importing this module. Reuses CellFormat from
@@ -673,7 +673,7 @@ Public Sub BuildCartLogButtons()
     ws.Cells(1, 7).value = "Smooth Selection"
     ws.Cells(1, 8).value = "Commit Smooth"
     ws.Cells(1, 9).value = "Discard Smooth"
-    ws.Cells(1, 10).value = ""              ' status banner — blank initially
+    ws.Cells(1, 10).value = ""              ' status banner - blank initially
 
     Dim cell As Range
     Dim col As Long
@@ -694,13 +694,13 @@ Public Sub BuildCartLogButtons()
             Case 9: nm = "btnDiscardSmooth"
         End Select
         On Error Resume Next
-        ThisWorkbook.Names(nm).Delete
+        ThisWorkbook.names(nm).Delete
         On Error GoTo 0
-        ThisWorkbook.Names.Add Name:=nm, _
-                               RefersTo:="='" & ws.Name & "'!" & cell.Address
+        ThisWorkbook.names.Add Name:=nm, _
+                               refersTo:="='" & ws.Name & "'!" & cell.Address
     Next col
 
-    ' Status banner cell width — wider to fit the message.
+    ' Status banner cell width - wider to fit the message.
     ws.Cells(1, 10).ColumnWidth = 60
     With ws.Cells(1, 10)
         .Font.Italic = True

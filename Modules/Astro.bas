@@ -26,11 +26,11 @@ Attribute VB_Name = "Astro"
 
 Option Explicit
 
-'                  Galactic centre coordinates (J2000)                                                                                                                                                                                 
+'                  Galactic centre coordinates (J2000)
 Private Const GC_RA_DEG   As Double = 266.4167    ' 17h 45m 40s in degrees
 Private Const GC_DEC_DEG  As Double = -29.0078    ' -29  00' 28"
 
-'                  Constants                                                                                                                                                                                                                                                                                                                                                                                                 
+'                  Constants
 Private Const PI     As Double = 3.14159265358979
 Private Const DEG2RAD As Double = PI / 180#
 Private Const RAD2DEG As Double = 180# / PI
@@ -157,7 +157,7 @@ End Sub
 
 ' Generate a table of Milky Way galactic centre positions
 ' for the night, written to a new sheet or range for planning
-Public Sub GenerateGCTable()" to its "End Sub", and paste this over it.
+'Public Sub GenerateGCTable()" to its "End Sub", and paste this over it.
 '
 ' Change vs the original: adds Moon Az (col G), Moon Alt (col H), and
 ' Moon above horizon (col I), filled from the private GetMoonPosition
@@ -390,13 +390,13 @@ Private Function DateToJulian(ByVal dt As Date) As Double
         m = m + 12
     End If
     
-    Dim a As Long, B As Long
+    Dim a As Long, b As Long
     a = Int(y / 100)
-    B = 2 - a + Int(a / 4)
+    b = 2 - a + Int(a / 4)
     
     DateToJulian = Int(365.25 * (y + 4716)) + _
                    Int(30.6001 * (m + 1)) + _
-                   d + B - 1524.5 + _
+                   d + b - 1524.5 + _
                    (hr + mn / 60# + sc / 3600#) / 24#
 End Function
 
@@ -499,7 +499,7 @@ Public Function GetMoonGimbalAngles(ByVal atTime As Date, _
              " pitch=" & Format(gimbalPitch, "0.0") & Chr(176)
 End Function
 
-'           Moon position core                                                                                                                   
+'           Moon position core
 ' Returns local-sky azimuth (deg from N clockwise) and altitude
 ' (deg above horizon) at the given local time. Below horizon
 ' returns negative altitude     caller's responsibility to decide
@@ -821,9 +821,117 @@ Private Function BisectMoonAltitude(ByVal t1 As Date, _
     BisectMoonAltitude = lo + (hi - lo) / 2#
 End Function
 
+' ============================================================
+' Galactic Centre rise / transit / set solver (mirrors the moon
+' crossing pattern, uses GetGCPosition). alt=0 = geometric horizon;
+' operator decides shootability. GC is up across midnight, so the
+' scan runs a full 24h from dayStart.
+' ============================================================
+Public Function FindGCCrossing(ByVal dayStart As Date, _
+                                ByVal targetAltitude As Double, _
+                                ByVal direction As Integer) As Date
+    Const SCAN_STEP_MIN As Double = 5
+    Dim stepDays As Double
+    stepDays = SCAN_STEP_MIN / 1440#
+    Dim t As Date, prevT As Date
+    Dim alt As Double, prevAlt As Double, azIgnore As Double
+    Dim havePrev As Boolean
+    havePrev = False
+    Dim dayEnd As Date
+    dayEnd = dayStart + 1#
+    For t = dayStart To dayEnd Step stepDays
+        GetGCPosition t, azIgnore, alt
+        If havePrev Then
+            Dim prevDiff As Double, curDiff As Double
+            prevDiff = prevAlt - targetAltitude
+            curDiff = alt - targetAltitude
+            If direction > 0 And prevDiff < 0 And curDiff >= 0 Then
+                FindGCCrossing = BisectGCAltitude(prevT, t, targetAltitude)
+                Exit Function
+            ElseIf direction < 0 And prevDiff > 0 And curDiff <= 0 Then
+                FindGCCrossing = BisectGCAltitude(prevT, t, targetAltitude)
+                Exit Function
+            End If
+        End If
+        prevT = t
+        prevAlt = alt
+        havePrev = True
+    Next t
+    FindGCCrossing = 0
+End Function
 
+Private Function BisectGCAltitude(ByVal t1 As Date, _
+                                   ByVal t2 As Date, _
+                                   ByVal targetAlt As Double) As Date
+    Const TOL_SEC As Double = 30
+    Const TOL_DAYS As Double = TOL_SEC / 86400#
+    Dim lo As Date, hi As Date, mid As Date
+    Dim altLo As Double, altMid As Double, azIgnore As Double
+    lo = t1
+    hi = t2
+    GetGCPosition lo, azIgnore, altLo
+    Do While (hi - lo) > TOL_DAYS
+        mid = lo + (hi - lo) / 2#
+        GetGCPosition mid, azIgnore, altMid
+        If Sgn(altLo - targetAlt) = Sgn(altMid - targetAlt) Then
+            lo = mid
+            altLo = altMid
+        Else
+            hi = mid
+        End If
+    Loop
+    BisectGCAltitude = lo + (hi - lo) / 2#
+End Function
 
+' Transit = time of maximum altitude between rise and set.
+Public Function FindGCTransit(ByVal fromTime As Date, _
+                               ByVal toTime As Date) As Date
+    Const SCAN_STEP_MIN As Double = 5
+    Dim stepDays As Double
+    stepDays = SCAN_STEP_MIN / 1440#
+    Dim t As Date, alt As Double, azIgnore As Double
+    Dim bestT As Date, bestAlt As Double
+    bestAlt = -999#
+    For t = fromTime To toTime Step stepDays
+        GetGCPosition t, azIgnore, alt
+        If alt > bestAlt Then
+            bestAlt = alt
+            bestT = t
+        End If
+    Next t
+    FindGCTransit = bestT
+End Function
 
-
-
-
+' ============================================================
+' Driver: compute tonight's GC rise / transit / set and write to
+' dataGCRiseTime / dataGCTransitTime / dataGCSetTime. Scan starts at
+' local noon today so an evening rise and next-morning set are both
+' inside the 24h window.
+' ============================================================
+Public Sub UpdateGCTimes()
+    Dim setSheet As Worksheet
+    Set setSheet = ThisWorkbook.Sheets("Settings")
+    Dim scanStart As Date
+    scanStart = Int(Now()) + (12# / 24#)
+    Dim gcRise As Date, gcSet As Date, gcTransit As Date
+    gcRise = FindGCCrossing(scanStart, 0#, 1)
+    If gcRise = 0 Then
+        MsgBox "GC rise not found in the 24h scan window.", vbExclamation, "UpdateGCTimes"
+        Exit Sub
+    End If
+    gcSet = FindGCCrossing(gcRise, 0#, -1)
+    If gcSet = 0 Then
+        MsgBox "GC set not found after rise.", vbExclamation, "UpdateGCTimes"
+        Exit Sub
+    End If
+    gcTransit = FindGCTransit(gcRise, gcSet)
+    setSheet.Range("dataGCRiseTime").value = gcRise
+    setSheet.Range("dataGCTransitTime").value = gcTransit
+    setSheet.Range("dataGCSetTime").value = gcSet
+    LogEvent "ASTRO", "GC times: rise=" & Format(gcRise, "yyyy-mm-dd HH:nn") & _
+             " transit=" & Format(gcTransit, "HH:nn") & " set=" & Format(gcSet, "yyyy-mm-dd HH:nn")
+    MsgBox "GC times updated:" & vbCrLf & _
+           "Rise:    " & Format(gcRise, "ddd HH:nn") & vbCrLf & _
+           "Transit: " & Format(gcTransit, "ddd HH:nn") & vbCrLf & _
+           "Set:     " & Format(gcSet, "ddd HH:nn"), vbInformation, "UpdateGCTimes"
+End Sub

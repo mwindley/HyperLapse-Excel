@@ -1,14 +1,14 @@
 Attribute VB_Name = "MWToGCRenamer"
 ' ============================================================
-' HyperLapse Cart — One-shot rename macro: MW -> GC
+' HyperLapse Cart - One-shot rename macro: MW -> GC
 '
 ' Per workfront #67 Phase 1 (Excel-side operator-facing rename).
-' Cart wire protocol stays "mw" — AstroPush.bas still sends
+' Cart wire protocol stays "mw" - AstroPush.bas still sends
 ' obj="mw" to the cart. This macro only touches Excel-facing
 ' operator surfaces.
 '
 ' Public entry:
-'   RenameMWToGC — runs all the swaps below, reports a summary
+'   RenameMWToGC - runs all the swaps below, reports a summary
 '
 ' What this macro does:
 '   1. Renames three named ranges:
@@ -41,7 +41,7 @@ Public Sub RenameMWToGC()
     summary = "Rename MW -> GC summary:" & vbCrLf & vbCrLf
 
     ' --- Step 1: rename the three named ranges ---
-    summary = summary & "Step 1 — Named ranges:" & vbCrLf
+    summary = summary & "Step 1 - Named ranges:" & vbCrLf
     summary = summary & RenameOne("dataMWRiseTime", "dataGCRiseTime", _
                                   "GC rise (was MW core rise)")
     summary = summary & RenameOne("dataMWTransitTime", "dataGCTransitTime", _
@@ -50,11 +50,11 @@ Public Sub RenameMWToGC()
                                   "GC set (was MW core set)")
 
     ' --- Step 2: update the Q-column formulas on the Plan sheet ---
-    summary = summary & vbCrLf & "Step 2 — Plan Q-column formulas:" & vbCrLf
+    summary = summary & vbCrLf & "Step 2 - Plan Q-column formulas:" & vbCrLf
     summary = summary & RewriteAnchorFormulas()
 
     ' --- Step 3: update Settings section header label if present ---
-    summary = summary & vbCrLf & "Step 3 — Settings labels:" & vbCrLf
+    summary = summary & vbCrLf & "Step 3 - Settings labels:" & vbCrLf
     summary = summary & RewriteSettingsHeader()
 
     MsgBox summary, vbInformation, "RenameMWToGC"
@@ -94,16 +94,16 @@ Private Function RenameOne(ByVal oldName As String, ByVal newName As String, _
     End If
 
     Dim refersTo As String
-    refersTo = ThisWorkbook.Names(oldName).refersTo
+    refersTo = ThisWorkbook.names(oldName).refersTo
 
     ' Get the cell so we can rewrite the label in col B of the same row
     Dim targetCell As Range
     On Error Resume Next
-    Set targetCell = ThisWorkbook.Names(oldName).refersToRange
+    Set targetCell = ThisWorkbook.names(oldName).refersToRange
     On Error GoTo 0
 
-    ThisWorkbook.Names(oldName).Delete
-    ThisWorkbook.Names.Add Name:=newName, refersTo:=refersTo
+    ThisWorkbook.names(oldName).Delete
+    ThisWorkbook.names.Add Name:=newName, refersTo:=refersTo
 
     If Not targetCell Is Nothing Then
         Dim labelCell As Range
@@ -206,7 +206,7 @@ End Function
 Private Function NameExists(ByVal nm As String) As Boolean
     Dim n As Name
     On Error Resume Next
-    Set n = ThisWorkbook.Names(nm)
+    Set n = ThisWorkbook.names(nm)
     On Error GoTo 0
     NameExists = Not (n Is Nothing)
 End Function

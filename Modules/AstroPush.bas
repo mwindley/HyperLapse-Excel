@@ -1,5 +1,17 @@
 Attribute VB_Name = "AstroPush"
 ' ============================================================
+' VERSION: ASTROPUSH_v2026-06-08-zenithband
+'   This build adds: UTC DateToEpochMs + LocalUtcOffsetMs + NowUTCEpochMs,
+'   SetRealtimeAnchor, GC-arc MW window, and the alt>70 zenith-band yaw ease
+'   (replaces the old pitch>80 FREEZE). Run AstroPushVersion to confirm load.
+' ============================================================
+Public Const ASTROPUSH_VERSION As String = "ASTROPUSH_v2026-06-08-zenithband"
+
+Public Sub AstroPushVersion()
+    MsgBox "AstroPush loaded: " & ASTROPUSH_VERSION, vbInformation, "AstroPush version"
+    LogEvent "ASTROPUSH", "version " & ASTROPUSH_VERSION
+End Sub
+' ============================================================
 ' HyperLapse Cart                     AstroPush module (Day 17, Workfront #50)
 '
 ' PURPOSE
@@ -233,19 +245,28 @@ Public Sub PushTrackPathsToCart()
 
     Dim sunsetTime As Date, sunriseTime As Date
     Dim astroDusk As Date, darkEnd As Date
+    Dim gcRise As Date, gcSet As Date
     sunsetTime = setSheet.Range("dataSunsetTime").value
     sunriseTime = setSheet.Range("dataSunriseTime").value
-    astroDusk = setSheet.Range("dataAstroDusk").value
+    astroDusk = setSheet.Range("dataAstroDusk").value      ' moon window only
     darkEnd = setSheet.Range("dataPhase4aStart").value
+    ' MW now tracks the FULL GC above-horizon arc. Run UpdateGCTimes first.
+    gcRise = setSheet.Range("dataGCRiseTime").value
+    gcSet = setSheet.Range("dataGCSetTime").value
 
     If sunsetTime = 0 Or sunriseTime = 0 Or astroDusk = 0 Or darkEnd = 0 Then
         MsgBox "Sun / dusk / phase times not set. Run Init Shoot first.", vbExclamation
+        Exit Sub
+    End If
+    If gcRise = 0 Or gcSet = 0 Then
+        MsgBox "GC rise/set not set. Run Astro.UpdateGCTimes first.", vbExclamation
         Exit Sub
     End If
 
     ' Workaround #57: if end of window is before start, shift +24h.
     If sunriseTime < sunsetTime Then sunriseTime = sunriseTime + 1#
     If darkEnd < astroDusk Then darkEnd = darkEnd + 1#
+    If gcSet < gcRise Then gcSet = gcSet + 1#
 
     Dim t0 As Date
     t0 = Now()
@@ -254,9 +275,9 @@ Public Sub PushTrackPathsToCart()
     Dim sunOK As Boolean
     sunOK = FitAndPushTrackPath("sun", t0, sunsetTime, sunriseTime, arduinoIP)
 
-    ' MW: fit cubic over dark window
+    ' MW: fit cubic over the full GC above-horizon arc (rise -> set)
     Dim mwOK As Boolean
-    mwOK = FitAndPushTrackPath("mw", t0, astroDusk, darkEnd, arduinoIP)
+    mwOK = FitAndPushTrackPath("mw", t0, gcRise, gcSet, arduinoIP)
 
     ' Moon: fit cubic over the SAME dark window as MW (#55 closed Day 24
     ' pt B). No horizon gating: if the moon is below the horizon for part
@@ -282,16 +303,92 @@ Private Function FitAndPushTrackPath(ByVal objName As String, _
                                       ByVal winEnd As Date, _
                                       ByVal arduinoIP As String) As Boolean
 
-    ' Number of segments per object. 4 is the cart's SRAM-imposed limit
-    ' (TRACK_SEGS_MAX in firmware). With 3-hour segments over a 12-hour
-    ' window the cubic still struggles near MW zenith          accuracy may
-    ' degrade there; verify with CheckTrackFitResiduals.
-    Const N_SEGMENTS As Long = 2
-
+    ' Segments per object (cart TRACK_SEGS_MAX = 8). 4 over the full GC arc.
+    Const N_SEGMENTS As Long = 4
     ' Sample resolution within each segment.
     Const STEP_MIN As Double = 5
     Dim stepDays As Double
     stepDays = STEP_MIN / 1440#
+
+    ' Zenith-band yaw ease (mw/GC only) - design guard against the azimuth
+    ' whip artifact. Above this TRUE ALTITUDE the bearing-to-object races
+    ' (~1/cos(alt)); we stop fitting the real (whipping) azimuth and instead
+    ' ease yaw smoothly from the band-entry azimuth to the band-exit azimuth.
+    ' Applies to BOTH Track GC (full) and Track GC yaw-only (acts on yaw).
+    Const BAND_ALT_DEG As Double = 70#
+    Dim bandEase As Boolean
+    bandEase = (objName = "mw")
+
+    ' ---- Global single-frame pre-scan for mw: one unwrapped yaw frame for
+    ' the whole window, with the band samples replaced by the ease. Done once
+    ' so the ease is continuous across segment boundaries. ----
+    Dim gN As Long
+    Dim gT() As Double, gYaw() As Double, gAlt() As Double
+    If bandEase Then
+        Dim tt As Date
+        gN = 0
+        For tt = winStart To winEnd Step stepDays
+            gN = gN + 1
+        Next tt
+        If gN < 8 Then
+            LogEvent "TRACKPUSH", objName & " global scan too few samples"
+            FitAndPushTrackPath = False
+            Exit Function
+        End If
+        ReDim gT(0 To gN - 1)
+        ReDim gYaw(0 To gN - 1)
+        ReDim gAlt(0 To gN - 1)
+        Dim gi As Long, gaz As Double, galtv As Double
+        gi = 0
+        For tt = winStart To winEnd Step stepDays
+            GetGCAzAltAtTime tt, gaz, galtv
+            gT(gi) = (tt - t0) * 86400#
+            gYaw(gi) = gaz
+            gAlt(gi) = galtv
+            gi = gi + 1
+        Next tt
+        ' Global unwrap (continuous yaw frame across the whole window).
+        Dim gk As Long
+        For gk = 1 To gN - 1
+            Do While gYaw(gk) - gYaw(gk - 1) > 180
+                gYaw(gk) = gYaw(gk) - 360
+            Loop
+            Do While gYaw(gk) - gYaw(gk - 1) < -180
+                gYaw(gk) = gYaw(gk) + 360
+            Loop
+        Next gk
+        ' Find band entry (first alt>BAND) and exit (last alt>BAND).
+        Dim entryK As Long, exitK As Long
+        entryK = -1: exitK = -1
+        For gk = 0 To gN - 1
+            If gAlt(gk) > BAND_ALT_DEG Then
+                If entryK < 0 Then entryK = gk
+                exitK = gk
+            End If
+        Next gk
+        If entryK >= 0 And exitK > entryK Then
+            Dim tEnt As Double, tExt As Double, yEnt As Double, yExt As Double
+            tEnt = gT(entryK): tExt = gT(exitK)
+            yEnt = gYaw(entryK): yExt = gYaw(exitK)
+            ' Replace band samples with a smoothstep ease entryYaw->exitYaw.
+            ' At the boundaries the ease equals the real yaw, so the fit stays
+            ' continuous with the gentle segments either side.
+            For gk = entryK To exitK
+                Dim frac As Double, sg As Double
+                frac = (gT(gk) - tEnt) / (tExt - tEnt)
+                If frac < 0# Then frac = 0#
+                If frac > 1# Then frac = 1#
+                sg = frac * frac * (3# - 2# * frac)
+                gYaw(gk) = yEnt + sg * (yExt - yEnt)
+            Next gk
+            LogEvent "TRACKPUSH", "mw zenith band: alt>" & Format(BAND_ALT_DEG, "0") & _
+                     " eased yaw " & Format(yEnt, "0.0") & " -> " & Format(yExt, "0.0") & _
+                     " over " & Format((tExt - tEnt) / 60#, "0") & " min"
+        Else
+            LogEvent "TRACKPUSH", "mw: GC stays below " & Format(BAND_ALT_DEG, "0") & _
+                     " deg - no zenith band, full point-track"
+        End If
+    End If
 
     Dim winSpanDays As Double
     winSpanDays = winEnd - winStart
@@ -307,89 +404,98 @@ Private Function FitAndPushTrackPath(ByVal objName As String, _
         segStart = winStart + segIdx * segSpanDays
         segEnd = winStart + (segIdx + 1) * segSpanDays
 
-        ' Sample this segment
-        Dim nSamples As Long
-        nSamples = 0
-        Dim t As Date
-        For t = segStart To segEnd Step stepDays
-            nSamples = nSamples + 1
-        Next t
-        If nSamples < 6 Then
-            LogEvent "TRACKPUSH", objName & " seg " & segIdx & " too few samples"
-            allOK = False
-            Exit For
-        End If
+        Dim ay(0 To 3) As Double, ap(0 To 3) As Double
 
-        ReDim ti(0 To nSamples - 1) As Double
-        ReDim yi(0 To nSamples - 1) As Double
-        ReDim PI(0 To nSamples - 1) As Double
-
-        Dim i As Long, az As Double, alt As Double
-        i = 0
-        For t = segStart To segEnd Step stepDays
-            ti(i) = (t - t0) * 86400#
-            If objName = "sun" Then
-                GetSunAzAltAtTime t, az, alt
-            ElseIf objName = "mw" Then
-                GetGCAzAltAtTime t, az, alt
-            ElseIf objName = "moon" Then
-                GetMoonAzAltAtTime t, az, alt
-            Else
-                FitAndPushTrackPath = False
-                Exit Function
-            End If
-            yi(i) = az
-            PI(i) = alt
-            i = i + 1
-        Next t
-
-        ' Unwrap yaw within segment
-        Dim k As Long
-        For k = 1 To nSamples - 1
-            Do While yi(k) - yi(k - 1) > 180
-                yi(k) = yi(k) - 360
-            Loop
-            Do While yi(k) - yi(k - 1) < -180
-                yi(k) = yi(k) + 360
-            Loop
-        Next k
-
-        ' Freeze-yaw detection: if any sample in this segment has
-        ' pitch > FREEZE_PITCH_THRESHOLD, the segment contains the
-        ' zenith pass. Yaw becomes geometrically ill-defined there
-        ' (large yaw motion for small sky motion). Use a constant
-        ' yaw cubic (yaw_at_first_freeze_sample, 0, 0, 0) instead
-        ' of fitting through the nonsense. Pitch cubic stays normal.
-        Const FREEZE_PITCH_THRESHOLD As Double = 80
-        Dim hasFreeze As Boolean
-        Dim freezeYaw As Double
-        hasFreeze = False
-        Dim fk As Long
-        For fk = 0 To nSamples - 1
-            If PI(fk) > FREEZE_PITCH_THRESHOLD Then
-                hasFreeze = True
-                freezeYaw = yi(fk)
+        If bandEase Then
+            ' Fit from the global single-frame arrays (yaw already eased in band).
+            Dim segS As Double, segE As Double
+            segS = (segStart - t0) * 86400#
+            segE = (segEnd - t0) * 86400#
+            ' Count global samples in [segS, segE].
+            Dim cnt As Long, gj As Long
+            cnt = 0
+            For gj = 0 To gN - 1
+                If gT(gj) >= segS - 0.001 And gT(gj) <= segE + 0.001 Then cnt = cnt + 1
+            Next gj
+            If cnt < 6 Then
+                LogEvent "TRACKPUSH", objName & " seg " & segIdx & " too few samples"
+                allOK = False
                 Exit For
             End If
-        Next fk
-
-        ' Fit cubic
-        Dim ay(0 To 3) As Double, ap(0 To 3) As Double
-        If hasFreeze Then
-            ay(0) = freezeYaw: ay(1) = 0: ay(2) = 0: ay(3) = 0
-            LogEvent "TRACKPUSH", objName & " seg " & segIdx & _
-                     " FREEZE yaw=" & Format(freezeYaw, "0.0")
-        Else
+            ReDim ti(0 To cnt - 1) As Double
+            ReDim yi(0 To cnt - 1) As Double
+            ReDim PI(0 To cnt - 1) As Double
+            Dim ci As Long
+            ci = 0
+            For gj = 0 To gN - 1
+                If gT(gj) >= segS - 0.001 And gT(gj) <= segE + 0.001 Then
+                    ti(ci) = gT(gj)
+                    yi(ci) = gYaw(gj)
+                    PI(ci) = gAlt(gj)
+                    ci = ci + 1
+                End If
+            Next gj
             If Not FitCubic(ti, yi, ay) Then
                 LogEvent "TRACKPUSH", objName & " seg " & segIdx & " yaw fit failed"
                 allOK = False
                 Exit For
             End If
-        End If
-        If Not FitCubic(ti, PI, ap) Then
-            LogEvent "TRACKPUSH", objName & " seg " & segIdx & " pitch fit failed"
-            allOK = False
-            Exit For
+            If Not FitCubic(ti, PI, ap) Then
+                LogEvent "TRACKPUSH", objName & " seg " & segIdx & " pitch fit failed"
+                allOK = False
+                Exit For
+            End If
+        Else
+            ' --- sun / moon: original per-segment sample + unwrap + fit ---
+            Dim nSamples As Long
+            nSamples = 0
+            Dim t As Date
+            For t = segStart To segEnd Step stepDays
+                nSamples = nSamples + 1
+            Next t
+            If nSamples < 6 Then
+                LogEvent "TRACKPUSH", objName & " seg " & segIdx & " too few samples"
+                allOK = False
+                Exit For
+            End If
+            ReDim ti(0 To nSamples - 1) As Double
+            ReDim yi(0 To nSamples - 1) As Double
+            ReDim PI(0 To nSamples - 1) As Double
+            Dim i As Long, az As Double, alt As Double
+            i = 0
+            For t = segStart To segEnd Step stepDays
+                ti(i) = (t - t0) * 86400#
+                If objName = "sun" Then
+                    GetSunAzAltAtTime t, az, alt
+                ElseIf objName = "moon" Then
+                    GetMoonAzAltAtTime t, az, alt
+                Else
+                    FitAndPushTrackPath = False
+                    Exit Function
+                End If
+                yi(i) = az
+                PI(i) = alt
+                i = i + 1
+            Next t
+            Dim k As Long
+            For k = 1 To nSamples - 1
+                Do While yi(k) - yi(k - 1) > 180
+                    yi(k) = yi(k) - 360
+                Loop
+                Do While yi(k) - yi(k - 1) < -180
+                    yi(k) = yi(k) + 360
+                Loop
+            Next k
+            If Not FitCubic(ti, yi, ay) Then
+                LogEvent "TRACKPUSH", objName & " seg " & segIdx & " yaw fit failed"
+                allOK = False
+                Exit For
+            End If
+            If Not FitCubic(ti, PI, ap) Then
+                LogEvent "TRACKPUSH", objName & " seg " & segIdx & " pitch fit failed"
+                allOK = False
+                Exit For
+            End If
         End If
 
         ' Push
@@ -401,10 +507,6 @@ Private Function FitAndPushTrackPath(ByVal objName As String, _
              "&ts=" & ts & "&te=" & te & _
              "&ay0=" & ay(0) & "&ay1=" & ay(1) & "&ay2=" & ay(2) & "&ay3=" & ay(3) & _
              "&ap0=" & ap(0) & "&ap1=" & ap(1) & "&ap2=" & ap(2) & "&ap3=" & ap(3)
-        ' Model B: on seg=0, send rt0 = the cubic's real-time t0 as
-        ' epoch-ms. Cart evaluates the cubic at (real_now - rt0). MUST
-        ' use the SAME epoch reference (UTC ms) as the /settings/realtime
-        ' anchor the Execution UI hands in, or astro pointing will be off.
         If segIdx = 0 Then
             qs = qs & "&rt0=" & Format(DateToEpochMs(t0), "0")
         End If
@@ -981,8 +1083,74 @@ End Sub
 ' cart just subtracts them, so a constant offset cancels as long as
 ' it's the same on both. (Kept simple: serial-date * day-ms.)
 ' ============================================================
-Private Function DateToEpochMs(ByVal d As Date) As Double
-    ' VBA serial date 0 = 1899-12-30. Unix epoch = 1970-01-01 =
-    ' serial 25569. ms = (serial - 25569) * 86400 * 1000.
-    DateToEpochMs = (CDbl(d) - 25569#) * 86400# * 1000#
+' Time base (Model B): the cubic's rt0 and the /settings/realtime anchor MUST
+' be the same epoch. Both are TRUE UTC epoch-ms, from one helper so they can't
+' drift. LocalUtcOffsetMs reads the PC's CURRENT offset (DST-aware) - no
+' hardcoded timezone.
+' ============================================================
+Private Function LocalUtcOffsetMs() As Double
+    On Error GoTo Fallback
+    Dim wmi As Object, os As Object, lct As String
+    Set wmi = GetObject("winmgmts:\\.\root\cimv2")
+    For Each os In wmi.ExecQuery("SELECT LocalDateTime FROM Win32_OperatingSystem")
+        lct = CStr(os.LocalDateTime)
+        Exit For
+    Next
+    If Len(lct) = 0 Then GoTo Fallback
+    Dim i As Long, pidx As Long, ch As String
+    pidx = 0
+    For i = Len(lct) To 1 Step -1
+        ch = Mid(lct, i, 1)
+        If ch = "+" Or ch = "-" Then pidx = i: Exit For
+    Next i
+    If pidx = 0 Then GoTo Fallback
+    Dim mins As Double
+    mins = CDbl(Mid(lct, pidx + 1))
+    If Mid(lct, pidx, 1) = "-" Then mins = -mins
+    LocalUtcOffsetMs = mins * 60000#
+    Exit Function
+Fallback:
+    LocalUtcOffsetMs = 0#
 End Function
+
+' True UTC epoch-ms for a LOCAL VBA Date.
+Private Function DateToEpochMs(ByVal d As Date) As Double
+    DateToEpochMs = (CDbl(d) - 25569#) * 86400# * 1000# - LocalUtcOffsetMs()
+End Function
+
+' UTC epoch-ms for now - single source for cubic rt0 and the realtime anchor.
+Public Function NowUTCEpochMs() As Double
+    NowUTCEpochMs = DateToEpochMs(Now())
+End Function
+
+' ============================================================
+' SetRealtimeAnchor - push the cart's wall-clock anchor as UTC epoch-ms,
+' automatically. Run BEFORE /track/start each run (track/start re-stamps the
+' gimbal anchor; the anchor is not part of the plan reload).
+' ============================================================
+Public Sub SetRealtimeAnchor()
+    Dim setSheet As Worksheet
+    Set setSheet = ThisWorkbook.Sheets("Settings")
+    Dim arduinoIP As String
+    arduinoIP = CStr(setSheet.Range("dataArduinoIP").value)
+    Dim ms As Double
+    ms = NowUTCEpochMs()
+    Dim url As String
+    url = arduinoIP & "/settings/realtime?ms=" & Format(ms, "0")
+    Dim http As Object
+    Set http = CreateObject("WinHttp.WinHttpRequest.5.1")
+    On Error Resume Next
+    http.Open "GET", url, False
+    http.Send
+    Dim sc As Long, rt As String
+    sc = http.Status
+    rt = Trim(http.responseText)
+    On Error GoTo 0
+    If sc = 200 Then
+        LogEvent "REALTIME", "anchor UTC ms=" & Format(ms, "0") & " -> " & rt
+    Else
+        LogEvent "REALTIME", "anchor FAILED HTTP " & sc & " url=" & url
+        MsgBox "SetRealtimeAnchor failed (HTTP " & sc & ").", vbExclamation
+    End If
+End Sub
+

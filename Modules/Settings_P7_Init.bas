@@ -1,12 +1,12 @@
 Attribute VB_Name = "Settings_P7_Init"
 ' ============================================================
-' HyperLapse Cart — Settings P7 Init
+' HyperLapse Cart - Settings P7 Init
 '
 ' One-shot setup macro: adds the 7 named ranges Session E
 ' introduced that are still missing from HyperLapse.xlsm.
 '
 ' Public entry:
-'   InitSettingsP7 — checks each of the 7 names; for any missing,
+'   InitSettingsP7 - checks each of the 7 names; for any missing,
 '                    writes label + seed value + number format,
 '                    then defines the workbook-level name pointing
 '                    at the seed cell. Idempotent: re-running won't
@@ -26,7 +26,7 @@ Attribute VB_Name = "Settings_P7_Init"
 ' per group; cells in col B/C/D mirror the existing Settings
 ' convention (label B, value C, comment D).
 '
-' Session E (Day 20). One-shot — delete this module after running
+' Session E (Day 20). One-shot - delete this module after running
 ' if you like, the named ranges live on in the workbook regardless.
 ' ============================================================
 
@@ -116,7 +116,7 @@ End Sub
 
 
 ' ============================================================
-' AddPlanPushDryRunFlag — appends the dataPlanPushDryRun
+' AddPlanPushDryRunFlag - appends the dataPlanPushDryRun
 ' named range to Settings. Stage-1 follow-up to InitSettingsP7.
 '
 ' Lives in its own sub so re-running InitSettingsP7 doesn't paint
@@ -153,10 +153,10 @@ Public Sub AddPlanPushDryRunFlag()
     r = r + 1
     ws.Cells(r, 2).value = "Plan push dry-run"
     ws.Cells(r, 3).value = True
-    ws.Cells(r, 3).NumberFormat = "Boolean"
+
     ws.Cells(r, 4).value = "TRUE = validate + decompose only, no POST. FALSE = real push (pings cart first)."
-    ThisWorkbook.Names.Add Name:="dataPlanPushDryRun", _
-                           RefersTo:="=Settings!$C$" & r
+    ThisWorkbook.names.Add Name:="dataPlanPushDryRun", _
+                           refersTo:="=Settings!$C$" & r
 
     MsgBox "Added dataPlanPushDryRun at Settings!$C$" & r & " (default TRUE).", _
            vbInformation, "AddPlanPushDryRunFlag"
@@ -176,7 +176,7 @@ End Sub
 
 ' ============================================================
 ' Add a Time-typed named range. Returns True if a row was used
-' (either added or skipped — the label row is written either way
+' (either added or skipped - the label row is written either way
 ' so the operator can see what's already defined). Returns False
 ' only on unrecoverable error.
 ' ============================================================
@@ -188,7 +188,7 @@ Private Function AddNamedTime(ByVal ws As Worksheet, ByVal r As Long, _
     If NameExists(nm) Then
         ws.Cells(r, 2).value = label & "  (already defined)"
         ws.Cells(r, 2).Font.Color = RGB(128, 128, 128)
-        ws.Cells(r, 4).value = "skipped — name already exists"
+        ws.Cells(r, 4).value = "skipped - name already exists"
         ws.Cells(r, 4).Font.Color = RGB(128, 128, 128)
         skipped = skipped + 1
         report = report & "  - " & nm & ": SKIPPED" & vbCrLf
@@ -197,7 +197,7 @@ Private Function AddNamedTime(ByVal ws As Worksheet, ByVal r As Long, _
         ws.Cells(r, 3).value = seedVal
         ws.Cells(r, 3).NumberFormat = "hh:mm:ss"
         ws.Cells(r, 4).value = comment
-        ThisWorkbook.Names.Add Name:=nm, RefersTo:="=Settings!$C$" & r
+        ThisWorkbook.names.Add Name:=nm, refersTo:="=Settings!$C$" & r
         added = added + 1
         report = report & "  - " & nm & ": added at C" & r & vbCrLf
     End If
@@ -216,7 +216,7 @@ Private Function AddNamedInt(ByVal ws As Worksheet, ByVal r As Long, _
     If NameExists(nm) Then
         ws.Cells(r, 2).value = label & "  (already defined)"
         ws.Cells(r, 2).Font.Color = RGB(128, 128, 128)
-        ws.Cells(r, 4).value = "skipped — name already exists"
+        ws.Cells(r, 4).value = "skipped - name already exists"
         ws.Cells(r, 4).Font.Color = RGB(128, 128, 128)
         skipped = skipped + 1
         report = report & "  - " & nm & ": SKIPPED" & vbCrLf
@@ -225,7 +225,7 @@ Private Function AddNamedInt(ByVal ws As Worksheet, ByVal r As Long, _
         ws.Cells(r, 3).value = seedVal
         ws.Cells(r, 3).NumberFormat = "0"
         ws.Cells(r, 4).value = comment
-        ThisWorkbook.Names.Add Name:=nm, RefersTo:="=Settings!$C$" & r
+        ThisWorkbook.names.Add Name:=nm, refersTo:="=Settings!$C$" & r
         added = added + 1
         report = report & "  - " & nm & ": added at C" & r & vbCrLf
     End If
@@ -235,13 +235,13 @@ End Function
 
 ' ============================================================
 ' Check whether a workbook-level name already exists.
-' Trapping NameExists via On Error is the canonical VBA idiom —
+' Trapping NameExists via On Error is the canonical VBA idiom -
 ' Names("foo") raises a runtime error if not found.
 ' ============================================================
 Private Function NameExists(ByVal nm As String) As Boolean
     Dim n As Name
     On Error Resume Next
-    Set n = ThisWorkbook.Names(nm)
+    Set n = ThisWorkbook.names(nm)
     On Error GoTo 0
     NameExists = Not (n Is Nothing)
 End Function

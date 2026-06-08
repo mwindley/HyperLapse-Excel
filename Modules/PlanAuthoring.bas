@@ -1,29 +1,29 @@
 Attribute VB_Name = "PlanAuthoring"
 ' ============================================================
-' HyperLapse Cart — Plan Authoring Helpers (P5)
+' HyperLapse Cart - Plan Authoring Helpers (P5)
 '
 ' Middle-zone row management for the Plan sheet.
 '
 ' Public entries (assign to ribbon buttons or shapes):
-'   AddPlanRowFromLog    — read selected right-zone row, append
+'   AddPlanRowFromLog    - read selected right-zone row, append
 '                          middle-zone row with sensible defaults
-'   AddBlankPlanRow      — append empty middle-zone row
-'   InsertPlanRowAbove   — operator selects a middle row;
+'   AddBlankPlanRow      - append empty middle-zone row
+'   InsertPlanRowAbove   - operator selects a middle row;
 '                          inserts blank row above it
-'   DeletePlanRow        — operator selects a middle row;
+'   DeletePlanRow        - operator selects a middle row;
 '                          deletes it and shifts rows up
-'   RebuildAnchorDV      — refresh the dynamic dropdowns on a
+'   RebuildAnchorDV      - refresh the dynamic dropdowns on a
 '                          single anchor-ref cell (called from
 '                          the Plan sheet's Worksheet_SelectionChange
-'                          event handler — see comment block at
+'                          event handler - see comment block at
 '                          bottom for the snippet to paste into
 '                          the Plan sheet's code module)
 '
-' Day 19 — initial P5 implementation.
-' Day 20 — P6 column shift: middle zone now M..AA (was M..Y).
+' Day 19 - initial P5 implementation.
+' Day 20 - P6 column shift: middle zone now M..AA (was M..Y).
 '          Two new columns inserted after Anchor ref (col O):
-'            P = Offset (min)   — editable, blank=0
-'            Q = Fires at       — derived formula (anchor resolver)
+'            P = Offset (min)   - editable, blank=0
+'            Q = Fires at       - derived formula (anchor resolver)
 '          Old cols P..Y shifted +2 to R..AA. All Cells(r,c) column
 '          numbers from 16 upward in this module bumped accordingly.
 '          Right zone ALSO shifted +2 to AC..AL to avoid AA collision
@@ -32,15 +32,15 @@ Attribute VB_Name = "PlanAuthoring"
 '          WP # convention also tightened: H column and Anchor ref
 '          both use WP01..WPNN text strings (was integer in H,
 '          "WP<n>" in O). BuildWPList updated to read strings.
-' Day 20 — Session E: significant vocabulary + layout refinement.
+' Day 20 - Session E: significant vocabulary + layout refinement.
 '          Middle zone expanded to M..AB (16 cols, was 15). Right zone
 '          shifted one more column to AD..AM. Visual gutter at AC.
 '          - Dropped: S (Target type), U (KF), Z (End anchor)
-'          - Added:   R (Total dur — derived), V (Ry), W (Rp),
+'          - Added:   R (Total dur - derived), V (Ry), W (Rp),
 '                     Z (Ease)
 '          - Action vocabulary refined to:
 '              Pan Follow / Lock / Move / Track / Track-yaw / END
-'            (Day-19 "Approach" word dropped — split into Move for
+'            (Day-19 "Approach" word dropped - split into Move for
 '             static targets and Track for moving astro targets.)
 '          - Step column (M) is now text formula "GP01"/"GP02"/...
 '            instead of numeric.
@@ -54,24 +54,24 @@ Attribute VB_Name = "PlanAuthoring"
 ' Plan sheet middle-zone columns (Session E layout):
 '   M=Step("GP01"), N=AnchorType, O=AnchorRef, P=Offset(min),
 '   Q=Fires at(fml), R=Total dur(fml), S=Action, T=Target,
-'   U=Rate, V=Ry, W=Rp, X=Δyaw, Y=Δpitch, Z=Ease, AA=Move t,
+'   U=Rate, V=Ry, W=Rp, X=dyaw, Y=dpitch, Z=Ease, AA=Move t,
 '   AB=Note
 '
 ' Right zone (Session E: shifted +1 from P6):
 '   AD=LogRow#, AE=Time, AF=Type, AG=AstroTgt, AH=KF, AI=Ry,
-'   AJ=Pitch, AK=Δyaw, AL=Δpitch, AM=Label
+'   AJ=Pitch, AK=dyaw, AL=dpitch, AM=Label
 '
-' Day 20 — Session E patch (Session F day 21 import): em-dash
+' Day 20 - Session E patch (Session F day 21 import): em-dash
 ' string literals replaced with EmDash() helper returning
-' ChrW(8212). VBE import had been mangling the literal "—" into
-' "â€"" (UTF-8-as-Win1252 reinterpretation). ChrW path is
+' ChrW(8212). VBE import had been mangling the literal "-" into
+' "--"" (UTF-8-as-Win1252 reinterpretation). ChrW path is
 ' bullet-proof across export/import round-trips.
 '
-' Day 21 (Session F) — workfront #67 Phase 1: operator-facing
+' Day 21 (Session F) - workfront #67 Phase 1: operator-facing
 ' rename mw -> gc. Anchor-ref DV list updated to gcrise/gctransit/
 ' gcset; AddPlanRowFromLog heuristic outputs "gc" (accepts either
 ' "gc" or "mw" on input for back-compat with pre-rename logs).
-' Cart wire protocol stays "mw" — AstroPush.bas unchanged.
+' Cart wire protocol stays "mw" - AstroPush.bas unchanged.
 ' ============================================================
 
 Option Explicit
@@ -91,14 +91,14 @@ Private Const DERIVED_FILL_COLOR As Long = &HF5F5F5
 
 
 ' ============================================================
-' Public — AddPlanRowFromLog
+' Public - AddPlanRowFromLog
 ' ============================================================
 ' Reads the right-zone row containing the active cell; appends
 ' a new middle-zone row at the bottom with sensible defaults
 ' derived from the log row's Type (Session E vocabulary):
 '   Type=marker -> Move with target = log label, Ry/Rp auto-fill
 '   Type=astro  -> Move with astro object target, anchor=astro event,
-'                  Δyaw/Δpitch copied from capture
+'                  dyaw/dpitch copied from capture
 Public Sub AddPlanRowFromLog()
     On Error GoTo ErrHandler
 
@@ -119,7 +119,7 @@ Public Sub AddPlanRowFromLog()
         Exit Sub
     End If
 
-    ' Verify selection is in right zone — col AA or later
+    ' Verify selection is in right zone - col AA or later
     If ActiveCell.Column < Range(RIGHT_COL_FIRST & "1").Column Then
         MsgBox "Active cell is not in the right zone (GimbalLog " & _
                "reference). Click into a right-zone row first.", _
@@ -152,7 +152,7 @@ Public Sub AddPlanRowFromLog()
 
     ' Seed defaults based on log row type.
     ' Session E vocabulary: Move (static target) / Track (moving astro).
-    ' marker → Move; astro framing → Move with astro target + Δ (the row
+    ' marker -> Move; astro framing -> Move with astro target + d (the row
     ' fires at the astro event anchor, target=sun/moon/gc resolves to
     ' that object's position at fire time).
     Dim defAction As String:     defAction = "Move"
@@ -176,10 +176,10 @@ Public Sub AddPlanRowFromLog()
             defNote = "Move to " & logLabel & " (from GimbalLog row " & _
                       wsPlan.Cells(selRow, 30).value & ")"
         Case "astro"
-            ' Astro framing — operator captured Δyaw/Δpitch from a predicted
+            ' Astro framing - operator captured dyaw/dpitch from a predicted
             ' astro position. In Session E vocabulary the row is a Move to
             ' the astro object (target = sun/moon/gc) anchored on the astro
-            ' event (sunset/sunrise/etc.) with the captured Δ.
+            ' event (sunset/sunrise/etc.) with the captured d.
             defAnchorType = "ASTRO"
             ' If AstroTgt names an event (sunset, moonrise, etc.) use it as
             ' the anchor; otherwise fall back to sunset placeholder.
@@ -191,7 +191,7 @@ Public Sub AddPlanRowFromLog()
             ' Target is the object the astro event names. Heuristic:
             '   sunset/sunrise          -> sun
             '   moonrise/moonset        -> moon
-            '   gcrise/gctransit/gcset  -> gc (Galactic Centre — Milky Way core)
+            '   gcrise/gctransit/gcset  -> gc (Galactic Centre - Milky Way core)
             ' We also accept the legacy "mw*" tokens since the firmware
             ' protocol still uses "mw" and any pre-rename GimbalLog rows
             ' will have "mw*" anchor refs. Workfront #67.
@@ -218,7 +218,7 @@ Public Sub AddPlanRowFromLog()
     End Select
 
     ' Write the new row (Session E signature: target, rate, ry, rp, dyaw,
-    ' dpitch, ease, moveTime, note — no targetType/kf/endAnchor params)
+    ' dpitch, ease, moveTime, note - no targetType/kf/endAnchor params)
     WriteMiddleRow wsPlan, newRow, _
                    defAnchorType, defAnchorRef, _
                    defAction, defTarget, defRate, _
@@ -228,7 +228,7 @@ Public Sub AddPlanRowFromLog()
     LogEventSafe "PLAN", "AddPlanRowFromLog: row " & newRow & " from " & _
                           "log row " & selRow & " (" & logType & ")"
 
-    Application.Goto wsPlan.Cells(newRow, 14), False   ' jump to new row, col N
+    Application.GoTo wsPlan.Cells(newRow, 14), False   ' jump to new row, col N
 
     Exit Sub
 ErrHandler:
@@ -238,7 +238,7 @@ End Sub
 
 
 ' ============================================================
-' Public — AddBlankPlanRow
+' Public - AddBlankPlanRow
 ' ============================================================
 Public Sub AddBlankPlanRow()
     On Error GoTo ErrHandler
@@ -253,7 +253,7 @@ Public Sub AddBlankPlanRow()
         Exit Sub
     End If
 
-    ' Write a minimal seed — Session E signature
+    ' Write a minimal seed - Session E signature
     WriteMiddleRow wsPlan, newRow, _
                    "WP", "WP01", _
                    "Move", "", "Cinematic ease", _
@@ -262,7 +262,7 @@ Public Sub AddBlankPlanRow()
                    "(blank row)"
 
     LogEventSafe "PLAN", "AddBlankPlanRow: row " & newRow
-    Application.Goto wsPlan.Cells(newRow, 14), False
+    Application.GoTo wsPlan.Cells(newRow, 14), False
 
     Exit Sub
 ErrHandler:
@@ -272,7 +272,7 @@ End Sub
 
 
 ' ============================================================
-' Public — InsertPlanRowAbove
+' Public - InsertPlanRowAbove
 ' ============================================================
 ' Operator selects a middle-zone row. Inserts a blank row at
 ' that row index; existing rows from there down shift one row
@@ -309,7 +309,7 @@ Public Sub InsertPlanRowAbove()
     Dim lastRow As Long
     lastRow = LastPopulatedMiddleRow(wsPlan)
     If lastRow >= PLAN_FIRST_ROW + PLAN_MAX_ROWS - 1 Then
-        MsgBox "Middle zone is full — cannot shift rows down.", _
+        MsgBox "Middle zone is full - cannot shift rows down.", _
                vbExclamation, "InsertPlanRowAbove"
         Exit Sub
     End If
@@ -334,7 +334,7 @@ Public Sub InsertPlanRowAbove()
                    "(inserted blank)"
 
     LogEventSafe "PLAN", "InsertPlanRowAbove: at row " & selRow
-    Application.Goto wsPlan.Cells(selRow, 14), False
+    Application.GoTo wsPlan.Cells(selRow, 14), False
 
     Exit Sub
 ErrHandler:
@@ -344,7 +344,7 @@ End Sub
 
 
 ' ============================================================
-' Public — DeletePlanRow
+' Public - DeletePlanRow
 ' ============================================================
 Public Sub DeletePlanRow()
     On Error GoTo ErrHandler
@@ -405,7 +405,7 @@ End Sub
 
 
 ' ============================================================
-' Public — RebuildAnchorDV
+' Public - RebuildAnchorDV
 ' ============================================================
 ' Called from Plan sheet's Worksheet_SelectionChange handler.
 ' Looks at Target cell's row, reads the Anchor type (col N), and
@@ -456,14 +456,14 @@ Public Sub RebuildAnchorDV(ByVal cellAnchorRef As Range)
             cellAnchorRef.Validation.ShowInput = True
             cellAnchorRef.Validation.ShowError = False
         Case "TIME"
-            ' No dropdown — free text HH:MM. Validation cleared above.
+            ' No dropdown - free text HH:MM. Validation cleared above.
         Case Else
-            ' Unknown / blank — leave cleared
+            ' Unknown / blank - leave cleared
     End Select
 
     Exit Sub
 ErrHandler:
-    ' Silent — DV refresh failures shouldn't break authoring flow
+    ' Silent - DV refresh failures shouldn't break authoring flow
 End Sub
 
 
@@ -475,7 +475,7 @@ End Sub
 Private Function NextFreeMiddleRow(ByVal ws As Worksheet) As Long
     Dim r As Long
     For r = PLAN_FIRST_ROW To PLAN_FIRST_ROW + PLAN_MAX_ROWS - 1
-        If IsEmpty(ws.Cells(r, 14).value) Then     ' col N — Anchor type
+        If IsEmpty(ws.Cells(r, 14).value) Then     ' col N - Anchor type
             NextFreeMiddleRow = r
             Exit Function
         End If
@@ -507,7 +507,7 @@ End Function
 '   21=U Rate
 '
 ' Cols P (Offset), Q (Fires at), R (Total dur) are operator/formula
-' territory — this helper does NOT write them; Offset is operator-
+' territory - this helper does NOT write them; Offset is operator-
 ' filled, Fires-at and Total-dur are seeded by formula on row creation
 ' (the mockup pre-fills the formula; this helper assumes it's there).
 Private Sub WriteMiddleRow(ByVal ws As Worksheet, ByVal r As Long, _
@@ -557,11 +557,11 @@ End Sub
 
 ' Copy one middle-zone row to another row.
 ' Special columns (Session E):
-'   13 (M) Step — re-formula at new row, not copied
-'   17 (Q) Fires at — re-formula at new row. References same-row N/O/P
+'   13 (M) Step - re-formula at new row, not copied
+'   17 (Q) Fires at - re-formula at new row. References same-row N/O/P
 '          so a value-copy would freeze the destination to the source's
 '          resolved time.
-'   18 (R) Total dur — re-formula at new row. References same-row Q
+'   18 (R) Total dur - re-formula at new row. References same-row Q
 '          and next-row Q; value-copy would freeze incorrectly.
 Private Sub CopyMiddleRow(ByVal ws As Worksheet, _
                           ByVal srcRow As Long, ByVal dstRow As Long)
@@ -570,11 +570,11 @@ Private Sub CopyMiddleRow(ByVal ws As Worksheet, _
     Dim c As Long
     For c = midFirstCol To midLastCol
         If c = 13 Then
-            ' Step column — re-formula, not copy
+            ' Step column - re-formula, not copy
             ws.Cells(dstRow, 13).Formula = _
                 "=""GP"" & TEXT(ROW()-" & (PLAN_FIRST_ROW - 1) & ",""00"")"
         ElseIf c = 17 Or c = 18 Then
-            ' Fires at / Total dur — copy the formula text verbatim.
+            ' Fires at / Total dur - copy the formula text verbatim.
             ' Excel updates relative refs to the destination row automatically.
             ws.Cells(dstRow, c).Formula = ws.Cells(srcRow, c).Formula
         Else
@@ -593,7 +593,7 @@ Private Function BuildWPList(ByVal ws As Worksheet) As String
     Dim r As Long
     For r = PLAN_FIRST_ROW To PLAN_FIRST_ROW + PLAN_MAX_ROWS - 1
         Dim v As Variant
-        v = ws.Cells(r, 2).value     ' col B — WP label
+        v = ws.Cells(r, 2).value     ' col B - WP label
         If Not IsEmpty(v) Then
             Dim sv As String: sv = Trim(CStr(v))
             If Len(sv) > 0 Then
@@ -605,7 +605,7 @@ Private Function BuildWPList(ByVal ws As Worksheet) As String
     BuildWPList = s
 End Function
 
-' Em-dash returned via ChrW so the .bas source stays ASCII —
+' Em-dash returned via ChrW so the .bas source stays ASCII -
 ' avoids encoding loss during VBE export/import round-trips. The
 ' VBE writes .bas files in Windows-1252; em-dash (Unicode U+2014)
 ' round-trips cleanly through that path, but external editors and
@@ -623,11 +623,11 @@ End Sub
 
 
 ' ============================================================
-' Sheet-module snippet — paste into the Plan sheet's code module
+' Sheet-module snippet - paste into the Plan sheet's code module
 ' ============================================================
 ' To enable the dynamic anchor-ref dropdowns (#5 in P5), paste
 ' this Worksheet_SelectionChange handler into the Plan sheet's
-' code module (not into PlanAuthoring.bas — has to live in the
+' code module (not into PlanAuthoring.bas - has to live in the
 ' sheet itself):
 '
 ' --- Begin paste ---

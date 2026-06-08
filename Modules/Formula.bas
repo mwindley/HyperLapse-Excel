@@ -1,6 +1,6 @@
 Attribute VB_Name = "Formula"
 ' ============================================================
-' HyperLapse Cart — Simple Fallback Formula Module
+' HyperLapse Cart - Simple Fallback Formula Module
 '
 ' PURPOSE
 '   Excel-side implementation of the simple formula that
@@ -10,7 +10,7 @@ Attribute VB_Name = "Formula"
 '
 '   This module is the Excel half of WORKFRONT #36 / #36a.
 '   The matching cart firmware (#36b) does not yet exist;
-'   PushFormulaToCart still POSTs the payload — the 404 from
+'   PushFormulaToCart still POSTs the payload - the 404 from
 '   the cart is acceptable and confirms the Excel side works.
 '
 ' ARCHITECTURE
@@ -39,16 +39,16 @@ Attribute VB_Name = "Formula"
 '       to cart /exposure/load.
 '
 ' PUBLIC ENTRY POINTS
-'   InitFallbackFormula   — one-shot setup, builds the sheet
-'   FormulaTv             — UDF: =FormulaTv(t_rel, branch, sunEvent)
-'   FormulaISO            — UDF: =FormulaISO(t_rel, branch, sunEvent)
-'   PushFormulaToCart     — POSTs active branch to /exposure/load
-'   AddBranch             — copies an existing branch into a new column
+'   InitFallbackFormula   - one-shot setup, builds the sheet
+'   FormulaTv             - UDF: =FormulaTv(t_rel, branch, sunEvent)
+'   FormulaISO            - UDF: =FormulaISO(t_rel, branch, sunEvent)
+'   PushFormulaToCart     - POSTs active branch to /exposure/load
+'   AddBranch             - copies an existing branch into a new column
 '
 ' DESIGN NOTES
 '   - Sunrise is stored independently of sunset (not mirrored).
 '     Appendix A has different t_rel values for sunrise crossovers
-'     than for sunset — sunrise is darker by operator design
+'     than for sunset - sunrise is darker by operator design
 '     (luminance target 40 vs sunset 60) to preserve blue/orange
 '     contrast. See EXPOSURE_FALLBACK.md.
 '   - sunEvent parameter is "Sunset" or "Sunrise" (case-insensitive).
@@ -56,14 +56,14 @@ Attribute VB_Name = "Formula"
 '     choices; they appear as parameters in the sheet but are
 '     NOT expected to be re-fitted (see WORKFRONTS #36a).
 '   - The formula reproduces Appendix A exactly when default
-'     parameters are in place — verify with the live evaluator.
+'     parameters are in place - verify with the live evaluator.
 ' ============================================================
 
 Option Explicit
 
 Private Const SHEET_NAME As String = "FallbackFormula"
 
-' Layout constants — rows on FallbackFormula sheet
+' Layout constants - rows on FallbackFormula sheet
 ' Day 9 late-late evening: sunrise block added below sunset block.
 ' Each event has its own Tv-crossover and ISO-ramp sections.
 Private Const ROW_TITLE        As Long = 1
@@ -102,10 +102,10 @@ Private Const ROW_LIVE_ISO     As Long = 150
 Private Const ROW_LIVE_BRANCH  As Long = 151    ' shows dataActiveBranch
 
 Private Const COL_PARAM        As Long = 2      ' B
-Private Const COL_DEFAULT      As Long = 3      ' C — first branch column
+Private Const COL_DEFAULT      As Long = 3      ' C - first branch column
 
 ' ============================================================
-' Public — one-shot setup
+' Public - one-shot setup
 ' ============================================================
 
 ' Build the FallbackFormula sheet and seed the default column
@@ -271,18 +271,18 @@ Private Sub EnsureActiveBranchNamedRange()
     ' Try to find an unused cell; convention: put it near the camera state block
     ' If named range already exists, leave it alone.
     Dim nm As Name
-    Dim nameExists As Boolean
-    nameExists = False
+    Dim NameExists As Boolean
+    NameExists = False
     For Each nm In ThisWorkbook.names
         If nm.Name = "dataActiveBranch" Then
-            nameExists = True
+            NameExists = True
             Exit For
         End If
     Next nm
 
-    If nameExists Then Exit Sub
+    If NameExists Then Exit Sub
 
-    ' Place it in an empty cell on Settings — row 44 (below current content)
+    ' Place it in an empty cell on Settings - row 44 (below current content)
     Dim addr As String
     addr = "$C$44"
     wsSet.Range(addr).value = "default"
@@ -290,11 +290,11 @@ Private Sub EnsureActiveBranchNamedRange()
     wsSet.Cells(44, 2).Font.Italic = True
 
     ThisWorkbook.names.Add Name:="dataActiveBranch", _
-                           RefersTo:="=Settings!" & addr
+                           refersTo:="=Settings!" & addr
 End Sub
 
 ' ============================================================
-' UDFs — usable in any cell
+' UDFs - usable in any cell
 ' ============================================================
 
 ' Return Tv string for a given t_rel, branch, and sun event.
@@ -371,7 +371,7 @@ Public Function FormulaTv(ByVal t_rel As Variant, _
     trelVals = trelRange.value     ' 2D array (rows x 1)
     paramVals = paramRange.value
 
-    ' Boundary check — read once, not per row.
+    ' Boundary check - read once, not per row.
     Dim boundaryTrel As Double
     boundaryTrel = CDbl(ws.Cells(isoBoundaryRow, branchCol).value)
 
@@ -409,15 +409,15 @@ End Function
 ' Return ISO integer for a given t_rel, branch, and sun event.
 '
 ' SUNSET ISO logic:
-'   - t < first sunset ISO-ramp row → ISO = base (typically 100)
-'   - else → walk sunset ISO rows; first row whose t_rel >= t gives ISO
-'   - past the last → ISO ceiling
+'   - t < first sunset ISO-ramp row -> ISO = base (typically 100)
+'   - else -> walk sunset ISO rows; first row whose t_rel >= t gives ISO
+'   - past the last -> ISO ceiling
 '
 ' SUNRISE ISO logic (reversed):
-'   - t < first sunrise ISO-ramp row → ISO = ceiling (still deep dark)
-'   - t in ISO ramp range → walk sunrise ISO rows; first row whose
+'   - t < first sunrise ISO-ramp row -> ISO = ceiling (still deep dark)
+'   - t in ISO ramp range -> walk sunrise ISO rows; first row whose
 '     t_rel >= t gives ISO (ramping DOWN from ceiling to base)
-'   - t past last ISO ramp row → ISO = base (Tv-walk zone has ISO=base)
+'   - t past last ISO ramp row -> ISO = base (Tv-walk zone has ISO=base)
 Public Function FormulaISO(ByVal t_rel As Variant, _
                            ByVal branch As Variant, _
                            ByVal sunEvent As Variant) As Variant
@@ -472,13 +472,13 @@ Public Function FormulaISO(ByVal t_rel As Variant, _
     lastTrel = CDbl(trelVals(UBound(trelVals, 1), 1))
 
     If Not sunriseSide Then
-        ' Sunset: before ramp → base; after last → ceiling
+        ' Sunset: before ramp -> base; after last -> ceiling
         If t < firstTrel Then
             FormulaISO = isoBase
             Exit Function
         End If
     Else
-        ' Sunrise: after ramp end → base (Tv-walk zone)
+        ' Sunrise: after ramp end -> base (Tv-walk zone)
         If t > lastTrel Then
             FormulaISO = isoBase
             Exit Function
@@ -514,10 +514,10 @@ End Function
 ' ============================================================
 
 ' POST current active branch's parameters to cart /exposure/load.
-' Wired for double-click via Buttons.RunButton — bind to a button
+' Wired for double-click via Buttons.RunButton - bind to a button
 ' cell on Control sheet named btnPushFormula.
 '
-' Wire format (UPDATED Day 12 — GET query string, was JSON POST):
+' Wire format (UPDATED Day 12 - GET query string, was JSON POST):
 '   /exposure/load?br=<name>&tvc=<sec>&isoc=<int>&isob=<int>
 '                  &t0ss=<sunset-seconds>&t0sr=<sunrise-seconds>
 '                  &cross=<sunset-trel-at-astro-sunset>
@@ -542,7 +542,7 @@ End Function
 '
 ' Tv format note: Excel stores Tv as "1/500" / "0.5" / "20" (dot
 ' decimals). Cart firmware will translate to Canon's seconds-symbol
-' format ("0\"5" etc.) when applying to camera — that's #36d's job.
+' format ("0\"5" etc.) when applying to camera - that's #36d's job.
 ' This sub sends Excel's native format unmodified.
 '
 ' Firmware endpoint /exposure/load implemented Day 12 in #36b.
@@ -562,7 +562,7 @@ Public Sub PushFormulaToCart()
     End If
 
     ' Read cached event times from Settings (populated by GetSunsetTime
-    ' API call — operator should refresh before pushing if stale).
+    ' API call - operator should refresh before pushing if stale).
     Dim sunsetTime As Date, sunriseTime As Date, astroDusk As Date
     Dim setSheet As Worksheet
     Set setSheet = ThisWorkbook.Sheets("Settings")
@@ -571,7 +571,7 @@ Public Sub PushFormulaToCart()
     astroDusk = setSheet.Range("dataAstroDusk").value
 
     If sunsetTime = 0 Or sunriseTime = 0 Or astroDusk = 0 Then
-        LogEvent "FORMULA", "PushFormulaToCart: event times missing — run Get Sunset Time first"
+        LogEvent "FORMULA", "PushFormulaToCart: event times missing - run Get Sunset Time first"
         MsgBox "Sunset/sunrise/astro times not set. Click 'Get Sunset Time' first.", vbExclamation
         Exit Sub
     End If
@@ -686,7 +686,7 @@ End Function
 ' ============================================================
 
 ' Add a new branch by copying an existing branch's column.
-' Usage: AddBranch "bright", "default" — copies default into a new
+' Usage: AddBranch "bright", "default" - copies default into a new
 ' rightmost column labelled "bright".
 Public Sub AddBranch(ByVal newBranchName As String, _
                      ByVal copyFromBranch As String)
@@ -767,7 +767,7 @@ Private Function LastBranchColumn() As Long
     LastBranchColumn = last
 End Function
 
-' Param names look like "Tv=1/5000 (ISO 100)" — extract Tv string.
+' Param names look like "Tv=1/5000 (ISO 100)" - extract Tv string.
 Private Function ExtractTvFromParamName(ByVal paramName As String) As String
     Dim eqPos As Long, spcPos As Long
     eqPos = InStr(paramName, "Tv=")
@@ -776,7 +776,7 @@ Private Function ExtractTvFromParamName(ByVal paramName As String) As String
         Exit Function
     End If
     Dim rest As String
-    rest = Mid(paramName, eqPos + 3)
+    rest = mid(paramName, eqPos + 3)
     spcPos = InStr(rest, " ")
     If spcPos > 0 Then
         ExtractTvFromParamName = Left(rest, spcPos - 1)
@@ -785,14 +785,14 @@ Private Function ExtractTvFromParamName(ByVal paramName As String) As String
     End If
 End Function
 
-' Param names look like "ISO=125 at t_rel (sec)" or "Tv=... (ISO 100)" —
+' Param names look like "ISO=125 at t_rel (sec)" or "Tv=... (ISO 100)" -
 ' extract the ISO integer.
 Private Function ExtractIsoFromParamName(ByVal paramName As String) As Long
     Dim eqPos As Long
     eqPos = InStr(paramName, "ISO=")
     If eqPos > 0 Then
         Dim rest As String
-        rest = Mid(paramName, eqPos + 4)
+        rest = mid(paramName, eqPos + 4)
         Dim spcPos As Long
         spcPos = InStr(rest, " ")
         If spcPos > 0 Then
@@ -811,7 +811,7 @@ Private Function ExtractIsoFromParamName(ByVal paramName As String) As Long
         isoStart = parenPos + 5
         closePos = InStr(isoStart, paramName, ")")
         If closePos > 0 Then
-            ExtractIsoFromParamName = CLng(Mid(paramName, isoStart, closePos - isoStart))
+            ExtractIsoFromParamName = CLng(mid(paramName, isoStart, closePos - isoStart))
             Exit Function
         End If
     End If
@@ -822,12 +822,12 @@ End Function
 ' Old World Table defaults (Appendix A) for seeding the default branch
 ' ============================================================
 
-' Sunset Tv crossovers — 51 rows from Appendix A.
+' Sunset Tv crossovers - 51 rows from Appendix A.
 ' Returns a 2D variant array: rows = Tv crossovers, columns = (t_rel, Tv_str, ISO).
 Private Function SunsetTvDefaults() As Variant
-    Const N As Long = 51
+    Const n As Long = 51
     Dim out() As Variant
-    ReDim out(0 To N - 1, 0 To 2)
+    ReDim out(0 To n - 1, 0 To 2)
 
     out(0, 0) = -4800: out(0, 1) = "1/5000": out(0, 2) = 100
     out(1, 0) = -4020: out(1, 1) = "1/4000": out(1, 2) = 100
@@ -884,11 +884,11 @@ Private Function SunsetTvDefaults() As Variant
     SunsetTvDefaults = out
 End Function
 
-' Sunset ISO ramp — 12 rows from Appendix A (Tv pinned at 20s ceiling).
+' Sunset ISO ramp - 12 rows from Appendix A (Tv pinned at 20s ceiling).
 Private Function SunsetIsoDefaults() As Variant
-    Const N As Long = 12
+    Const n As Long = 12
     Dim out() As Variant
-    ReDim out(0 To N - 1, 0 To 1)
+    ReDim out(0 To n - 1, 0 To 1)
 
     out(0, 0) = 3360:  out(0, 1) = 125
     out(1, 0) = 3420:  out(1, 1) = 160
@@ -906,15 +906,15 @@ Private Function SunsetIsoDefaults() As Variant
     SunsetIsoDefaults = out
 End Function
 
-' Sunrise ISO ramp — 14 rows from Appendix A.
+' Sunrise ISO ramp - 14 rows from Appendix A.
 ' Sunrise STARTS in deep dark with ISO at ceiling (1600), Tv at ceiling (20s).
 ' ISO walks down to base (100) as t_rel becomes less negative.
 ' Last two rows are the "held at ISO 100 / Tv 20s" period before Tv begins
 ' walking out.
 Private Function SunriseIsoDefaults() As Variant
-    Const N As Long = 14
+    Const n As Long = 14
     Dim out() As Variant
-    ReDim out(0 To N - 1, 0 To 1)
+    ReDim out(0 To n - 1, 0 To 1)
 
     out(0, 0) = -5940:  out(0, 1) = 1600
     out(1, 0) = -5760:  out(1, 1) = 1250
@@ -934,13 +934,13 @@ Private Function SunriseIsoDefaults() As Variant
     SunriseIsoDefaults = out
 End Function
 
-' Sunrise Tv crossovers — 49 rows from Appendix A.
+' Sunrise Tv crossovers - 49 rows from Appendix A.
 ' Tv walks from 20s (ceiling) down through to 1/5000 as t_rel goes from
 ' -4380 (just after ISO ramp ends) to +60 (one minute past sunrise).
 Private Function SunriseTvDefaults() As Variant
-    Const N As Long = 49
+    Const n As Long = 49
     Dim out() As Variant
-    ReDim out(0 To N - 1, 0 To 2)
+    ReDim out(0 To n - 1, 0 To 2)
 
     out(0, 0) = -4380:  out(0, 1) = "15":     out(0, 2) = 100
     out(1, 0) = -4320:  out(1, 1) = "13":     out(1, 2) = 100

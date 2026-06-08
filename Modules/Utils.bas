@@ -1,42 +1,42 @@
 Attribute VB_Name = "Utils"
 ' ============================================================
-' HyperLapse Cart — Utility Module
+' HyperLapse Cart  -  Utility Module
 '
 ' PURPOSE
 '   Shared helpers used by every other module. Roughly grouped:
 '
 '   ASTRONOMICAL TIMING
-'     GetSunsetTime / GetSunriseTime — fetch from sunrise-sunset.org
+'     GetSunsetTime / GetSunriseTime  -  fetch from sunrise-sunset.org
 '       and populate Settings named ranges (sunset, sunrise, civil dusk,
 '       nautical dusk, astronomical dusk). One API call populates all.
-'     CalculatePhaseTimes — convert sunset/sunrise into the 7 phase
+'     CalculatePhaseTimes  -  convert sunset/sunrise into the 7 phase
 '       boundary timestamps used by SequenceLoop.
-'     GetCurrentPhase / PhaseLabel — runtime "what phase are we in?"
+'     GetCurrentPhase / PhaseLabel  -  runtime "what phase are we in?"
 '
 '   SHUTTER MATH
-'     TvToSeconds / SecondsToTv — convert between CCAPI shutter strings
+'     TvToSeconds / SecondsToTv  -  convert between CCAPI shutter strings
 '       ("1/5000", "0.3", "20") and floating-point seconds.
-'     CalcInterval — minimum safe interval between shots given a shutter.
+'     CalcInterval  -  minimum safe interval between shots given a shutter.
 '
 '   CART ACTION HELPERS (called from Sequence.RunCartReplayStep)
 '     CartButton, CartSetSpeed, CartSetSteering, CartStop, CartDecay
-'     PollCartLog / StartCartLogPolling / StopCartLogPolling — pull the
+'     PollCartLog / StartCartLogPolling / StopCartLogPolling  -  pull the
 '       Arduino''s high-speed cart event log into the CartLog sheet for
 '       later post-processing into a replay plan.
 '
 '   SHARED PLUMBING
-'     UpdateMonitor — refreshes the Monitor sheet from named ranges.
-'     ParseJsonField — minimal JSON value extractor (used by Camera too).
-'     LogEvent — append to the Log sheet. Called by every module.
+'     UpdateMonitor  -  refreshes the Monitor sheet from named ranges.
+'     ParseJsonField  -  minimal JSON value extractor (used by Camera too).
+'     LogEvent  -  append to the Log sheet. Called by every module.
 ' ============================================================
 
 Option Explicit
 
 ' ============================================================
 ' Sunrise / Sunset API
-' Free API — no key required
+' Free API  -  no key required
 ' https://api.sunrise-sunset.org/json?lat=&lng=&date=today&formatted=0
-' Returns times in UTC — convert using dataUTCOffset named range
+' Returns times in UTC  -  convert using dataUTCOffset named range
 ' ============================================================
 ' Module-level cache, populated by InitTvLookup
 Private g_tvStrings()  As String   ' Canon-format strings, in camera's reported order
@@ -46,7 +46,7 @@ Private g_tvLoaded     As Boolean
 
 ' Get today's sunset time as Excel serial (local time).
 '
-' Day 18 (Workfront #55) — rewritten:
+' Day 18 (Workfront #55)  -  rewritten:
 '   - Sun rise/set + all twilight phases computed LOCALLY via
 '     Astro.bas FindSunCrossing.
 '   - Moon rise/set times computed LOCALLY via Astro.bas
@@ -71,12 +71,12 @@ Public Function GetSunsetTime() As Date
     Dim shootDate As Date
     shootDate = CDate(Int(Now()))    ' midnight today, local
 
-    ' ─── Sun events — local computation ──────────────────────
+    ' -"--"--"- Sun events  -  local computation -"--"--"--"--"--"--"--"--"--"--"--"--"--"--"--"--"--"--"--"--"--"-
     ' Standard altitudes:
-    '   sunrise/sunset      -0.833° (atmospheric refraction)
-    '   civil twilight      -6°
-    '   nautical twilight   -12°
-    '   astronomical twi.   -18°
+    '   sunrise/sunset      -0.833- deg (atmospheric refraction)
+    '   civil twilight      -6- deg
+    '   nautical twilight   -12- deg
+    '   astronomical twi.   -18- deg
     Dim sunriseT     As Date
     Dim sunsetT      As Date
     Dim civilDawn    As Date
@@ -86,14 +86,14 @@ Public Function GetSunsetTime() As Date
     Dim astroDawn    As Date
     Dim astroDusk    As Date
 
-    sunriseT     = FindSunCrossing(shootDate, -0.833,  1)
-    sunsetT      = FindSunCrossing(shootDate, -0.833, -1)
-    civilDawn    = FindSunCrossing(shootDate, -6#,     1)
-    civilDusk    = FindSunCrossing(shootDate, -6#,    -1)
-    nauticalDawn = FindSunCrossing(shootDate, -12#,    1)
-    nauticalDusk = FindSunCrossing(shootDate, -12#,   -1)
-    astroDawn    = FindSunCrossing(shootDate, -18#,    1)
-    astroDusk    = FindSunCrossing(shootDate, -18#,   -1)
+    sunriseT = FindSunCrossing(shootDate, -0.833, 1)
+    sunsetT = FindSunCrossing(shootDate, -0.833, -1)
+    civilDawn = FindSunCrossing(shootDate, -6#, 1)
+    civilDusk = FindSunCrossing(shootDate, -6#, -1)
+    nauticalDawn = FindSunCrossing(shootDate, -12#, 1)
+    nauticalDusk = FindSunCrossing(shootDate, -12#, -1)
+    astroDawn = FindSunCrossing(shootDate, -18#, 1)
+    astroDusk = FindSunCrossing(shootDate, -18#, -1)
 
     ws.Range("dataSunsetTime").value = sunsetT
     ws.Range("dataSunriseTime").value = sunriseT
@@ -107,7 +107,7 @@ Public Function GetSunsetTime() As Date
              " civDusk=" & Format(civilDusk, "HH:nn") & _
              " astroDusk=" & Format(astroDusk, "HH:nn")
 
-    ' ─── Moon events — .io API (one or two calls) ─────────────
+    ' -"--"--"- Moon events  -  .io API (one or two calls) -"--"--"--"--"--"--"--"--"--"--"--"--"-
     FetchMoonTimesForNight shootDate
 
     GetSunsetTime = sunsetT
@@ -119,11 +119,11 @@ ErrHandler:
 End Function
 
 ' ============================================================
-' FetchMoonTimesForNight  (Day 18, fully local — no internet)
+' FetchMoonTimesForNight  (Day 18, fully local  -  no internet)
 '
 ' Computes moonrise / moonset times for tonight's shoot envelope
 ' using Astro.bas FindMoonCrossing on the local Schlyter
-' ephemeris. Validated Day 18 against timeanddate.com — local
+' ephemeris. Validated Day 18 against timeanddate.com  -  local
 ' maths agreed within 2 minutes (1:07 vs 1:09 for Adelaide
 ' 25-May-2026), whereas api.sunrisesunset.io disagreed by 64
 ' minutes for the same instant. Local maths wins on accuracy
@@ -151,8 +151,8 @@ Public Sub FetchMoonTimesForNight(ByVal shootDate As Date)
     ' If sunrise < sunset (typical: shoot crosses midnight), shift +24h
     If shootSunrise < shootSunset Then shootSunrise = shootSunrise + 1#
 
-    ' Use altitude -0.5° as the horizon definition (matches the
-    ' convention timeanddate.com and most almanacs use — moon's
+    ' Use altitude -0.5- deg as the horizon definition (matches the
+    ' convention timeanddate.com and most almanacs use  -  moon's
     ' upper limb on the horizon, no refraction applied).
     Const MOON_HORIZON As Double = -0.5
 
@@ -160,7 +160,7 @@ Public Sub FetchMoonTimesForNight(ByVal shootDate As Date)
     ' Scan starts at shootSunset, extends to shootSunrise.
     Dim chosenRise As Date
     chosenRise = FindMoonCrossing(shootSunset, MOON_HORIZON, 1)
-    ' FindMoonCrossing scans 24h from its start — clamp to envelope
+    ' FindMoonCrossing scans 24h from its start  -  clamp to envelope
     If chosenRise > shootSunrise Then chosenRise = 0
 
     ' Find moonset. Start the scan from chosenRise if we got one,
@@ -209,7 +209,7 @@ End Function
 ' BUG FIX (May 2026, session 2):
 '   The R3's CCAPI uses Canon's display-format strings for shutter
 '   values, not plain decimals. Sub-second exposures use "1/N" (e.g.
-'   "1/5000") — that part was always correct. But >= 0.3 second
+'   "1/5000")  -  that part was always correct. But >= 0.3 second
 '   exposures use Canon's seconds-symbol notation, with a literal
 '   double-quote standing for "seconds":
 '
@@ -229,7 +229,7 @@ End Function
 '   Rather than hard-code the format (fragile across Canon bodies),
 '   query /ccapi/ver100/shooting/settings/tv at startup, parse the
 '   "ability" array, and build a lookup. The R3 reports its full
-'   accepted shutter list there — anything in that list is guaranteed
+'   accepted shutter list there  -  anything in that list is guaranteed
 '   to work. InitTvLookup is called once from InitShoot. After that,
 '   SecondsToTv picks the closest entry; TvToSeconds parses Canon's
 '   format back to a Double for math.
@@ -256,7 +256,7 @@ Public Sub InitTvLookup()
     If closePos = 0 Then GoTo Fallback
     
     Dim arr As String
-    arr = Mid$(resp, openPos, closePos - openPos)
+    arr = mid$(resp, openPos, closePos - openPos)
     
     ' Each item in the array looks like  "1\/5000"  or  "20\""  or  "0\"5".
     ' Strategy: split on commas FIRST, then process each item:
@@ -264,7 +264,7 @@ Public Sub InitTvLookup()
     '   2. Strip the outer wrapping quotes (the first and last char of each item
     '      are JSON's wrapping quotes, after Trim)
     '   3. Decode the JSON escapes (\/ -> /, \" -> ")
-    ' This order matters — if we decode \" before stripping the wrappers, we
+    ' This order matters  -  if we decode \" before stripping the wrappers, we
     ' lose track of which " is structural and which is the seconds symbol.
     Dim items() As String
     items = Split(arr, ",")
@@ -280,7 +280,7 @@ Public Sub InitTvLookup()
         
         ' Strip exactly one wrapping quote pair, if present
         If Len(s) >= 2 And Left$(s, 1) = Chr(34) And Right$(s, 1) = Chr(34) Then
-            s = Mid$(s, 2, Len(s) - 2)
+            s = mid$(s, 2, Len(s) - 2)
         End If
         
         ' Now decode JSON escapes inside the value
@@ -305,7 +305,7 @@ Public Sub InitTvLookup()
     Exit Sub
     
 Fallback:
-    ' Camera unreachable or unparseable response — fall back to the
+    ' Camera unreachable or unparseable response  -  fall back to the
     ' hard-coded R3 list verified May 2026.
     BuildTvLookupFallback
     LogEvent "UTILS", "Tv lookup fallback used (" & g_tvCount & " values)"
@@ -362,7 +362,7 @@ Private Function ParseCanonTv(ByVal tvStr As String) As Double
         Exit Function
     End If
     
-    ' Canon seconds form — replace the embedded/trailing " with "."
+    ' Canon seconds form  -  replace the embedded/trailing " with "."
     ' "20""    -> "20."  -> 20.0
     ' "1""6"   -> "1.6"  -> 1.6
     ' "0""5"   -> "0.5"  -> 0.5
@@ -380,14 +380,14 @@ BadInput:
     ParseCanonTv = 0
 End Function
 
-' Public conversion API — drop-in replacement for the previous
+' Public conversion API  -  drop-in replacement for the previous
 ' TvToSeconds. Accepts whatever Canon format the camera reported,
 ' returns float seconds.
 Public Function TvToSeconds(ByVal tvStr As String) As Double
     TvToSeconds = ParseCanonTv(tvStr)
 End Function
 
-' Public conversion API — return the Canon-format string nearest to
+' Public conversion API  -  return the Canon-format string nearest to
 ' the requested exposure in seconds. Picks from the lookup populated
 ' at startup. If InitTvLookup hasn't been called yet, calls it now
 ' (lazy init) so callers don't need to think about ordering.
@@ -395,7 +395,7 @@ Public Function SecondsToTv(ByVal secs As Double) As String
     If Not g_tvLoaded Then InitTvLookup
     
     If g_tvCount = 0 Then
-        ' Total failure — return something the camera will at least accept
+        ' Total failure  -  return something the camera will at least accept
         SecondsToTv = "1/5000"
         Exit Function
     End If
@@ -420,14 +420,14 @@ End Function
 
 ' Walk one step through the camera's Tv ability list.
 '
-' g_tvStrings is in the camera's reported order, which is slow → fast
+' g_tvStrings is in the camera's reported order, which is slow --' fast
 ' (e.g. "30""", "25""", "20""", ..., "1/4000", "1/5000", ...). Therefore:
-'   direction = +1  →  one step SLOWER (more light, brighter exposure)
-'   direction = -1  →  one step FASTER (less light, darker exposure)
+'   direction = +1  --'  one step SLOWER (more light, brighter exposure)
+'   direction = -1  --'  one step FASTER (less light, darker exposure)
 '
 ' Returns the new Tv string, or "" if at the wall in the requested
 ' direction. Callers use the empty-string return to detect "knob pinned,
-' switch to the other knob" — see AdjustExposureByLuminance in Camera.bas.
+' switch to the other knob"  -  see AdjustExposureByLuminance in Camera.bas.
 '
 ' Session B helper (May 2026). Replaces the predictive g_phase2a_steps /
 ' g_phase4b_steps tables; feedback walks one camera-Tv-step at a time.
@@ -442,7 +442,7 @@ Public Function NextTv(ByVal currentTv As String, ByVal direction As Integer) As
     Next i
     
     If idx < 0 Then
-        ' currentTv not in the ability list — find the closest by seconds.
+        ' currentTv not in the ability list  -  find the closest by seconds.
         ' This can happen if the operator set Tv to something the camera
         ' accepts but our cached list doesn't have an exact-string match
         ' for (e.g. case differences, whitespace).
@@ -457,17 +457,17 @@ Public Function NextTv(ByVal currentTv As String, ByVal direction As Integer) As
     End If
     
     Dim newIdx As Long
-    ' g_tvStrings is ordered slow → fast (e.g. 30", 25", ..., 1/4000, 1/5000).
+    ' g_tvStrings is ordered slow --' fast (e.g. 30", 25", ..., 1/4000, 1/5000).
     ' To go SLOWER (direction = +1) we move to an EARLIER index;
     ' to go FASTER (direction = -1) we move to a LATER index.
-    ' Subtract, don't add — the natural reading of "+1 = next array slot"
+    ' Subtract, don't add  -  the natural reading of "+1 = next array slot"
     ' gives the wrong physical direction here. Caught in Session B
-    ' validation run, May 2026: Tv was walking 1/5000 → 1/6400 → 1/8000 ...
+    ' validation run, May 2026: Tv was walking 1/5000 --' 1/6400 --' 1/8000 ...
     ' (getting faster) when feedback wanted slower for an under-exposed
     ' indoor frame.
     newIdx = idx - direction
     If newIdx < 0 Or newIdx > g_tvCount - 1 Then
-        NextTv = ""             ' at the wall — caller switches knobs
+        NextTv = ""             ' at the wall  -  caller switches knobs
     Else
         NextTv = g_tvStrings(newIdx)
     End If
@@ -485,11 +485,11 @@ End Function
 ' Application.OnTime's resolution is effectively whole seconds anyway.
 '
 ' Examples:
-'   Tv 1/5000  (0.0002s) → ceiling(0.0002 + 1.5) = ceiling(1.5)  = 2s
-'   Tv 1/8     (0.125s)  → ceiling(0.125 + 1.5)  = ceiling(1.625) = 2s
-'   Tv 1"      (1.0s)    → ceiling(1.0 + 1.5)    = ceiling(2.5)   = 3s
-'   Tv 17"     (17s)     → ceiling(17 + 1.5)     = ceiling(18.5)  = 19s
-'   Tv 20"     (20s)     → ceiling(20 + 1.5)     = ceiling(21.5)  = 22s
+'   Tv 1/5000  (0.0002s) --' ceiling(0.0002 + 1.5) = ceiling(1.5)  = 2s
+'   Tv 1/8     (0.125s)  --' ceiling(0.125 + 1.5)  = ceiling(1.625) = 2s
+'   Tv 1"      (1.0s)    --' ceiling(1.0 + 1.5)    = ceiling(2.5)   = 3s
+'   Tv 17"     (17s)     --' ceiling(17 + 1.5)     = ceiling(18.5)  = 19s
+'   Tv 20"     (20s)     --' ceiling(20 + 1.5)     = ceiling(21.5)  = 22s
 '
 ' Replaces the previous "max(2.0, shutter+2.0)" rule. The new rule
 ' produces faster cadence in the short-exposure tail (2s for everything
@@ -504,7 +504,7 @@ Public Function CalcInterval(ByVal tvStr As String) As Double
 End Function
 
 ' ============================================================
-' Phase timing — all times relative to sunset
+' Phase timing  -  all times relative to sunset
 ' ============================================================
 
 ' Calculate phase start/end times from sunset time
@@ -514,34 +514,34 @@ Public Sub CalculatePhaseTimes()
     sunsetTime = Sheets("Settings").Range("dataSunsetTime").value
     
     If sunsetTime = 0 Then
-        MsgBox "Sunset time not set — run GetSunsetTime() first", vbExclamation
+        MsgBox "Sunset time not set - run GetSunsetTime() first", vbExclamation
         Exit Sub
     End If
     
     Dim ws As Worksheet
     Set ws = Sheets("Settings")
     
-    ' Phase 1 start — fixed at 16:00
+    ' Phase 1 start  -  fixed at 16:00
     ws.Range("dataPhase1Start").value = CDate(Int(Now()) + TimeValue("16:00:00"))
     
-    ' Phase 2a — sunset minus 45 minutes (shutter starts slowing)
+    ' Phase 2a  -  sunset minus 45 minutes (shutter starts slowing)
     ws.Range("dataPhase2aStart").value = sunsetTime - (45 / 1440)
     
-    ' Phase 2b — sunset plus 20 minutes (ISO starts climbing)
+    ' Phase 2b  -  sunset plus 20 minutes (ISO starts climbing)
     ws.Range("dataPhase2bStart").value = sunsetTime + (20 / 1440)
     
-    ' Phase 3 — sunset plus 60 minutes (full night settings)
+    ' Phase 3  -  sunset plus 60 minutes (full night settings)
     ws.Range("dataPhase3Start").value = sunsetTime + (60 / 1440)
     
-    ' Phase 4a — get tomorrow's sunrise minus 90 minutes
+    ' Phase 4a  -  get tomorrow's sunrise minus 90 minutes
     Dim sunriseTime As Date
     sunriseTime = Sheets("Settings").Range("dataSunriseTime").value
     ws.Range("dataPhase4aStart").value = sunriseTime - (90 / 1440)
     
-    ' Phase 4b — sunrise minus 45 minutes
+    ' Phase 4b  -  sunrise minus 45 minutes
     ws.Range("dataPhase4bStart").value = sunriseTime - (45 / 1440)
     
-    ' Phase 5 — sunrise time
+    ' Phase 5  -  sunrise time
     ws.Range("dataPhase5Start").value = sunriseTime
     
     LogEvent "UTILS", "Phase times calculated from sunset " & Format(sunsetTime, "HH:nn:ss")
@@ -613,12 +613,12 @@ End Sub
 ' Return human-readable phase label
 Public Function PhaseLabel(ByVal phase As Integer) As String
     Select Case phase
-        Case 1:  PhaseLabel = "Phase 1 — Daytime"
-        Case 22: PhaseLabel = "Phase 2a — Shutter transition"
-        Case 23: PhaseLabel = "Phase 2b — ISO ramp"
-        Case 3:  PhaseLabel = "Phase 3 — Full night"
-        Case 4:  PhaseLabel = "Phase 4 — Pre-sunrise"
-        Case 5:  PhaseLabel = "Phase 5 — Daytime"
+        Case 1:  PhaseLabel = "Phase 1  -  Daytime"
+        Case 22: PhaseLabel = "Phase 2a  -  Shutter transition"
+        Case 23: PhaseLabel = "Phase 2b  -  ISO ramp"
+        Case 3:  PhaseLabel = "Phase 3  -  Full night"
+        Case 4:  PhaseLabel = "Phase 4  -  Pre-sunrise"
+        Case 5:  PhaseLabel = "Phase 5  -  Daytime"
         Case Else: PhaseLabel = "Unknown"
     End Select
 End Function
@@ -742,15 +742,15 @@ Public Sub PollCartLog()
     End If
     
     Dim response As String
-    response = Trim(http.ResponseText)
+    response = Trim(http.responseText)
     Set http = Nothing
     
     If response = "" Or response = "EMPTY" Then Exit Sub
     
     Dim ws As Worksheet
     Set ws = Sheets("CartLog")
-    Dim nextRow As Long
-    nextRow = ws.Cells(ws.Rows.count, 1).End(xlUp).row + 1
+    Dim NextRow As Long
+    NextRow = ws.Cells(ws.rows.count, 1).End(xlUp).row + 1
     
     Dim lines() As String
     lines = Split(response, Chr(10))
@@ -762,10 +762,10 @@ Public Sub PollCartLog()
             Dim fields() As String
             fields = Split(line, ",")
             If UBound(fields) >= 2 Then
-                ws.Cells(nextRow, 1).value = fields(0)  ' HH:MM:SS
-                ws.Cells(nextRow, 2).value = fields(1)  ' S/T/X
-                ws.Cells(nextRow, 3).value = fields(2)  ' value
-                nextRow = nextRow + 1
+                ws.Cells(NextRow, 1).value = fields(0)  ' HH:MM:SS
+                ws.Cells(NextRow, 2).value = fields(1)  ' S/T/X
+                ws.Cells(NextRow, 3).value = fields(2)  ' value
+                NextRow = NextRow + 1
             End If
         End If
     Next i
@@ -787,7 +787,7 @@ Public Sub StopCartLogPolling()
 End Sub
 
 ' ============================================================
-' JSON helpers (shared — also used by Camera module)
+' JSON helpers (shared  -  also used by Camera module)
 ' ============================================================
 
 ' Escape a value for safe inclusion inside a JSON string literal.
@@ -796,7 +796,7 @@ End Sub
 ' going into a request body.
 Public Function JsonEscape(ByVal s As String) As String
     Dim out As String
-    out = Replace(s, "\", "\\")          ' must come first — escapes existing backslashes
+    out = Replace(s, "\", "\\")          ' must come first  -  escapes existing backslashes
     out = Replace(out, Chr(34), "\""")   ' " -> \"
     out = Replace(out, vbTab, "\t")
     out = Replace(out, vbCr, "\r")
@@ -816,25 +816,25 @@ Public Function ParseJsonField(ByVal json As String, ByVal field As String) As S
         Exit Function
     End If
     pos = pos + Len(searchStr)
-    Do While Mid(json, pos, 1) = " "
+    Do While mid(json, pos, 1) = " "
         pos = pos + 1
     Loop
-    If Mid(json, pos, 1) = """" Then
+    If mid(json, pos, 1) = """" Then
         pos = pos + 1
         Dim endPos As Long
         endPos = InStr(pos, json, """")
-        ParseJsonField = Mid(json, pos, endPos - pos)
-    ElseIf Mid(json, pos, 1) = "[" Then
+        ParseJsonField = mid(json, pos, endPos - pos)
+    ElseIf mid(json, pos, 1) = "[" Then
         Dim arrEnd As Long
         arrEnd = InStr(pos, json, "]")
-        ParseJsonField = Mid(json, pos, arrEnd - pos + 1)
+        ParseJsonField = mid(json, pos, arrEnd - pos + 1)
     Else
         Dim valEnd As Long
         valEnd = pos
-        Do While valEnd <= Len(json) And InStr(",}", Mid(json, valEnd, 1)) = 0
+        Do While valEnd <= Len(json) And InStr(",}", mid(json, valEnd, 1)) = 0
             valEnd = valEnd + 1
         Loop
-        ParseJsonField = Trim(Mid(json, pos, valEnd - pos))
+        ParseJsonField = Trim(mid(json, pos, valEnd - pos))
     End If
     Exit Function
 ErrHandler:
@@ -842,7 +842,7 @@ ErrHandler:
 End Function
 
 ' ============================================================
-' Logging (shared — called by all modules)
+' Logging (shared  -  called by all modules)
 ' ============================================================
 
 ' Append a row to the Log sheet.
@@ -859,14 +859,23 @@ Public Sub LogEvent(ByVal category As String, ByVal message As String)
     On Error Resume Next
     Dim ws As Worksheet
     Set ws = Sheets("Log")
-    
-    ws.Columns(1).NumberFormat = "@"   ' force text — preserve seconds
-    
-    Dim nextRow As Long
-    nextRow = ws.Cells(ws.Rows.count, 1).End(xlUp).row + 1
-    ws.Cells(nextRow, 1).value = Format(Now(), "yyyy-mm-dd hh:nn:ss")
-    ws.Cells(nextRow, 2).value = category
-    ws.Cells(nextRow, 3).value = message
+
+    ' Force columns 1-3 to Text BEFORE writing so a message starting with
+    ' =, +, - or @ cannot parse as a formula and throw 1004 (build-lesson 2).
+    ws.Columns(1).NumberFormat = "@"
+    ws.Columns(2).NumberFormat = "@"
+    ws.Columns(3).NumberFormat = "@"
+
+    Dim NextRow As Long
+    NextRow = ws.Cells(ws.rows.count, 1).End(xlUp).row + 1
+    ws.Cells(NextRow, 1).value = Format(Now(), "yyyy-mm-dd hh:nn:ss")
+    ws.Cells(NextRow, 2).value = category
+    ws.Cells(NextRow, 3).value = message
+
+    ' Never leak a swallowed write error to the caller (Err=1004 was being
+    ' read by RunButton/RunStep as a macro failure).
+    Err.Clear
+    On Error GoTo 0
 End Sub
 
 

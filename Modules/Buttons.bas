@@ -1,22 +1,22 @@
 Attribute VB_Name = "Buttons"
 ' ============================================================
-' HyperLapse Cart â€” Buttons Module
+' HyperLapse Cart - Buttons Module
 '
 ' PURPOSE
 '   Shared helpers for the "double-click a cell to run a macro"
 '   pattern used on the Control sheet. Provides:
 '
-'     RunButton         â€” orange â†’ action â†’ blue / yellow colour
+'     RunButton         - orange -> action -> blue / yellow colour
 '                         cycle wrapper. Called from the
 '                         Worksheet_BeforeDoubleClick handler on
 '                         the Control sheet.
-'     CellFormat        â€” apply one of a small palette of named
+'     CellFormat        - apply one of a small palette of named
 '                         styles to a cell (Blue, Orange, Yellow,
 '                         Green, Grey, etc.). Carried over from
 '                         prior projects.
-'     AllBorder         â€” uniform thin border on all four edges
+'     AllBorder         - uniform thin border on all four edges
 '                         and the inside grid.
-'     BuildControlSheet â€” one-shot setup: create the Control sheet,
+'     BuildControlSheet - one-shot setup: create the Control sheet,
 '                         lay out the button cells, name them, and
 '                         apply the default Blue style. Run once
 '                         after importing this module.
@@ -25,22 +25,22 @@ Attribute VB_Name = "Buttons"
 Option Explicit
 
 ' ============================================================
-' Public â€” called from sheet double-click handlers
+' Public - called from sheet double-click handlers
 ' ============================================================
 
 ' Run a macro on behalf of a "button" cell, with the visual feedback
 ' cycle: orange while running, blue on success, yellow on error.
 '
-' Target  â€” the cell that was double-clicked (becomes the button face)
-' macroName â€” name of a Public Sub callable via Application.Run
-' Cancel  â€” pass through the Cancel ByRef arg from the event handler;
+' Target  - the cell that was double-clicked (becomes the button face)
+' macroName - name of a Public Sub callable via Application.Run
+' Cancel  - pass through the Cancel ByRef arg from the event handler;
 '           we set it True so Excel doesn't put the cell into edit mode.
-Public Sub RunButton(ByVal Target As Range, _
+Public Sub RunButton(ByVal target As Range, _
                      ByVal macroName As String, _
                      ByRef Cancel As Boolean)
     Cancel = True
     
-    Call CellFormat(Target, "FormatOrange")
+    Call CellFormat(target, "FormatOrange")
     DoEvents                          ' force the orange paint to render
     
     Dim okFlag As Boolean
@@ -56,18 +56,18 @@ Public Sub RunButton(ByVal Target As Range, _
     On Error GoTo 0
     
     If okFlag Then
-        Call CellFormat(Target, "FormatBlue")
+        Call CellFormat(target, "FormatBlue")
     Else
-        Call CellFormat(Target, "FormatYellow")
+        Call CellFormat(target, "FormatYellow")
     End If
 End Sub
 
 ' ============================================================
-' Cell formatting â€” port from prior projects
+' Cell formatting - port from prior projects
 ' ============================================================
 
 ' Apply uniform thin borders on all edges + interior of a range.
-' colorIdx â€” Excel colour index (0 = automatic, 2 = white, etc.)
+' colorIdx - Excel colour index (0 = automatic, 2 = white, etc.)
 Public Sub AllBorder(ByVal myCell As Range, ByVal colorIdx As Integer)
     myCell.Borders(xlDiagonalDown).LineStyle = xlNone
     myCell.Borders(xlDiagonalUp).LineStyle = xlNone
@@ -116,7 +116,7 @@ Public Sub CellFormat(ByVal myCell As Range, ByVal myFormat As String)
         Case "FormatWhite"
             myFill = 16777215:  myFont = 0: myBorder = 0
         Case Else
-            ' Unknown style â€” leave cell alone
+            ' Unknown style - leave cell alone
             Exit Sub
     End Select
     
@@ -126,7 +126,7 @@ Public Sub CellFormat(ByVal myCell As Range, ByVal myFormat As String)
 End Sub
 
 ' ============================================================
-' One-shot setup â€” build the Control sheet
+' One-shot setup - build the Control sheet
 ' ============================================================
 
 ' Create the Control sheet, lay out the button cells, name them,
@@ -213,7 +213,7 @@ Public Sub BuildControlSheet()
         ThisWorkbook.names(nm).Delete
         On Error GoTo 0
         ThisWorkbook.names.Add Name:=nm, _
-                               RefersTo:="=" & SHEET_NAME & "!" & cell.Address
+                               refersTo:="=" & SHEET_NAME & "!" & cell.Address
     Next i
     
     ' Helpful hint cell

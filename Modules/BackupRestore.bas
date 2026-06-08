@@ -1,17 +1,17 @@
 Attribute VB_Name = "BackupRestore"
 ' ============================================================
-' HyperLapse Cart — Backup / Restore Module
+' HyperLapse Cart - Backup / Restore Module
 '
 ' PURPOSE
 '   Two macros to sync VBA code between this workbook and the GitHub
 '   working copy on disk:
 '
-'     ExportModules — write every code module in this workbook out
+'     ExportModules - write every code module in this workbook out
 '                     to .bas / .cls / .frm files in the GitHub folder.
 '                     Run this after editing in the VBA IDE, before
 '                     committing to GitHub.
 '
-'     ImportModules — replace every code module in this workbook with
+'     ImportModules - replace every code module in this workbook with
 '                     the version on disk. Run this after pulling from
 '                     GitHub or after Claude has handed back patched
 '                     .bas files.
@@ -21,15 +21,15 @@ Attribute VB_Name = "BackupRestore"
 '   (override per-run via the constant below if needed)
 '
 ' REQUIREMENT
-'   File ▸ Options ▸ Trust Center ▸ Trust Center Settings ▸ Macro Settings
-'     ▸ "Trust access to the VBA project object model"  must be ENABLED.
+'   File --- Options --- Trust Center --- Trust Center Settings --- Macro Settings
+'     --- "Trust access to the VBA project object model"  must be ENABLED.
 '   Without this, the VBComponents calls below will throw "Programmatic
 '   access to Visual Basic Project is not trusted".
 '
 ' SAFETY
 '   - ExportModules confirms before overwriting existing files.
 '   - ImportModules confirms before replacing in-workbook modules.
-'   - Both skip this module itself (BackupRestore) — you can't safely
+'   - Both skip this module itself (BackupRestore) - you can't safely
 '     reimport a module while its code is the one currently running.
 '   - Document modules (ThisWorkbook, Sheet1, etc.) are NOT exported
 '     or imported, only standard modules / classes / userforms.
@@ -37,11 +37,11 @@ Attribute VB_Name = "BackupRestore"
 
 Option Explicit
 
-' ── Configuration ───────────────────────────────────────────
+' -- Configuration -------------------------------------------
 Private Const MODULE_FOLDER As String = _
     "C:\Users\mauri\OneDrive\Documents\Github\HyperLapse-Excel\Modules"
 
-' This module's own name — skipped by both macros so it can't overwrite
+' This module's own name - skipped by both macros so it can't overwrite
 ' itself while running. If you ever rename this module, update this constant.
 Private Const SELF_NAME As String = "BackupRestore"
 
@@ -75,18 +75,18 @@ Public Sub ExportModules()
     Dim toExport As Collection
     Set toExport = New Collection
     
-    Dim comp As Object   ' VBComponent — late-bound to avoid reference dependency
+    Dim comp As Object   ' VBComponent - late-bound to avoid reference dependency
     For Each comp In ThisWorkbook.VBProject.VBComponents
         If ShouldExport(comp) Then toExport.Add comp
     Next comp
     
-    If toExport.Count = 0 Then
+    If toExport.count = 0 Then
         MsgBox "No exportable modules found.", vbInformation
         Exit Sub
     End If
     
     Dim resp As VbMsgBoxResult
-    resp = MsgBox("Export " & toExport.Count & " module(s) to:" & vbCrLf & _
+    resp = MsgBox("Export " & toExport.count & " module(s) to:" & vbCrLf & _
                   folderPath & vbCrLf & vbCrLf & _
                   "Existing .bas / .cls / .frm files with the same names " & _
                   "will be OVERWRITTEN. Continue?", _
@@ -108,7 +108,7 @@ Public Sub ExportModules()
         comp.Export filePath
         If Err.Number <> 0 Then
             failCount = failCount + 1
-            failList = failList & vbCrLf & "  " & comp.Name & " — " & Err.Description
+            failList = failList & vbCrLf & "  " & comp.Name & " - " & Err.Description
             Err.Clear
         Else
             okCount = okCount + 1
@@ -129,7 +129,7 @@ End Sub
 ' Import every .bas / .cls / .frm file from the configured Modules folder,
 ' replacing any in-workbook module with the same name. Modules that exist
 ' in the workbook but NOT on disk are left alone (this is a one-way
-' "disk wins" import — it does not delete extras).
+' "disk wins" import - it does not delete extras).
 Public Sub ImportModules()
     Dim folderPath As String
     folderPath = EnsureTrailingSlash(MODULE_FOLDER)
@@ -145,7 +145,7 @@ Public Sub ImportModules()
     Dim toImport As Collection
     Set toImport = ListImportableFiles(folderPath)
     
-    If toImport.Count = 0 Then
+    If toImport.count = 0 Then
         MsgBox "No .bas / .cls / .frm files found in:" & vbCrLf & folderPath, _
                vbInformation
         Exit Sub
@@ -158,7 +158,7 @@ Public Sub ImportModules()
     Next fPath
     
     Dim resp As VbMsgBoxResult
-    resp = MsgBox("Import " & toImport.Count & " module(s) from:" & vbCrLf & _
+    resp = MsgBox("Import " & toImport.count & " module(s) from:" & vbCrLf & _
                   folderPath & vbCrLf & vbCrLf & _
                   "Any in-workbook modules with the same names will be " & _
                   "OVERWRITTEN IN PLACE:" & summary & vbCrLf & vbCrLf & _
@@ -179,7 +179,7 @@ Public Sub ImportModules()
         If StrComp(modName, SELF_NAME, vbTextCompare) = 0 Then
             skipCount = skipCount + 1
             failList = failList & vbCrLf & "  " & modName & _
-                       " (skipped — that's me, currently running)"
+                       " (skipped - that's me, currently running)"
             GoTo NextFile
         End If
         
@@ -193,7 +193,7 @@ Public Sub ImportModules()
         On Error GoTo 0
         
         If existing Is Nothing Then
-            ' New module — no collision possible. Use VBComponents.Import,
+            ' New module - no collision possible. Use VBComponents.Import,
             ' which preserves the file's Attribute VB_Name as the new
             ' component's name.
             On Error Resume Next
@@ -208,9 +208,9 @@ Public Sub ImportModules()
             End If
             On Error GoTo 0
         Else
-            ' Existing module — overwrite in place.
+            ' Existing module - overwrite in place.
             '
-            ' Why not Remove + Import: VBComponents.Remove is deferred —
+            ' Why not Remove + Import: VBComponents.Remove is deferred -
             ' the component doesn't actually disappear until VBA returns
             ' to idle. A subsequent .Import in the same run sees the name
             ' as still taken and silently renames the incoming module to
@@ -226,7 +226,7 @@ Public Sub ImportModules()
             If existing.Type = vbext_ct_Document Then
                 skipCount = skipCount + 1
                 failList = failList & vbCrLf & "  " & modName & _
-                           " (skipped — document module)"
+                           " (skipped - document module)"
                 GoTo NextFile
             End If
             
@@ -322,7 +322,7 @@ Private Function ReadFileStripAttributes(ByVal filePath As String) As String
             If StrComp(t, "END", vbTextCompare) = 0 Then inBeginBlock = False
             ' otherwise still inside the BEGIN..END block; skip
         ElseIf LenB(t) = 0 Then
-            ' blank — keep scanning past the header
+            ' blank - keep scanning past the header
         ElseIf StrComp(t, "BEGIN", vbTextCompare) = 0 Then
             inBeginBlock = True
         ElseIf Left$(t, 7) = "VERSION" Then
@@ -330,7 +330,7 @@ Private Function ReadFileStripAttributes(ByVal filePath As String) As String
         ElseIf Left$(t, 9) = "Attribute" Then
             ' header line, skip
         Else
-            ' First content line — take from here.
+            ' First content line - take from here.
             Exit For
         End If
     Next i
@@ -354,7 +354,7 @@ End Function
 ' header block (above the first Sub/Function/Property). Flags any that
 ' have drifted into the body of the module.
 '
-' Procedure-local Dim statements are NOT checked — they are legitimate
+' Procedure-local Dim statements are NOT checked - they are legitimate
 ' anywhere within their procedure. This rule only governs MODULE-level
 ' declarations: Public/Private variables, constants, types, and Declares.
 '
@@ -376,7 +376,7 @@ Public Sub CheckDeclarationStyle()
             Dim modBad As String
             modBad = CheckOneModule(comp)
             If LenB(modBad) > 0 Then
-                report = report & vbCrLf & "── " & comp.Name & " ──" & vbCrLf & modBad
+                report = report & vbCrLf & "-- " & comp.Name & " --" & vbCrLf & modBad
                 ' count newlines as a proxy for offence count
                 Dim p As Long, c As Long
                 c = 0
@@ -407,11 +407,11 @@ End Sub
 ' Scan one VBComponent for misplaced module-level declarations.
 ' Returns a multi-line report of offending lines, or "" if clean.
 Private Function CheckOneModule(ByVal comp As Object) As String
-    Dim cm As Object
-    Set cm = comp.CodeModule
+    Dim cM As Object
+    Set cM = comp.CodeModule
     
     Dim totalLines As Long
-    totalLines = cm.CountOfLines
+    totalLines = cM.CountOfLines
     If totalLines = 0 Then Exit Function
     
     Dim seenProcedure As Boolean
@@ -421,7 +421,7 @@ Private Function CheckOneModule(ByVal comp As Object) As String
     Dim ln As Long
     For ln = 1 To totalLines
         Dim raw As String
-        raw = cm.Lines(ln, 1)
+        raw = cM.lines(ln, 1)
         
         Dim trimmed As String
         trimmed = Trim$(raw)
@@ -526,17 +526,17 @@ Private Function ListImportableFiles(ByVal folderPath As String) As Collection
     Dim i As Integer
     For i = 0 To 2
         Dim f As String
-        f = Dir(folderPath & exts(i))
+        f = dir(folderPath & exts(i))
         Do While LenB(f) > 0
             col.Add folderPath & f
-            f = Dir()
+            f = dir()
         Loop
     Next i
     
     Set ListImportableFiles = col
 End Function
 
-' Strip folder and extension from a path: "C:\foo\Camera.bas" → "Camera"
+' Strip folder and extension from a path: "C:\foo\Camera.bas" -> "Camera"
 Private Function ModuleNameFromPath(ByVal filePath As String) As String
     Dim base As String
     base = FileNameOnly(filePath)
@@ -546,12 +546,12 @@ Private Function ModuleNameFromPath(ByVal filePath As String) As String
     ModuleNameFromPath = base
 End Function
 
-' Strip folder portion of a path: "C:\foo\Camera.bas" → "Camera.bas"
+' Strip folder portion of a path: "C:\foo\Camera.bas" -> "Camera.bas"
 Private Function FileNameOnly(ByVal filePath As String) As String
     Dim slashPos As Long
     slashPos = InStrRev(filePath, "\")
     If slashPos > 0 Then
-        FileNameOnly = Mid$(filePath, slashPos + 1)
+        FileNameOnly = mid$(filePath, slashPos + 1)
     Else
         FileNameOnly = filePath
     End If
@@ -568,7 +568,7 @@ End Function
 
 Private Function FolderExists(ByVal folderPath As String) As Boolean
     On Error Resume Next
-    FolderExists = (LenB(Dir(folderPath, vbDirectory)) > 0)
+    FolderExists = (LenB(dir(folderPath, vbDirectory)) > 0)
     On Error GoTo 0
 End Function
 
@@ -578,7 +578,7 @@ End Function
 Private Function VbaProjectAccessible() As Boolean
     On Error Resume Next
     Dim count As Long
-    count = ThisWorkbook.VBProject.VBComponents.Count
+    count = ThisWorkbook.VBProject.VBComponents.count
     If Err.Number <> 0 Then
         Err.Clear
         On Error GoTo 0

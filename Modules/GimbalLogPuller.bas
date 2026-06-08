@@ -1,21 +1,33 @@
 Attribute VB_Name = "GimbalLogPuller"
 ' ============================================================
-' HyperLapse Cart — Gimbal Log Puller (P4)
+' HyperLapse Cart - Gimbal Log Puller (P4)
 '
 ' Copies GimbalLog sheet rows into the Plan sheet's right
-' zone (cols AA–AJ) as read-only operator reference for
-' authoring the middle-zone Gimbal Plan.
+' zone as read-only operator reference for authoring the
+' middle-zone Gimbal Plan.
 '
 ' Public entry:
-'   PullGimbalLogToPlan — reads GimbalLog, detects shape
+'   PullGimbalLogToPlan - reads GimbalLog, detects shape
 '                         (4-field legacy vs 7-field post-#49),
 '                         writes into Plan right zone with
 '                         appropriate column mapping.
 '
-' Day 19 — initial P4 implementation. Defensive against #49
+' Day 19 - initial P4 implementation. Defensive against #49
 ' not being landed yet.
+' Day 20 - P6 column shift: right zone moved from AA..AJ to
+'          AC..AL (+2). Necessary because new middle-zone
+'          columns P (Offset) and Q (Fires at) pushed the
+'          middle-zone Note column from Y to AA, colliding
+'          with the old right-zone start at AA. Read/write
+'          column numbers bumped by 2; constants updated.
+' Day 20 - Session E: right zone shifted one more column,
+'          now AD..AM (was AC..AL in P6). The middle zone
+'          expanded by 1 column (added Total dur, Ry, Rp, Ease;
+'          dropped Target type, KF, End anchor - net +1 col).
+'          Middle zone now ends at AB; visual gutter at AC;
+'          right zone starts at AD.
 '
-' GimbalLog shapes:
+' GimbalLog shapes (unchanged):
 '   Legacy (4-field, today): A=Timestamp, B=Yaw, C=Pitch, D=Notes
 '   Post-#49 (7-field):      A=Timestamp, B=Type, C=Yaw,
 '                            D=Pitch, E=Keyframe, F=DeltaYaw,
@@ -24,24 +36,24 @@ Attribute VB_Name = "GimbalLogPuller"
 '                             markers populate C/D, astro
 '                             populates F/G + E + astro_target)
 '
-' Plan sheet right-zone columns (P1 mockup):
-'   AA=LogRow#, AB=Time, AC=Type, AD=AstroTgt, AE=KF,
-'   AF=Ry,      AG=Pitch, AH=Δyaw, AI=Δpitch,    AJ=Label
+' Plan sheet right-zone columns (Session E layout):
+'   AD=LogRow#, AE=Time, AF=Type, AG=AstroTgt, AH=KF,
+'   AI=Ry,      AJ=Pitch, AK=dyaw, AL=dpitch,    AM=Label
 ' ============================================================
 
 Option Explicit
 
 Private Const PLAN_FIRST_ROW As Long = 6
 Private Const PLAN_MAX_ROWS  As Long = 60
-Private Const RIGHT_COL_FIRST As String = "AA"
-Private Const RIGHT_COL_LAST  As String = "AJ"
+Private Const RIGHT_COL_FIRST As String = "AE"
+Private Const RIGHT_COL_LAST  As String = "AO"
 
 ' Read-only fill (matches P1 mockup convention)
 Private Const RO_FILL_COLOR As Long = &HF0F0F0
 
 
 ' ============================================================
-' Public entry — PullGimbalLogToPlan
+' Public entry - PullGimbalLogToPlan
 ' ============================================================
 Public Sub PullGimbalLogToPlan()
     On Error GoTo ErrHandler
@@ -69,14 +81,14 @@ Public Sub PullGimbalLogToPlan()
     If logShape = "UNKNOWN" Then
         MsgBox "GimbalLog header doesn't match either known shape:" & vbCrLf & _
                "  Legacy 4-field: Timestamp | Yaw | Pitch | Notes" & vbCrLf & _
-               "  Post-#49 7-field: Timestamp | Type | Yaw | Pitch | KF | DeltaYaw | DeltaPitch | Label" & vbCrLf & vbCrLf & _
+               "  Rich: Time | Type | Yaw | Pitch | Obj | Mode | KF | dyaw | dpitch | Label" & vbCrLf & vbCrLf & _
                "Header found: " & DescribeHeader(wsLog), _
                vbExclamation, "PullGimbalLogToPlan"
         Exit Sub
     End If
 
     Dim lastLogRow As Long
-    lastLogRow = wsLog.Cells(wsLog.Rows.count, 1).End(xlUp).row
+    lastLogRow = wsLog.Cells(wsLog.rows.count, 1).End(xlUp).row
     If lastLogRow < 2 Then
         MsgBox "GimbalLog is empty.", vbExclamation, "PullGimbalLogToPlan"
         Exit Sub
@@ -130,10 +142,10 @@ Public Sub PullGimbalLogToPlan()
     msg = writtenRows & " GimbalLog row(s) copied into Plan right zone." & vbCrLf & vbCrLf
     If logShape = "LEGACY_4FIELD" Then
         msg = msg & "Log is in legacy 4-field shape (timestamp/yaw/pitch/notes)." & vbCrLf
-        msg = msg & "Type/AstroTgt/KF/Δyaw/Δpitch left blank — operator can" & vbCrLf
+        msg = msg & "Type/AstroTgt/KF/dyaw/dpitch left blank - operator can" & vbCrLf
         msg = msg & "annotate by hand, or wait for #49 (rich-row firmware)."
     Else
-        msg = msg & "Log is in post-#49 7-field shape. Full intent preserved."
+        msg = msg & "Log is in rich shape. Full intent preserved (incl. Obj + Mode)."
     End If
     MsgBox msg, vbInformation, "PullGimbalLogToPlan"
 
@@ -174,8 +186,8 @@ Private Function DetectGimbalLogShape(ByVal wsLog As Worksheet) As String
        And InStr(h(2), "TYPE") > 0 _
        And InStr(h(3), "YAW") > 0 _
        And InStr(h(4), "PITCH") > 0 _
-       And h(8) <> "" Then
-        DetectGimbalLogShape = "RICH_7FIELD"
+       And InStr(h(6), "MODE") > 0 Then
+        DetectGimbalLogShape = "RICH"
         Exit Function
     End If
 
@@ -203,66 +215,67 @@ End Function
 
 
 ' ============================================================
-' Write one row — legacy 4-field log
+' Write one row - legacy 4-field log
 ' ============================================================
 '   GimbalLog (4-field):  A=Timestamp, B=Yaw, C=Pitch, D=Notes
-'   Plan right zone:
-'     AA=LogRow#, AB=Time, AC=Type, AD=AstroTgt, AE=KF,
-'     AF=Ry,      AG=Pitch, AH=Δyaw, AI=Δpitch,    AJ=Label
-'   Mapping: yaw -> AF, pitch -> AG, notes -> AJ (label).
-'   Type/AstroTgt/KF/Δyaw/Δpitch left blank — operator annotates.
+'   Plan right zone (Session E: shifted +1 from P6):
+'     AD=LogRow#, AE=Time, AF=Type, AG=AstroTgt, AH=KF,
+'     AI=Ry,      AJ=Pitch, AK=dyaw, AL=dpitch,    AM=Label
+'   Mapping: yaw -> AI, pitch -> AJ, notes -> AM (label).
+'   Type/AstroTgt/KF/dyaw/dpitch left blank - operator annotates.
 Private Sub WriteRowLegacy(ByVal wsLog As Worksheet, ByVal logR As Long, _
                             ByVal wsPlan As Worksheet, ByVal planR As Long)
-    wsPlan.Cells(planR, 27).value = logR                       ' AA — Log row#
-    wsPlan.Cells(planR, 28).value = wsLog.Cells(logR, 1).value ' AB — Time
-    ' AC Type left blank
-    ' AD AstroTgt left blank
-    ' AE KF left blank
-    wsPlan.Cells(planR, 32).value = wsLog.Cells(logR, 2).value ' AF — Ry (from Yaw)
-    wsPlan.Cells(planR, 33).value = wsLog.Cells(logR, 3).value ' AG — Pitch
-    ' AH Δyaw left blank
-    ' AI Δpitch left blank
-    wsPlan.Cells(planR, 36).value = wsLog.Cells(logR, 4).value ' AJ — Label (from Notes)
+    ' Legacy 4-field: A Time B Yaw C Pitch D Notes
+    wsPlan.Cells(planR, 31).value = logR
+    wsPlan.Cells(planR, 32).value = wsLog.Cells(logR, 1).value
+    wsPlan.Cells(planR, 37).value = wsLog.Cells(logR, 2).value
+    wsPlan.Cells(planR, 38).value = wsLog.Cells(logR, 3).value
+    wsPlan.Cells(planR, 41).value = wsLog.Cells(logR, 4).value
 End Sub
 
 
 ' ============================================================
-' Write one row — post-#49 rich 7-field log
+' Write one row - post-#49 rich 7-field log
 ' ============================================================
 '   GimbalLog (rich):     A=Timestamp, B=Type, C=Yaw, D=Pitch,
 '                         E=KF, F=DeltaYaw, G=DeltaPitch, H=Label
-'   Plan right zone:      AA=LogRow#, AB=Time, AC=Type, AD=AstroTgt,
-'                         AE=KF, AF=Ry, AG=Pitch, AH=Δyaw, AI=Δpitch, AJ=Label
+'   Plan right zone (Session E): AD=LogRow#, AE=Time, AF=Type, AG=AstroTgt,
+'                         AH=KF, AI=Ry, AJ=Pitch, AK=dyaw, AL=dpitch, AM=Label
 '
-'   Note on AD AstroTgt: The post-#49 firmware does NOT separately
-'   field the astro target (sun/moon/MW/sunset/etc.) — that's encoded
+'   Note on AG AstroTgt: The post-#49 firmware does NOT separately
+'   field the astro target (sun/moon/MW/sunset/etc.) - that's encoded
 '   in the Type column (e.g. Type="sunset_mid"). Or per the Day-19
 '   design the type could be just "astro" and the astro target lives
-'   elsewhere. For now we copy Type verbatim into AC and leave AD
+'   elsewhere. For now we copy Type verbatim into AF and leave AG
 '   blank; can be re-parsed once #49's actual encoding is locked.
 Private Sub WriteRowRich(ByVal wsLog As Worksheet, ByVal logR As Long, _
                           ByVal wsPlan As Worksheet, ByVal planR As Long)
-    wsPlan.Cells(planR, 27).value = logR                       ' AA
-    wsPlan.Cells(planR, 28).value = wsLog.Cells(logR, 1).value ' AB Time
-    wsPlan.Cells(planR, 29).value = wsLog.Cells(logR, 2).value ' AC Type
-    ' AD AstroTgt — leave blank for now; #49 encoding TBC
-    wsPlan.Cells(planR, 31).value = wsLog.Cells(logR, 5).value ' AE KF
-    wsPlan.Cells(planR, 32).value = wsLog.Cells(logR, 3).value ' AF Ry (Yaw)
-    wsPlan.Cells(planR, 33).value = wsLog.Cells(logR, 4).value ' AG Pitch
-    wsPlan.Cells(planR, 34).value = wsLog.Cells(logR, 6).value ' AH DeltaYaw
-    wsPlan.Cells(planR, 35).value = wsLog.Cells(logR, 7).value ' AI DeltaPitch
-    wsPlan.Cells(planR, 36).value = wsLog.Cells(logR, 8).value ' AJ Label
+    ' GimbalLog: A Time B Type C Yaw D Pitch E Obj F Mode G KF H dyaw I dpitch J Label
+    ' Plan: AD=30 spacer(blank) AE=31 LogRow# AF=32 Time AG=33 Type
+    '   AH=34 Astro tgt(Obj) AI=35 Mode AJ=36 KF AK=37 Ry AL=38 Pitch
+    '   AM=39 dyaw AN=40 dpitch AO=41 Label
+    wsPlan.Cells(planR, 31).value = logR
+    wsPlan.Cells(planR, 32).value = wsLog.Cells(logR, 1).value
+    wsPlan.Cells(planR, 33).value = wsLog.Cells(logR, 2).value
+    wsPlan.Cells(planR, 34).value = wsLog.Cells(logR, 5).value
+    wsPlan.Cells(planR, 35).value = wsLog.Cells(logR, 6).value
+    wsPlan.Cells(planR, 36).value = wsLog.Cells(logR, 7).value
+    wsPlan.Cells(planR, 37).value = wsLog.Cells(logR, 3).value
+    wsPlan.Cells(planR, 38).value = wsLog.Cells(logR, 4).value
+    wsPlan.Cells(planR, 39).value = wsLog.Cells(logR, 8).value
+    wsPlan.Cells(planR, 40).value = wsLog.Cells(logR, 9).value
+    wsPlan.Cells(planR, 41).value = wsLog.Cells(logR, 10).value
 End Sub
 
 
 ' ============================================================
-' Count existing right-zone rows (col AB = Time)
+' Count existing right-zone rows (Session E: col AE = Time)
 ' ============================================================
 Private Function CountRightZoneRows(ByVal wsPlan As Worksheet) As Long
     Dim n As Long: n = 0
     Dim r As Long
     For r = PLAN_FIRST_ROW To PLAN_FIRST_ROW + PLAN_MAX_ROWS - 1
-        If Not IsEmpty(wsPlan.Cells(r, 28).value) Then n = n + 1
+        If Not IsEmpty(wsPlan.Cells(r, 31).value) Then n = n + 1
     Next r
     CountRightZoneRows = n
 End Function

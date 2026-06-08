@@ -1,6 +1,6 @@
 Attribute VB_Name = "Camera"
 ' ============================================================
-' HyperLapse Cart — Camera Control Module
+' HyperLapse Cart - Camera Control Module
 '
 ' PURPOSE
 '   All Canon R3 camera control over Wi-Fi via the CCAPI. Provides:
@@ -8,11 +8,11 @@ Attribute VB_Name = "Camera"
 '       error handling and retry-on-busy (see Bug 7 below)
 '     - Setting wrappers (mode, aperture, shutter, ISO) that update
 '       both the camera and the matching named ranges on Settings
-'     - TakePhoto — the only call that should ever fire the shutter
+'     - TakePhoto - the only call that should ever fire the shutter
 '     - Phase 2b/4a luminance feedback loop:
 '         GetLastThumbnailLuminance reads the most recent JPG thumbnail
 '         from the camera and pipes it through luminance.py to compute
-'         a 0–255 brightness value; AdjustExposureByLuminance steps ISO
+'         a 0-255 brightness value; AdjustExposureByLuminance steps ISO
 '         up or down to keep the frame within a target band.
 '     - Arduino display helpers (UpdateArduinoDisplay, SendHeartbeat)
 '   Camera IP and Arduino IP are read from named ranges on Settings.
@@ -21,7 +21,7 @@ Attribute VB_Name = "Camera"
 '   All endpoints confirmed against Canon CCAPI Reference v1.4.0.
 '   The R3 returns 503 Device Busy any time the shutter is open or the
 '   SD card is still being written. Phase 3 fires 20s exposures all
-'   night, so retry-on-503 is essential — see Bug 7 fix in CameraPut.
+'   night, so retry-on-503 is essential - see Bug 7 fix in CameraPut.
 '
 ' DEPENDENCIES
 '   ParseJsonField and LogEvent are in Utils.bas
@@ -29,7 +29,7 @@ Attribute VB_Name = "Camera"
 '   locations (repo Python folder, OneDrive, USERPROFILE Documents).
 '
 ' RECENT FIXES (May 2026)
-'   Bug 7 — CameraPut now retries up to 5 times with growing backoff
+'   Bug 7 - CameraPut now retries up to 5 times with growing backoff
 '           on 503, instead of a single 3s retry that couldn''t cover
 '           a 20s Phase 3 exposure.
 ' ============================================================
@@ -50,7 +50,7 @@ Private Const HTTP_DEVICE_BUSY As Integer = 503
 ' -- Module state ---------------------------------------------
 ' Track the moment the previous shutter trigger succeeded, used to
 ' compute the interval-since-last-shot in the photo log line. This
-' is intentionally separate from Sequence.g_lastShotTime — that one
+' is intentionally separate from Sequence.g_lastShotTime - that one
 ' drives camera-busy timing decisions; this one is purely diagnostic
 ' and captures the real shutter event, not the loop's intent.
 ' Reset by ResetPhotoTimer at the start of each new sequence.
@@ -61,22 +61,22 @@ Private g_lastPhotoTime As Date
 ' search again this session. Cleared automatically when workbook reopens.
 Private g_luminanceScriptPath As String
 
-' ── Non-blocking luminance state (Session A, May 2026) ──────────
+' -- Non-blocking luminance state (Session A, May 2026) ----------
 ' SequenceLoop schedules a Python luminance calculation per cycle when
 ' the phase wants luminance. The Python process runs concurrently with
 ' the photo cycle; we poll it next iteration. The most recent
 ' successful result lives in g_lastLuminance and is consumed by the
 ' phase handlers' calls to AdjustExposureByLuminance.
 '
-' g_lumExec — the running WScript.Shell.Exec object, or Nothing when
+' g_lumExec - the running WScript.Shell.Exec object, or Nothing when
 '             no job is in flight. Checked by PollLuminanceCalc.
-' g_lumJobJpeg — path of the JPEG the current job is processing (log only)
-' g_lumJobStarted — when the job was kicked off (for soft timeout)
-' g_lastLuminance — most recent successful value (0-255), or -1 if never
-' g_lumStaleness — shots elapsed since g_lastLuminance was updated.
+' g_lumJobJpeg - path of the JPEG the current job is processing (log only)
+' g_lumJobStarted - when the job was kicked off (for soft timeout)
+' g_lastLuminance - most recent successful value (0-255), or -1 if never
+' g_lumStaleness - shots elapsed since g_lastLuminance was updated.
 '                  Incremented per shot by BumpLuminanceStaleness, reset
 '                  to 0 by a successful PollLuminanceCalc result.
-'                  Failed measurements (DONE_NORESULT) do NOT reset it —
+'                  Failed measurements (DONE_NORESULT) do NOT reset it -
 '                  a failed measurement is not a measurement.
 Private g_lumExec       As Object
 Private g_lumJobJpeg    As String
@@ -90,22 +90,22 @@ Public Const LUM_DONE_NORESULT As Integer = -1
 ' (Values 0..255 returned directly as the luminance reading)
 
 ' Luminance feedback mode (Session B, May 2026).
-' MODE_BRIGHTEN: adjustments only ever brighten (Mode 1, afternoon → night).
+' MODE_BRIGHTEN: adjustments only ever brighten (Mode 1, afternoon -> night).
 '                Walk Tv slower first toward 20"; once Tv pinned, raise ISO.
-' MODE_DARKEN:   adjustments only ever darken (Mode 2, night → morning).
+' MODE_DARKEN:   adjustments only ever darken (Mode 2, night -> morning).
 '                Drop ISO first toward 100; once ISO pinned, speed Tv.
 ' Mode switch is at dataAstroDusk + 30 min, decided by Sequence.GetLumMode.
 Public Const LUM_MODE_BRIGHTEN As Integer = 1
 Public Const LUM_MODE_DARKEN   As Integer = 2
 
-' ISO endpoints — the operator's chosen min/max for the shoot.
+' ISO endpoints - the operator's chosen min/max for the shoot.
 ' Hard-coded for now; could be operator-tunable via named ranges later.
 Public Const ISO_MIN As String = "100"
 Public Const ISO_MAX As String = "1600"
 
 ' Soft timeout on a running Python job. If a job hasn't completed
 ' within this many seconds we terminate it and return DONE_NORESULT.
-' The old blocking CalcLuminance used a 5s budget — non-blocking can
+' The old blocking CalcLuminance used a 5s budget - non-blocking can
 ' afford to be more generous because waiting doesn't cost the photo.
 Private Const LUM_TIMEOUT_SECS As Double = 15#
 
@@ -126,27 +126,27 @@ End Function
 ' Send a GET to the camera CCAPI.
 '
 ' BUG FIX (Session B, May 2026): 503 Device Busy is not just a write-window
-' problem — the camera also returns it on file-listing GETs while it's
+' problem - the camera also returns it on file-listing GETs while it's
 ' indexing/processing recently captured frames. The kickoff path
 ' (FetchLastThumbnailToDisk) does three sequential GETs of which the
 ' "?type=jpeg&kind=number" one frequently hits 503 even with several
 ' seconds of idle since the last shutter event.
 '
 ' Originally only CameraPut had 503 retry (Bug 7). The asymmetry was the
-' bug — GETs deserve the same hardening. This retry uses a shorter
+' bug - GETs deserve the same hardening. This retry uses a shorter
 ' backoff than CameraPut: the GET failures we see are short transient
 ' busy states (camera indexing), not long 20s exposures.
 '
 ' SESSION B UPGRADE (May 2026): the 503 response body carries a "message"
-' field per CCAPI spec §3.3.3. Nine documented messages, only four are
+' field per CCAPI spec sec 3.3.3. Nine documented messages, only four are
 ' transient (retry might help): "Device busy", "During shooting or
 ' recording", "Out of focus", "Can not write to card". Others ("Mode
 ' not supported", "Live view not started" etc.) are permanent for the
-' current state — retry just wastes time. We now parse the body and
+' current state - retry just wastes time. We now parse the body and
 ' decide retry policy from it. Bonus: the message is logged on every
 ' retry, giving us per-call diagnostic data about WHY the camera is
 ' busy, which informs Session C's broader camera-timing investigation.
-Public Function CameraGet(ByVal endpoint As String) As String
+Public Function CameraGet(ByVal ENDPOINT As String) As String
     Const MAX_BUSY_RETRIES As Integer = 4
     Const INITIAL_BACKOFF_SECS As Double = 0.5
     
@@ -159,21 +159,21 @@ Public Function CameraGet(ByVal endpoint As String) As String
     backoff = INITIAL_BACKOFF_SECS
     
     For attempt = 0 To MAX_BUSY_RETRIES
-        http.Open "GET", CAMERA_IP() & endpoint, False
+        http.Open "GET", CAMERA_IP() & ENDPOINT, False
         http.SetRequestHeader "Content-Type", "application/json"
         http.Send
         
         Select Case http.Status
             Case HTTP_OK
-                CameraGet = http.ResponseText
+                CameraGet = http.responseText
                 Set http = Nothing
                 Exit Function
             Case HTTP_DEVICE_BUSY
                 Dim busyMsg As String
-                busyMsg = ParseJsonField(http.ResponseText, "message")
+                busyMsg = ParseJsonField(http.responseText, "message")
                 
                 If Not IsBusyRetryable(busyMsg) Then
-                    LogEvent "CAMERA", "GET " & endpoint & " - 503 [" & busyMsg & _
+                    LogEvent "CAMERA", "GET " & ENDPOINT & " - 503 [" & busyMsg & _
                              "] - permanent for current state, not retrying"
                     CameraGet = ""
                     Set http = Nothing
@@ -181,20 +181,20 @@ Public Function CameraGet(ByVal endpoint As String) As String
                 End If
                 
                 If attempt < MAX_BUSY_RETRIES Then
-                    LogEvent "CAMERA", "GET " & endpoint & " - 503 [" & busyMsg & _
+                    LogEvent "CAMERA", "GET " & ENDPOINT & " - 503 [" & busyMsg & _
                              "], retry " & (attempt + 1) & "/" & MAX_BUSY_RETRIES & _
                              " in " & Format(backoff, "0.0") & "s"
                     Application.Wait Now + (backoff / 86400#)
                     backoff = backoff * 1.5
                 Else
-                    LogEvent "CAMERA", "GET " & endpoint & " - 503 [" & busyMsg & _
+                    LogEvent "CAMERA", "GET " & ENDPOINT & " - 503 [" & busyMsg & _
                              "] after " & MAX_BUSY_RETRIES & " retries, giving up"
                     CameraGet = ""
                     Set http = Nothing
                     Exit Function
                 End If
             Case Else
-                LogEvent "CAMERA", "GET " & endpoint & " - HTTP " & http.Status
+                LogEvent "CAMERA", "GET " & ENDPOINT & " - HTTP " & http.Status
                 CameraGet = ""
                 Set http = Nothing
                 Exit Function
@@ -206,26 +206,26 @@ Public Function CameraGet(ByVal endpoint As String) As String
     Set http = Nothing
     Exit Function
 ErrHandler:
-    LogEvent "CAMERA", "GET " & endpoint & " - Connection failed: " & Err.Description
+    LogEvent "CAMERA", "GET " & ENDPOINT & " - Connection failed: " & Err.Description
     CameraGet = ""
 End Function
 
 ' Decide whether a 503 message warrants a retry.
 '
-' Per CCAPI spec §3.3.3, 503 carries one of nine message strings. Four
+' Per CCAPI spec sec 3.3.3, 503 carries one of nine message strings. Four
 ' are transient (the camera is doing something that will finish):
-'   "Device busy"                 — function temporarily unavailable
-'   "During shooting or recording" — shutter still active
-'   "Out of focus"                — AF failed this attempt
-'   "Can not write to card"       — write error (often transient)
+'   "Device busy"                 - function temporarily unavailable
+'   "During shooting or recording" - shutter still active
+'   "Out of focus"                - AF failed this attempt
+'   "Can not write to card"       - write error (often transient)
 '
 ' The rest indicate the camera is in a state where the request will
 ' NEVER succeed without changing camera mode:
-'   "Mode not supported"     — wrong shooting mode
-'   "Taken in preparation"   — service still starting up
-'   "Live view not started"  — caller forgot to start LV
-'   "Already started"        — double-start
-'   "Not started"            — DELETE called with no API running
+'   "Mode not supported"     - wrong shooting mode
+'   "Taken in preparation"   - service still starting up
+'   "Live view not started"  - caller forgot to start LV
+'   "Already started"        - double-start
+'   "Not started"            - DELETE called with no API running
 '
 ' Unknown messages: retry once (newer firmware may add codes; better to
 ' try than to give up on an unrecognised string).
@@ -238,7 +238,7 @@ Private Function IsBusyRetryable(ByVal msg As String) As Boolean
              "Live view not started", "Already started", "Not started"
             IsBusyRetryable = False
         Case Else
-            ' Empty body or unknown message — try the retry once.
+            ' Empty body or unknown message - try the retry once.
             IsBusyRetryable = True
     End Select
 End Function
@@ -249,9 +249,9 @@ End Function
 ' 20 second exposures all night). The camera will reject any setting change
 ' that lands while the shutter is open or the SD card is still being written.
 ' We now retry up to MAX_BUSY_RETRIES times with growing backoff, instead of
-' giving up after a single 3-second retry — which was never enough to cover
+' giving up after a single 3-second retry - which was never enough to cover
 ' a 20s Phase 3 exposure.
-Public Function CameraPut(ByVal endpoint As String, ByVal jsonBody As String) As Boolean
+Public Function CameraPut(ByVal ENDPOINT As String, ByVal jsonBody As String) As Boolean
     Const MAX_BUSY_RETRIES As Integer = 5
     Const INITIAL_BACKOFF_SECS As Double = 3#
     
@@ -264,7 +264,7 @@ Public Function CameraPut(ByVal endpoint As String, ByVal jsonBody As String) As
     backoff = INITIAL_BACKOFF_SECS
     
     For attempt = 0 To MAX_BUSY_RETRIES
-        http.Open "PUT", CAMERA_IP() & endpoint, False
+        http.Open "PUT", CAMERA_IP() & ENDPOINT, False
         http.SetRequestHeader "Content-Type", "application/json"
         http.Send jsonBody
         
@@ -275,10 +275,10 @@ Public Function CameraPut(ByVal endpoint As String, ByVal jsonBody As String) As
                 Exit Function
             Case HTTP_DEVICE_BUSY
                 Dim busyMsg As String
-                busyMsg = ParseJsonField(http.ResponseText, "message")
+                busyMsg = ParseJsonField(http.responseText, "message")
                 
                 If Not IsBusyRetryable(busyMsg) Then
-                    LogEvent "CAMERA", "PUT " & endpoint & " - 503 [" & busyMsg & _
+                    LogEvent "CAMERA", "PUT " & ENDPOINT & " - 503 [" & busyMsg & _
                              "] - permanent for current state, not retrying"
                     CameraPut = False
                     Set http = Nothing
@@ -286,25 +286,25 @@ Public Function CameraPut(ByVal endpoint As String, ByVal jsonBody As String) As
                 End If
                 
                 If attempt < MAX_BUSY_RETRIES Then
-                    LogEvent "CAMERA", "PUT " & endpoint & " - 503 [" & busyMsg & _
+                    LogEvent "CAMERA", "PUT " & ENDPOINT & " - 503 [" & busyMsg & _
                              "], retry " & (attempt + 1) & "/" & MAX_BUSY_RETRIES & _
                              " in " & backoff & "s"
                     Application.Wait Now + (backoff / 86400#)
                     backoff = backoff * 1.5   ' gentle exponential backoff
                 Else
-                    LogEvent "CAMERA", "PUT " & endpoint & " - 503 [" & busyMsg & _
+                    LogEvent "CAMERA", "PUT " & ENDPOINT & " - 503 [" & busyMsg & _
                              "] after " & MAX_BUSY_RETRIES & " retries, giving up"
                     CameraPut = False
                     Set http = Nothing
                     Exit Function
                 End If
             Case HTTP_BAD_REQUEST
-                LogEvent "CAMERA", "PUT " & endpoint & " - Invalid param. Body: " & jsonBody
+                LogEvent "CAMERA", "PUT " & ENDPOINT & " - Invalid param. Body: " & jsonBody
                 CameraPut = False
                 Set http = Nothing
                 Exit Function
             Case Else
-                LogEvent "CAMERA", "PUT " & endpoint & " - HTTP " & http.Status
+                LogEvent "CAMERA", "PUT " & ENDPOINT & " - HTTP " & http.Status
                 CameraPut = False
                 Set http = Nothing
                 Exit Function
@@ -316,31 +316,31 @@ Public Function CameraPut(ByVal endpoint As String, ByVal jsonBody As String) As
     Set http = Nothing
     Exit Function
 ErrHandler:
-    LogEvent "CAMERA", "PUT " & endpoint & " - Connection failed: " & Err.Description
+    LogEvent "CAMERA", "PUT " & ENDPOINT & " - Connection failed: " & Err.Description
     CameraPut = False
 End Function
 
-Public Function CameraPost(ByVal endpoint As String, ByVal jsonBody As String) As Boolean
+Public Function CameraPost(ByVal ENDPOINT As String, ByVal jsonBody As String) As Boolean
     On Error GoTo ErrHandler
     Dim http As Object
     Set http = CreateObject("WinHttp.WinHttpRequest.5.1")
-    http.Open "POST", CAMERA_IP() & endpoint, False
+    http.Open "POST", CAMERA_IP() & ENDPOINT, False
     http.SetRequestHeader "Content-Type", "application/json"
     http.Send jsonBody
     Select Case http.Status
         Case HTTP_OK
             CameraPost = True
         Case HTTP_DEVICE_BUSY
-            LogEvent "CAMERA", "POST " & endpoint & " - Device busy (503)"
+            LogEvent "CAMERA", "POST " & ENDPOINT & " - Device busy (503)"
             CameraPost = False
         Case Else
-            LogEvent "CAMERA", "POST " & endpoint & " - HTTP " & http.Status
+            LogEvent "CAMERA", "POST " & ENDPOINT & " - HTTP " & http.Status
             CameraPost = False
     End Select
     Set http = Nothing
     Exit Function
 ErrHandler:
-    LogEvent "CAMERA", "POST " & endpoint & " - Connection failed: " & Err.Description
+    LogEvent "CAMERA", "POST " & ENDPOINT & " - Connection failed: " & Err.Description
     CameraPost = False
 End Function
 
@@ -415,7 +415,7 @@ End Function
 '   shot=N Av=fX Tv=Y ISO=Z int=Ws
 '
 ' "int" (interval) is the elapsed seconds since the previous successful
-' shutter trigger — '-' for the first shot of a session, since
+' shutter trigger - '-' for the first shot of a session, since
 ' g_lastPhotoTime is 0 then. This is the key field for spotting timing
 ' drift: if we asked for a 2-second interval but shots are landing at
 ' 4 seconds, we know the camera (or the network, or the macro itself)
@@ -467,11 +467,11 @@ Public Function GetISOAbility() As String
 End Function
 
 ' ============================================================
-' Phase 2b / Phase 4a — Luminance-based ISO adjustment
+' Phase 2b / Phase 4a - Luminance-based ISO adjustment
 ' ============================================================
 
 ' Adjust ISO toward the target luminance using the most recently
-' captured value (g_lastLuminance). NON-BLOCKING — does not trigger
+' captured value (g_lastLuminance). NON-BLOCKING - does not trigger
 ' a new measurement; consumes whatever the most recent kick-off
 ' has produced via PollLuminanceCalc.
 '
@@ -481,16 +481,16 @@ End Function
 '   - Source is g_lastLuminance (module state), not a fresh blocking
 '     fetch. If no measurement has succeeded yet (-1) we skip silently
 '     so the photo loop is never gated on a luminance result.
-'   - Band width ±15 around target. Old code used absolute thresholds
-'     95/135 (a band of 40 centred on 115) — same shape, parametric.
+'   - Band width +/-15 around target. Old code used absolute thresholds
+'     95/135 (a band of 40 centred on 115) - same shape, parametric.
 ' Adjust exposure based on the latest luminance reading.
 '
 ' SESSION B REDESIGN (May 2026):
 ' Replaces the predictive Tv/ISO step tables with pure feedback. The
-' algorithm is MONOTONE per mode — it only ever moves in one direction
+' algorithm is MONOTONE per mode - it only ever moves in one direction
 ' during a given mode, eliminating oscillation as a failure mode:
 '
-'   MODE_BRIGHTEN (Mode 1, afternoon → night):
+'   MODE_BRIGHTEN (Mode 1, afternoon -> night):
 '     If lum < target - DEADZONE:
 '       Slow Tv one step (lower-noise knob first).
 '       If Tv is already at the slowest value, raise ISO one step instead.
@@ -499,7 +499,7 @@ End Function
 '     the transient over-bright frames; the rule "take the photo, fix
 '     in post" trumps perfect exposure.
 '
-'   MODE_DARKEN (Mode 2, night → morning):
+'   MODE_DARKEN (Mode 2, night -> morning):
 '     If lum > target + DEADZONE:
 '       Drop ISO one step (lower-noise knob first).
 '       If ISO is already at the minimum, speed Tv one step instead.
@@ -507,7 +507,7 @@ End Function
 '     If lum is at or below target: do nothing.
 '
 ' DEADZONE is one-sided slack to prevent jitter on small lum-reading
-' noise. Smaller than the old symmetric ±15 band because we only need
+' noise. Smaller than the old symmetric +/-15 band because we only need
 ' slack on the side the algorithm acts.
 '
 ' Returns: human-readable description of the action taken (or "" for
@@ -554,7 +554,7 @@ Public Function AdjustExposureByLuminance(ByVal targetLum As Integer, _
             Exit Function
         End If
         
-        ' Tv pinned at slowest — try ISO up.
+        ' Tv pinned at slowest - try ISO up.
         Dim higherISO As String
         higherISO = NextISO(currentISO, 1)
         If higherISO <> "" Then
@@ -564,7 +564,7 @@ Public Function AdjustExposureByLuminance(ByVal targetLum As Integer, _
             Exit Function
         End If
         
-        ' Both pinned at the night floor — accept it.
+        ' Both pinned at the night floor - accept it.
         Range("dataCommCameraCheck").value = "Lum:" & lum & " pinned (night) " & Format(Now(), "HH:nn:ss")
         AdjustExposureByLuminance = ""
         Exit Function
@@ -588,7 +588,7 @@ Public Function AdjustExposureByLuminance(ByVal targetLum As Integer, _
             Exit Function
         End If
         
-        ' ISO pinned at minimum — try Tv faster.
+        ' ISO pinned at minimum - try Tv faster.
         Dim fasterTv As String
         fasterTv = NextTv(currentTv, -1)
         If fasterTv <> "" Then
@@ -598,13 +598,13 @@ Public Function AdjustExposureByLuminance(ByVal targetLum As Integer, _
             Exit Function
         End If
         
-        ' Both pinned at the daytime floor — accept it.
+        ' Both pinned at the daytime floor - accept it.
         Range("dataCommCameraCheck").value = "Lum:" & lum & " pinned (day) " & Format(Now(), "HH:nn:ss")
         AdjustExposureByLuminance = ""
         Exit Function
     End If
     
-    ' Unknown mode — log and bail. Should never happen.
+    ' Unknown mode - log and bail. Should never happen.
     LogEvent "LUMINANCE", "AdjustExposure: unknown mode " & mode
     AdjustExposureByLuminance = ""
 End Function
@@ -628,7 +628,7 @@ Private Function NextISO(ByVal currentISO As String, ByVal direction As Integer)
     Next i
     
     If idx < 0 Then
-        ' currentISO not in the ladder — find closest by numeric value.
+        ' currentISO not in the ladder - find closest by numeric value.
         Dim cur As Double: cur = CDbl(currentISO)
         Dim bestDelta As Double: bestDelta = 1E+18
         For i = 0 To UBound(steps)
@@ -651,31 +651,31 @@ End Function
 ' Non-blocking luminance primitives (Session A, May 2026)
 '
 ' The pipeline has two halves:
-'   1. CCAPI dance — fetch the last JPG thumbnail from the camera and
+'   1. CCAPI dance - fetch the last JPG thumbnail from the camera and
 '      save it locally as LastThumb.jpg. Done synchronously by
 '      KickOffLuminanceFromLastThumb (and previously by the inline
 '      logic in GetLastThumbnailLuminance). The CCAPI calls fit
-'      comfortably inside a 22s photo cycle — see Bench results,
+'      comfortably inside a 22s photo cycle - see Bench results,
 '      May 2026.
-'   2. Python subprocess — runs luminance.py against the local JPG.
+'   2. Python subprocess - runs luminance.py against the local JPG.
 '      Used to block for up to 5s. Now fires-and-returns; the result
 '      is harvested next loop iteration by PollLuminanceCalc.
 '
 ' SequenceLoop's life with these:
-'   - top of loop: PollLuminanceCalc() — harvest a ready result
+'   - top of loop: PollLuminanceCalc() - harvest a ready result
 '   - phase handler: AdjustExposureByLuminance reads g_lastLuminance
 '   - bottom of loop: if phase wants luminance and no job running,
 '                     call KickOffLuminanceFromLastThumb()
 '
 ' Per the architectural decision: photos are sacred. The luminance
-' pipeline NEVER blocks the photo loop. Adjustments may be 1–3 photo
+' pipeline NEVER blocks the photo loop. Adjustments may be 1-3 photo
 ' cycles late relative to the reading they're based on; this is
 ' acceptable because luminance changes per-minute, not per-second.
 ' ============================================================
 
 ' Kick off a Python luminance job on an already-saved JPEG.
 ' Returns True if the job was started, False if a job is already
-' running (caller should not have called us — we log it) or if the
+' running (caller should not have called us - we log it) or if the
 ' Python script can't be found.
 '
 ' This is the LOW-LEVEL primitive. Most callers will use
@@ -685,7 +685,7 @@ Public Function KickOffLuminanceCalc(ByVal jpegPath As String) As Boolean
     On Error GoTo ErrHandler
     
     If Not (g_lumExec Is Nothing) Then
-        LogEvent "LUMINANCE", "KickOff called while job already running — ignoring"
+        LogEvent "LUMINANCE", "KickOff called while job already running - ignoring"
         KickOffLuminanceCalc = False
         Exit Function
     End If
@@ -723,7 +723,7 @@ Public Function KickOffLuminanceFromLastThumb() As Boolean
     On Error GoTo ErrHandler
     
     If Not (g_lumExec Is Nothing) Then
-        ' Don't log — this can happen legitimately if a previous job is
+        ' Don't log - this can happen legitimately if a previous job is
         ' still running. Caller will skip kick-off; nothing to fix.
         KickOffLuminanceFromLastThumb = False
         Exit Function
@@ -745,13 +745,13 @@ ErrHandler:
 End Function
 
 ' Poll a running Python job. Three possible returns:
-'   LUM_BUSY (-2) — still running, nothing to do
-'   LUM_DONE_NORESULT (-1) — finished but Python failed or returned
+'   LUM_BUSY (-2) - still running, nothing to do
+'   LUM_DONE_NORESULT (-1) - finished but Python failed or returned
 '                            non-numeric. stderr logged. g_lastLuminance
 '                            untouched. g_lumStaleness NOT reset (per
 '                            Session A decision: failed measurement is
 '                            not a measurement).
-'   0..255 — finished with a valid value. g_lastLuminance updated.
+'   0..255 - finished with a valid value. g_lastLuminance updated.
 '            g_lumStaleness reset to 0. dataLuminance updated so
 '            Monitor sheet stays live.
 '
@@ -778,14 +778,14 @@ Public Function PollLuminanceCalc() As Integer
     ' Status 0 = still running per WScript.Shell.Exec documentation.
     ' If the job is still running, NOW apply the soft timeout.
     ' If it has finished, harvest the result regardless of elapsed
-    ' wall-clock time since kick-off — Python may have finished
+    ' wall-clock time since kick-off - Python may have finished
     ' seconds ago and we're only just getting around to polling.
     If g_lumExec.Status = 0 Then
         Dim elapsedSecs As Double
         elapsedSecs = (Now() - g_lumJobStarted) * 86400#
         If elapsedSecs > LUM_TIMEOUT_SECS Then
             LogEvent "LUMINANCE", "Poll: job still running after " & _
-                     Format(elapsedSecs, "0.0") & "s — terminating"
+                     Format(elapsedSecs, "0.0") & "s - terminating"
             On Error Resume Next
             g_lumExec.Terminate
             On Error GoTo 0
@@ -798,7 +798,7 @@ Public Function PollLuminanceCalc() As Integer
         Exit Function
     End If
     
-    ' Job finished — harvest stdout/stderr
+    ' Job finished - harvest stdout/stderr
     Dim result   As String
     Dim errorMsg As String
     result = Trim(g_lumExec.StdOut.ReadAll())
@@ -858,7 +858,7 @@ End Sub
 ' bleed into the new one.
 Public Sub ResetLuminanceState()
     If Not (g_lumExec Is Nothing) Then
-        ' Defensive — kill any orphan job from a previous run
+        ' Defensive - kill any orphan job from a previous run
         On Error Resume Next
         g_lumExec.Terminate
         On Error GoTo 0
@@ -978,7 +978,7 @@ Public Function FetchLastThumbnailToDisk() As String
     pageResponse = CameraGet(myPath & "?type=jpeg&kind=number")
     If pageResponse = "" Then FetchLastThumbnailToDisk = "": Exit Function
     
-    ' Use ParseJsonField for robustness — it handles missing fields
+    ' Use ParseJsonField for robustness - it handles missing fields
     ' cleanly. Previous code used raw InStr/Mid arithmetic that could
     ' produce a negative Length argument when the camera returned an
     ' error response instead of the expected JSON, throwing
@@ -1005,7 +1005,7 @@ Public Function FetchLastThumbnailToDisk() As String
         Dim slashStart As Long
         slashStart = InStrRev(listResponse, "/", jpgEnd) + 1
         If slashStart > 1 And jpgEnd + 4 > slashStart Then
-            lastFile = Mid$(listResponse, slashStart, (jpgEnd + 4) - slashStart)
+            lastFile = mid$(listResponse, slashStart, (jpgEnd + 4) - slashStart)
         End If
     End If
     
@@ -1063,7 +1063,7 @@ End Function
 
 ' Helper for the sync wrapper. Polls until the in-flight job
 ' completes or times out. Uses Timer-based polling (no
-' Application.Wait — same fix as the old CalcLuminance Bug 6).
+' Application.Wait - same fix as the old CalcLuminance Bug 6).
 Private Function SyncWaitForLuminance() As Integer
     Const POLL_INTERVAL_MS As Long = 100
     Const TOTAL_BUDGET_MS  As Long = 8000   ' 8s, generous for sync path
@@ -1143,7 +1143,7 @@ Public Function CalcLuminance(ByVal jpegPath As String) As Integer
     '   Application.Wait Now + TimeValue("00:00:00") + 0.0001
     ' where 0.0001 of a day is 8.6 seconds. So each "iteration" of
     ' the polling loop waited 8.6s. Python finishing in 0.3s still
-    ' incurred at least one full iteration — adding 9 seconds per
+    ' incurred at least one full iteration - adding 9 seconds per
     ' luminance call. That was the cause of the Phase 2b/3/4a 9-second
     ' phase= overhead.
     '
@@ -1207,7 +1207,7 @@ End Function
 '
 ' Search order:
 '   1. Cached value (if previously found)
-'   2. Repo's Python/ folder, alongside the workbook  ← preferred location
+'   2. Repo's Python/ folder, alongside the workbook  - preferred location
 '   3. ThisWorkbook.Path \ Python \ luminance.py
 '   4. ThisWorkbook.Path \ luminance.py             (legacy)
 '   5. Environ("USERPROFILE") \ OneDrive \ Documents \ luminance.py
@@ -1231,15 +1231,15 @@ Private Function FindLuminanceScript() As String
     
     Dim candidates As Variant
     candidates = Array( _
-        ThisWorkbook.Path & "\Python\luminance.py", _
-        ThisWorkbook.Path & "\luminance.py", _
+        ThisWorkbook.path & "\Python\luminance.py", _
+        ThisWorkbook.path & "\luminance.py", _
         Environ("USERPROFILE") & "\OneDrive\Documents\Github\HyperLapse-Excel\Python\luminance.py", _
         Environ("USERPROFILE") & "\OneDrive\Documents\luminance.py", _
         Environ("USERPROFILE") & "\Documents\luminance.py")
     
     Dim i As Long
     For i = 0 To UBound(candidates)
-        If Len(Dir(CStr(candidates(i)))) > 0 Then
+        If Len(dir(CStr(candidates(i)))) > 0 Then
             g_luminanceScriptPath = CStr(candidates(i))
             LogEvent "CAMERA", "luminance.py found at " & g_luminanceScriptPath
             FindLuminanceScript = g_luminanceScriptPath
@@ -1247,7 +1247,7 @@ Private Function FindLuminanceScript() As String
         End If
     Next i
     
-    ' Not found — log all the places we looked, once
+    ' Not found - log all the places we looked, once
     Dim msg As String
     msg = "luminance.py NOT found. Searched: "
     For i = 0 To UBound(candidates)
@@ -1255,7 +1255,7 @@ Private Function FindLuminanceScript() As String
     Next i
     LogEvent "CAMERA", msg
     
-    g_luminanceScriptPath = "(notfound)"   ' sentinel — don't search again this session
+    g_luminanceScriptPath = "(notfound)"   ' sentinel - don't search again this session
     FindLuminanceScript = ""
 End Function
 
@@ -1311,6 +1311,9 @@ Public Sub InitCamera()
     LogEvent "CAMERA", "Camera initialised: M f1.8 ISO100 1/5000"
     Range("dataCommCameraCheck").value = "Init OK " & Format(Now(), "HH:nn:ss")
 End Sub
+
+
+
 
 
 
