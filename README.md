@@ -1,20 +1,28 @@
 # HyperLapse Excel Controller
 
-Excel VBA workbook for controlling the HyperLapse Cart system — a fully automated timelapse rig combining a motorised cart, DJI Ronin RS4 Pro gimbal and Canon EOS R3 camera.
+Excel VBA workbook (HyperLapse.xlsm) — the planning brain for the HyperLapse
+Cart: a fully automated overnight astrophotography timelapse rig combining a
+motorised cart, DJI Ronin RS4 Pro gimbal, and Canon EOS R3 camera. Plans are
+authored here and pushed to the cart; the cart runs them self-contained from its
+on-board web UI.
 
 ## System Overview
 
 ```
 Excel Workbook (laptop in van)
   │
-  ├── WiFi → Arduino Uno R4 (192.168.20.97)
-  │           ├── CAN → DJI Ronin RS4 Pro gimbal
-  │           ├── I2C → Tic 36v4 stepper controllers (cart motors)
+  ├── WiFi → Arduino Giga R1 (192.168.1.97)
+  │           ├── CAN → DJI Ronin RS4 Pro gimbal (Adafruit CAN Pal 5708)
+  │           ├── I2C → Tic 36v4 stepper controllers (cart motors, addr 14/15)
+  │           ├── I2C → BNO085 IMU (heading reference, addr 0x4A)
   │           └── Servo → Cart steering
   │
-  └── WiFi → Canon EOS R3 CCAPI (192.168.20.99:8080)
-              └── Camera settings, shutter control, thumbnail retrieval
+  └── WiFi → Canon EOS R3 CCAPI (192.168.1.99:8080)
+              └── Camera settings, shutter cadence, luminance/thumbnail retrieval
 ```
+
+(A wired-Ethernet CCAPI path over a W5500 on the .20.x subnet is reserved as a
+future build; current production runs CCAPI over WiFi.)
 
 ## Projects
 
@@ -22,22 +30,33 @@ Excel Workbook (laptop in van)
 |---|---------|--------|
 | 1 | DJI Ronin RS4 Pro gimbal control via Arduino CAN | ✅ Done |
 | 2 | Motorised SCX6 cart (Tic 36v4 steppers + servo) | ✅ Done |
-| 3 | Gimbal pointing direction / sunset-to-Milky Way sequence | 🔧 In progress |
-| 4 | Canon CCAPI camera control from Excel | 🔧 In progress |
+| 3 | Astro tracking (sun / moon / Galactic Centre), cubic-fit gimbal paths | ✅ Working |
+| 4 | Canon CCAPI camera control + overnight Tv/ISO luminance ramp | ✅ Working |
+| 5 | Plan authoring + push pipeline (Excel → cart) | ✅ Working |
+| 6 | On-cart Exec web UI (START / E-STOP, field-self-contained) | ✅ Working |
 
 ## Repository Structure
 
 ```
 HyperLapse-Excel/
-  Modules/
-    Camera.bas     Canon CCAPI — ISO, Tv, Av, shutter, luminance
-    Gimbal.bas     Arduino gimbal control — GimbalPosition, Heartbeat
-    Sequence.bas   Phase control loop — sunset timing, transitions
-    Cart.bas       Cart log retrieval and replay plan generation
-    Astro.bas      Sun position, Milky Way galactic centre angles
-    Utils.bas      Shared helpers — CameraGet, logging, sunrise API
+  Modules/   (~33 .bas modules; key ones by role)
+    Astronomy:   Astro.bas (sun/moon/GC ephemeris + rise/transit/set solvers),
+                 AstroPush.bas (cubic-fit track paths + zenith-band ease + push)
+    Plan author: PlanAuthoring, PlanBuilder, PlanCols (header-name resolver),
+                 PlanDVFix (dropdowns), GimbalSweepDir (CW/CCW), MWToGCRenamer
+    Push:        CartPlanPush, TrackPlanPush, PlanPush (preview), ChartPush,
+                 CableStripPush, CableSpan (450 deg guard), GimbalPrep (orchestrator)
+    Camera/exp:  Camera.bas (CCAPI), Formula.bas (Tv/ISO ramp + /exposure/load),
+                 Sequence.bas (phase loop)
+    Cart/recon:  Cart.bas, BicycleModel.bas (heading integration), CircleFit,
+                 WobblyRecon, GimbalLogPuller (recon -> Plan rows)
+    Viz:         GimbalPlanViz_v3 (validation chart), GimbalPlanViewButton,
+                 GimbalCableStripButton, GimbalMapFetch
+    Shared:      Utils.bas, Buttons.bas, Gimbal.bas, Smooth.bas, BackupRestore.bas
   Python/
-    luminance.py          Thumbnail luminance calculator (called by VBA)
+    gimbal_planview_v2.py   Polar plan-view + cable-strip renderer
+    gimbal_cablestrip.py    Cable-span renderer (writes cablestrip_span.txt sidecar)
+    luminance.py            Thumbnail luminance calculator (called by VBA)
   README.md
 ```
 
@@ -56,8 +75,8 @@ HyperLapse-Excel/
 
 | Range | Description | Default |
 |-------|-------------|---------|
-| dataCameraIP | Canon R3 CCAPI URL | http://192.168.20.99:8080 |
-| dataArduinoIP | Arduino Uno R4 WiFi URL | http://192.168.20.97 |
+| dataCameraIP | Canon R3 CCAPI URL | http://192.168.1.99:8080 |
+| dataArduinoIP | Arduino Giga R1 WiFi URL | http://192.168.1.97 |
 | dataLatitude | Shoot location latitude | -34.9285 |
 | dataLongitude | Shoot location longitude | 138.6007 |
 | dataUTCOffset | UTC offset in hours | 9.5 (ACST) / 10.5 (ACDT) |
@@ -97,44 +116,43 @@ GET      {path}?type=jpeg&kind=list&page={n}           — file list
 GET      {path}/{file}?kind=thumbnail                  — 160x120 JPEG
 ```
 
-## Arduino Endpoints
+## Arduino (Cart) Endpoints
+
+The cart exposes a large HTTP surface; the main groups (see the firmware repo
+README for the full list):
 
 ```
-GET  /move?yaw=&roll=&pitch=&time=   Gimbal move
-GET  /home                           Gimbal to 0,0,0
-GET  /shutter                        CAN shutter trigger
-GET  /status                         Live status CSV
-GET  /heartbeat?msg=HH:MM:SS         Excel alive timestamp
-GET  /cameramsg?msg=...              Camera settings for UI display
-GET  /btn1 — /btn21                  Web UI button actions
-GET  /cartlog                        Cart log CSV, clears buffer
-GET  /gimballog                      Gimbal waypoint log CSV, clears buffer
-GET  /interval?secs=N                Set backup shutter interval
+Plan:    /plan/load /plan/start /plan/stop /plan/clear /plan/advance /plan/nudge
+Gimbal:  /move /home /heartbeat /gimbal/carthead /gimbal/pano /gimbal/showastro
+Track:   /settings/trackplan /settings/trackpath  (Excel-pushed cubics + intervals)
+Camera:  /exposure/init /exposure/load /exposure/walk /shutter/start /shutter/stop
+         /interval /luminance
+Preview: /preview/goto /preview/step /preview/status   (cable-rig jog)
+Status:  /exec/feed (Exec UI JSON) /status /cartlog /gimballog /btn<N>
 ```
 
 ## Python Setup
 
-Install Pillow (once):
+The renderers (plan view, cable strip) and luminance helper need:
 ```
-pip install Pillow
+pip install Pillow matplotlib openpyxl
 ```
-
-Place `luminance.py` in:
-```
-C:\Users\[username]\Documents\luminance.py
-```
+Python files live in the workbook's `Python/` subdirectory (the VBA buttons
+shell them from there and read back the PNG + sidecar files). Confirmed on the
+operator machine with Python 3.14, openpyxl 3.1.5, matplotlib 3.10.9.
 
 ## Hardware
 
 | Component | Details |
 |-----------|---------|
-| Controller | Arduino Uno R4 WiFi |
+| Controller | Arduino Giga R1 WiFi |
 | Gimbal | DJI Ronin RS4 Pro |
-| CAN transceiver | SN65HVD230 (3.3V) |
+| CAN transceiver | Adafruit CAN Pal 5708 (TJA1051T/3) |
 | Cart | Axial SCX6 |
 | Stepper controllers | Pololu Tic 36v4 × 2 (I2C addr 14, 15) |
+| IMU | Adafruit BNO085 (I2C addr 0x4A, heading reference) |
 | Camera | Canon EOS R3 |
-| WiFi | TP-Link AX6000 mesh (van + battery portable node) |
+| WiFi | Wavlink AX6000 mesh (van + field node) |
 
 ## Arduino Repository
 

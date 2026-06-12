@@ -228,7 +228,7 @@ Public Sub AddPlanRowFromLog()
     LogEventSafe "PLAN", "AddPlanRowFromLog: row " & newRow & " from " & _
                           "log row " & selRow & " (" & logType & ")"
 
-    Application.GoTo wsPlan.Cells(newRow, 14), False   ' jump to new row, col N
+    Application.GoTo wsPlan.Cells(newRow, AnchorTypeCol(wsPlan)), False   ' jump to Anchor type
 
     Exit Sub
 ErrHandler:
@@ -262,7 +262,7 @@ Public Sub AddBlankPlanRow()
                    "(blank row)"
 
     LogEventSafe "PLAN", "AddBlankPlanRow: row " & newRow
-    Application.GoTo wsPlan.Cells(newRow, 14), False
+    Application.GoTo wsPlan.Cells(newRow, AnchorTypeCol(wsPlan)), False
 
     Exit Sub
 ErrHandler:
@@ -334,7 +334,7 @@ Public Sub InsertPlanRowAbove()
                    "(inserted blank)"
 
     LogEventSafe "PLAN", "InsertPlanRowAbove: at row " & selRow
-    Application.GoTo wsPlan.Cells(selRow, 14), False
+    Application.GoTo wsPlan.Cells(selRow, AnchorTypeCol(wsPlan)), False
 
     Exit Sub
 ErrHandler:
@@ -431,7 +431,9 @@ Public Sub RebuildAnchorDV(ByVal cellAnchorRef As Range)
 
     Dim r As Long: r = cellAnchorRef.row
     Dim anchorType As String
-    anchorType = UCase(Trim(CStr(ws.Cells(r, 14).value)))   ' col N
+    Dim atc As Long: atc = AnchorTypeCol(ws)
+    If atc = 0 Then Exit Sub
+    anchorType = UCase(Trim(CStr(ws.Cells(r, atc).value)))   ' Anchor type (by name)
 
     ' Clear any existing DV on this cell
     cellAnchorRef.Validation.Delete
@@ -471,11 +473,18 @@ End Sub
 ' Private helpers
 ' ============================================================
 
+' Anchor-type column index (header-resolved). Used as the occupancy probe and
+' the cursor-jump target. Returns 0 if headers unavailable (callers tolerate).
+Private Function AnchorTypeCol(ByVal ws As Worksheet) As Long
+    Dim cols As Object: Set cols = PlanCols.ResolveMiddleCols(ws)
+    If cols Is Nothing Then AnchorTypeCol = 0 Else AnchorTypeCol = cols("anchortype")
+End Function
 ' Find next free row in middle zone (col N blank = empty row)
 Private Function NextFreeMiddleRow(ByVal ws As Worksheet) As Long
-    Dim r As Long
+    Dim r As Long, atc As Long: atc = AnchorTypeCol(ws)
+    If atc = 0 Then Exit Function
     For r = PLAN_FIRST_ROW To PLAN_FIRST_ROW + PLAN_MAX_ROWS - 1
-        If IsEmpty(ws.Cells(r, 14).value) Then     ' col N - Anchor type
+        If IsEmpty(ws.Cells(r, atc).value) Then     ' Anchor type (by name)
             NextFreeMiddleRow = r
             Exit Function
         End If
@@ -485,10 +494,11 @@ End Function
 
 ' Find last populated row in middle zone
 Private Function LastPopulatedMiddleRow(ByVal ws As Worksheet) As Long
-    Dim r As Long, last As Long
+    Dim r As Long, last As Long, atc As Long: atc = AnchorTypeCol(ws)
     last = PLAN_FIRST_ROW - 1
+    If atc = 0 Then LastPopulatedMiddleRow = last: Exit Function
     For r = PLAN_FIRST_ROW To PLAN_FIRST_ROW + PLAN_MAX_ROWS - 1
-        If Not IsEmpty(ws.Cells(r, 14).value) Then last = r
+        If Not IsEmpty(ws.Cells(r, atc).value) Then last = r
     Next r
     LastPopulatedMiddleRow = last
 End Function
@@ -523,24 +533,25 @@ Private Sub WriteMiddleRow(ByVal ws As Worksheet, ByVal r As Long, _
                             ByVal ease As String, _
                             ByVal moveTime As String, _
                             ByVal note As String)
-    ' Col M = Step (text formula "GP01"/"GP02"/...)
-    ws.Cells(r, 13).Formula = "=""GP"" & TEXT(ROW()-" & (PLAN_FIRST_ROW - 1) & ",""00"")"
-    ws.Cells(r, 13).Interior.Color = DERIVED_FILL_COLOR
-    ws.Cells(r, 14).value = anchorType
-    ws.Cells(r, 15).value = anchorRef
-    ' Cols 16 (P=Offset), 17 (Q=Fires at), 18 (R=Total dur) intentionally
-    ' not touched.
-    ws.Cells(r, 19).value = action
-    ws.Cells(r, 20).value = target
-    ws.Cells(r, 21).value = rate
-    ws.Cells(r, 22).value = ry
-    ws.Cells(r, 23).value = rp
-    ws.Cells(r, 24).value = dyaw
-    ws.Cells(r, 25).value = dpitch
-    ws.Cells(r, 26).value = ease
-    ws.Cells(r, 27).value = moveTime
-    ws.Cells(r, 27).Interior.Color = DERIVED_FILL_COLOR
-    ws.Cells(r, 28).value = note
+    ' Columns resolved by header name (reorder-safe). Offset/Fires-at/Total-dur
+    ' are intentionally not written here (operator/formula territory). Dir is not
+    ' seeded here either - GimbalSweepDir.FillSweepDirections owns sweep direction.
+    Dim cols As Object: Set cols = PlanCols.ResolveMiddleCols(ws)
+    If cols Is Nothing Then Exit Sub
+    ws.Cells(r, cols("step")).Formula = "=""GP"" & TEXT(ROW()-" & (PLAN_FIRST_ROW - 1) & ",""00"")"
+    ws.Cells(r, cols("step")).Interior.Color = DERIVED_FILL_COLOR
+    ws.Cells(r, cols("anchortype")).value = anchorType
+    ws.Cells(r, cols("anchorref")).value = anchorRef
+    ws.Cells(r, cols("action")).value = action
+    ws.Cells(r, cols("target")).value = target
+    ws.Cells(r, cols("panspeed")).value = rate
+    ws.Cells(r, cols("ry")).value = ry
+    ws.Cells(r, cols("rp")).value = rp
+    ws.Cells(r, cols("dyaw")).value = dyaw
+    ws.Cells(r, cols("dpitch")).value = dpitch
+    ws.Cells(r, cols("movet")).value = moveTime
+    ws.Cells(r, cols("movet")).Interior.Color = DERIVED_FILL_COLOR
+    ws.Cells(r, cols("note")).value = note
 
     ' Apply seed fill to authored cells. Skip derived/formula cols:
     '   13 = Step (formula)
@@ -568,16 +579,22 @@ Private Sub CopyMiddleRow(ByVal ws As Worksheet, _
     Dim midFirstCol As Long: midFirstCol = Range(MID_COL_FIRST & "1").Column
     Dim midLastCol As Long:  midLastCol = Range(MID_COL_LAST & "1").Column
     Dim c As Long
+    Dim cc As Object: Set cc = PlanCols.ResolveMiddleCols(ws)
+    If cc Is Nothing Then Exit Sub
+    Dim cStepCol As Long: cStepCol = cc("step")
+    Dim cFires As Long: cFires = cc("firesat")
     For c = midFirstCol To midLastCol
-        If c = 13 Then
+        If c = cStepCol Then
             ' Step column - re-formula, not copy
-            ws.Cells(dstRow, 13).Formula = _
+            ws.Cells(dstRow, cStepCol).Formula = _
                 "=""GP"" & TEXT(ROW()-" & (PLAN_FIRST_ROW - 1) & ",""00"")"
-        ElseIf c = 17 Or c = 18 Then
-            ' Fires at / Total dur - copy the formula text verbatim.
+        ElseIf c = cFires Then
+            ' Fires at - copy the formula text verbatim (chain / anchor formula).
             ' Excel updates relative refs to the destination row automatically.
             ws.Cells(dstRow, c).Formula = ws.Cells(srcRow, c).Formula
         Else
+            ' All other cols, incl. For (min) which is now an operator INPUT
+            ' (was the derived Total dur) - copy value.
             ws.Cells(dstRow, c).value = ws.Cells(srcRow, c).value
         End If
         ws.Cells(dstRow, c).Interior.Color = ws.Cells(srcRow, c).Interior.Color

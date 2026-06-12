@@ -99,7 +99,7 @@ Private Function RenameOne(ByVal oldName As String, ByVal newName As String, _
     ' Get the cell so we can rewrite the label in col B of the same row
     Dim targetCell As Range
     On Error Resume Next
-    Set targetCell = ThisWorkbook.names(oldName).refersToRange
+    Set targetCell = ThisWorkbook.names(oldName).RefersToRange
     On Error GoTo 0
 
     ThisWorkbook.names(oldName).Delete
@@ -122,6 +122,9 @@ End Function
 Private Function RewriteAnchorFormulas() As String
     Dim ws As Worksheet
     Set ws = ThisWorkbook.Sheets("Plan")
+    Dim cols As Object: Set cols = PlanCols.ResolveMiddleCols(ws)
+    If cols Is Nothing Then Exit Function
+    Dim colFires As Long: colFires = cols("firesat")
 
     Dim changedRows As String: changedRows = ""
     Dim alreadyDoneRows As Long: alreadyDoneRows = 0
@@ -130,7 +133,7 @@ Private Function RewriteAnchorFormulas() As String
     Dim r As Long
     For r = 6 To 20
         Dim cell As Range
-        Set cell = ws.Cells(r, 17)   ' col Q
+        Set cell = ws.Cells(r, colFires)   ' Fires at (by header name)
 
         Dim f As String
         f = cell.Formula

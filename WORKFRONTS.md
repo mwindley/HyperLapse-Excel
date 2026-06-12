@@ -1,5 +1,33 @@
 # HyperLapse Cart — Open Workfronts
 
+**As of:** Day 32 cont., 12 Jun 2026 (firmware soak-v114). For the freshest
+status read **SOON_LIST.md** (status review at top); this file keeps the
+workfront catalog. The Day-31 block + numbered catalog below are kept as the
+standing record.
+
+## Closed since Day 31 (Day-32 work)
+
+- **Earth-frame heading correction (3b baseline)** — BUILT (v103): trackPlanTick
+  subtracts the plan's expected cart heading (col-H / `eh` token) as the
+  earth-frame baseline; `hdg` is now the optional drift trim. Move earth-frame
+  too (v104). SIGN still to confirm on a daylight Sun Track run.
+- **Shutter wiring** — START fires shutter + exposure-init (v110); E-STOP / every
+  stop path / plan END halt firing (v110/v113); Clear clears track (v114).
+- **Anti-whip** — universal slew-rate floor 20 deg/s, all paths (v111).
+- **Exec UI row rework (R6)** — hdg + eta coexist, eta direction explicit (v112).
+- **Moon astro** — zenith-band ease added (moon transits >70 deg ~1 wk/month).
+  Moon keyframes confirmed already wired. (Step-5 below-horizon goto-rise-and-wait
+  firmware STILL OPEN = R7.)
+- **Chart Track rendering (R4)** — swings coloured by Pan Speed, tracks by object.
+- **Pan Speed model** — get-there duration + Pan Time + chart colour built;
+  acquire ease retired in favour of Pan Speed rate.
+- **Dateless fire-time class** — root-fixed (Utils.DatedFireSerial; Python live).
+
+Still open: **R7** moon step-5 firmware, **R10** cable-strip index-alignment,
+**F1** cart-motor-stop (future). See SOON_LIST.
+
+---
+
 **As of:** Day 31, 07 Jun 2026 — gimbal Plan View (#2) renderer + Excel
 Render-Plan-View button LIVE; moon astro table->push->cart proven on the
 spare GIGA (cart mask 127). See the Day-31 block immediately below for

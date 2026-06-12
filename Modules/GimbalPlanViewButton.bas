@@ -28,10 +28,10 @@ Private Const MAP_PATH As String = ""                     ' full path to north-u
 ' -------------------------------------
 
 Public Sub RenderPlanView()
-    On Error GoTo Fail
+    On Error GoTo fail
 
     Dim base As String, pydir As String, script As String, xlsm As String, outPng As String
-    base = ThisWorkbook.Path
+    base = ThisWorkbook.path
     If base = "" Then
         MsgBox "Save the workbook once before rendering.", vbExclamation
         Exit Sub
@@ -42,7 +42,7 @@ Public Sub RenderPlanView()
     script = pydir & Application.PathSeparator & SCRIPT_NAME
     outPng = pydir & Application.PathSeparator & "gimbal_planview_v2.png"
 
-    If Dir(script) = "" Then
+    If dir(script) = "" Then
         MsgBox "Renderer not found:" & vbCrLf & script & vbCrLf & _
                "Check PY_SUBDIR / SCRIPT_NAME at the top of GimbalPlanViewButton.", vbExclamation
         Exit Sub
@@ -51,7 +51,7 @@ Public Sub RenderPlanView()
     ' 1) fill sweep directions (blanks only; overrides preserved), then save
     On Error Resume Next
     Application.Run "GimbalSweepDir.FillSweepDirections", False
-    On Error GoTo Fail
+    On Error GoTo fail
     ThisWorkbook.Save
 
     ' 2) build the command and run it synchronously
@@ -64,7 +64,7 @@ Public Sub RenderPlanView()
     If mapUse = "" Then
         Dim autoMap As String
         autoMap = pydir & Application.PathSeparator & "map.png"
-        If Dir(autoMap) <> "" Then mapUse = autoMap
+        If dir(autoMap) <> "" Then mapUse = autoMap
     End If
     If mapUse <> "" Then cmd = cmd & " --map " & Q(mapUse)
 
@@ -72,20 +72,26 @@ Public Sub RenderPlanView()
     logf = pydir & Application.PathSeparator & "render_log.txt"
     rc = RunAndWait(cmd, logf)
     If rc <> 0 Then
-        MsgBox "Renderer exited with code " & rc & "." & vbCrLf & vbCrLf & _
-               "--- last output ---" & vbCrLf & TailFile(logf, 1500), vbExclamation
-        Exit Sub
+        ' Trace the FULL python output to the copyable event log (not a MsgBox),
+        ' then propagate so BuildPlan/RunStep reports FAILED rather than ok.
+        Dim ptail As String: ptail = TailFile(logf, 1500)
+        LogEvent "PREP", "RenderPlanView FAILED rc=" & rc
+        LogEvent "PREP", "py-tail: " & ptail
+        On Error GoTo 0
+        Err.Raise vbObjectError + 513, "RenderPlanView", _
+            "Renderer exited code " & rc & " - see event log (py-tail traced)"
     End If
 
     ' 3) open the PNG with the default image viewer
-    If Dir(outPng) <> "" Then
+    If dir(outPng) <> "" Then
         ThisWorkbook.FollowHyperlink outPng
     Else
         MsgBox "Render finished but PNG not found:" & vbCrLf & outPng, vbExclamation
     End If
     Exit Sub
 
-Fail:
+fail:
+    LogEvent "PREP", "RenderPlanView ERROR: " & Err.Description
     MsgBox "Render failed: " & Err.Description, vbExclamation
 End Sub
 
@@ -104,7 +110,7 @@ End Function
 Private Function TailFile(ByVal path As String, ByVal maxChars As Long) As String
     On Error Resume Next
     Dim f As Integer, s As String
-    If Dir(path) = "" Then TailFile = "(no log written - python may not have started)": Exit Function
+    If dir(path) = "" Then TailFile = "(no log written - python may not have started)": Exit Function
     f = FreeFile
     Open path For Input As #f
     s = Input$(LOF(f), f)

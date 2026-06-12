@@ -1,11 +1,51 @@
 # HyperLapse Cart - PROJECT_STATE
 
-_Last updated: 07 Jun 2026 - checkpoint at firmware **soak-v101**._
-_Latest flashed build is **soak-v102** (Day 31): Cable screen (view #3) built + flashed, Day tab
-removed, tab order Cart-Gimbal-Cable-Exec. The headline below still describes the v101 state; for the
-Day-31 cart-UI + gimbal-plan-view + moon-push work see WORKFRONTS.md (NOW open items live there)._
+_Last updated: 12 Jun 2026 (Day 32 cont.) - current firmware **soak-v114**._
+_The detailed body below is the **Day-31 / soak-v101-v102 checkpoint** and is kept
+as the build record. For the freshest state read **SOON_LIST.md** (status review at
+top); for open work read **WORKFRONTS.md**. The Day-32 deltas since the v101
+headline are summarised immediately below._
 
-## Headline this session
+## Day-32 deltas (v103 -> v114), since the v101 headline
+
+Firmware (all flashed + on-rig verified except where noted):
+- **v103 heading baseline** - trackPlanTick subtracts the plan's expected cart
+  heading (col-H / `eh` token) as the earth-frame baseline; cart aims from the
+  plan with no operator action, `hdg` is now just the optional drift trim.
+- **v104 Move earth-frame** - astro Move sends real-world azimuth + eh; re-aims
+  on a plan heading change or a live bump.
+- **v107-v109** acquire safety floor, stop-releases-gimbal, track entry ease
+  (yaw+pitch).
+- **v110 START fires shutter** - Exec START runs exposure-init + shutter-start
+  after track/plan start (one field press arms gimbal + plan + photos); E-STOP
+  and every stop path halt the shutter.
+- **v111 universal slew-rate floor** - setPosControl floors time_for_action to
+  swing/20 deg/s on every motion path (anti-whip backstop).
+- **v112 Exec UI row rework (R6)** - earth-frame GP shows hdg button AND eta;
+  eta direction explicit (+elapsed / countdown / done).
+- **v113 END stops shutter** content-independent (astro -> track END; cart-only
+  -> cart DONE).
+- **v114 Clear clears track** - no stale GP row after Clear.
+
+Excel / Python:
+- GC tracking pipeline rebuilt (UTC/local fix, live-ephemeris dial), GC zenith
+  band ease (alt>70).
+- **Moon zenith-band ease** added (AstroPush + planview) - moon transits >70 deg
+  ~1 week/month here.
+- **R4 chart speed/object colours** (GimbalPlanViz_v3): swings by Pan Speed,
+  tracks by object.
+- Dateless fire-time class root-fixed (Utils.DatedFireSerial; Python robust).
+- **PushFormulaToCart folded into PushToCart** - the 3 Excel buttons now cover
+  everything (incl. the exposure ramp); 2 UI buttons (START/E-STOP) run it.
+
+Still open (see SOON_LIST): R7 moon step-5 (below-horizon goto-rise-and-wait
+firmware), R10 cable-strip index-alignment, F1 cart-motor-stop (future).
+
+---
+
+_(Historical Day-31 / v101-v102 checkpoint follows.)_
+
+## Headline this session (Day 31 / v101)
 
 The multi-day HTTP loop-stall that threatened photo cadence is **structurally solved** (v59):
 HTTP runs entirely on its own RTOS thread, off the photo loop - smoother eases, immediate

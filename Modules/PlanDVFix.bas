@@ -13,7 +13,8 @@ Attribute VB_Name = "PlanDVFix"
 ' Public entry: FixPlanValidations
 '
 ' Scope (rows 6..60, the gimbal-plan authoring block):
-'   Col T (Target):   set list = sun, moon, gc  (allow blank = a marker
+'   Col T (Target):   set list = sun, moon, gc, + event words sunset/
+'                     sunrise/moonrise/moonset/gcrise/gcset  (allow blank = a marker
 '                     Move that uses the Ry/Rp ref pose). This REPLACES
 '                     the wrong rate list the prototype left on T.
 '   Col S (Action):   reset list = Pan Follow, Lock, Move, Track,
@@ -41,35 +42,47 @@ Private Const PLAN_FIRST_ROW As Long = 6
 Private Const PLAN_LAST_ROW  As Long = 60
 
 ' Gimbal-plan columns (mirror PlanPush.bas COL_* constants)
-Private Const COL_FIRES_AT As Long = 17   ' Q
-Private Const COL_ACTION   As Long = 19   ' S
-Private Const COL_TARGET   As Long = 20   ' T
+' MIDDLE columns resolved by header name (PlanCols.ResolveMiddleCols).
+Private COL_FIRES_AT As Long
+Private COL_ACTION   As Long
+Private COL_TARGET   As Long
 
 Public Sub FixPlanValidations()
     On Error GoTo ErrHandler
 
     Dim ws As Worksheet
     Set ws = ThisWorkbook.Sheets("Plan")
+    Dim cols As Object: Set cols = PlanCols.ResolveMiddleCols(ws)
+    If cols Is Nothing Then Exit Sub
+    COL_ACTION = cols("action"): COL_TARGET = cols("target")
 
     Dim r1 As Long, r2 As Long
-    r1 = PLAN_FIRST_ROW
-    r2 = PLAN_LAST_ROW
+    r1 = PLAN_FIRST_ROW: r2 = PLAN_LAST_ROW
 
-    ' Col T (Target): astro objects + allow-blank for marker Moves.
-    SetListValidation ColRange(ws, COL_TARGET, r1, r2), "sun,moon,gc"
+    ' Reorder-safe: clear ALL data validations across the MIDDLE block first
+    ' (removes stale ranges anchored to old column letters - e.g. a Target
+    ' list bleeding onto the Dir column), then reapply each list to its
+    ' header-resolved column. Free-entry / computed columns get no dropdown.
+    Dim cFirst As Long, cLast As Long
+    cFirst = cols("step"): cLast = cols("note")
+    ClearValidation ws.Range(ws.Cells(r1, cFirst), ws.Cells(r2, cLast))
 
-    ' Col S (Action): production list (clears prototype rise,mid,end).
-    SetListValidation ColRange(ws, COL_ACTION, r1, r2), _
+    ' dropdown columns -> their lists, by resolved position
+    SetListValidation ColRange(ws, cols("anchortype"), r1, r2), "WP,TIME,ASTRO"
+    SetListSuggestion ColRange(ws, cols("anchorref"), r1, r2), _
+                      "sunset,sunrise,moonrise,moonset,gcrise,gctransit,gcset"
+    SetListValidation ColRange(ws, cols("action"), r1, r2), _
                       "Pan Follow,Lock,Move,Track,Track-yaw,END"
+    SetListValidation ColRange(ws, cols("target"), r1, r2), _
+                      "sun,moon,gc,sunset,sunrise,moonrise,moonset,gcrise,gcset"
+    SetListValidation ColRange(ws, cols("dir(cw/ccw)"), r1, r2), "CW,CCW"
+    SetListValidation ColRange(ws, cols("panspeed"), r1, r2), _
+                      "Slow,Mid,Fast"
 
-    ' Col Q (Fires-at): computed -> no dropdown.
-    ClearValidation ColRange(ws, COL_FIRES_AT, r1, r2)
-
-    MsgBox "Plan validations fixed (rows " & r1 & "-" & r2 & "):" & vbCrLf & _
-           "  T (Target)   = sun, moon, gc  (+ blank for marker Moves)" & vbCrLf & _
-           "  S (Action)   = reset; prototype rise/mid/end duplicate removed" & vbCrLf & _
-           "  Q (Fires-at) = dropdown removed (computed value)" & vbCrLf & vbCrLf & _
-           "Left untouched: N, U, Z (correct); O, P, C (out of scope).", _
+    MsgBox "Plan validations rebuilt for current column order (rows " & r1 & "-" & r2 & ")." & vbCrLf & _
+           "Lists: Anchor type, Action, Target, Dir (CW/CCW), Pan Speed." & vbCrLf & _
+           "Suggest (non-binding): Anchor ref = astro events." & vbCrLf & _
+           "Cleared on: Offset, Fires-at, Total-dur, Ry, Rp, dyaw, dpitch, Move t, Note.", _
            vbInformation, "FixPlanValidations"
     Exit Sub
 
@@ -91,6 +104,21 @@ Private Sub SetListValidation(ByVal rng As Range, ByVal listCsv As String)
         .IgnoreBlank = True
         .InCellDropdown = True
         .ShowError = True
+    End With
+End Sub
+
+' Non-binding dropdown: shows the list as a quick-pick but does NOT reject
+' other entries. Used on Anchor ref, whose valid value depends on Anchor
+' type (WP name / clock / astro event) -- the astro names are offered as a
+' convenience while clock/WP refs are still typed freely.
+Private Sub SetListSuggestion(ByVal rng As Range, ByVal listCsv As String)
+    With rng.Validation
+        .Delete
+        .Add Type:=xlValidateList, AlertStyle:=xlValidAlertInformation, _
+             Operator:=xlBetween, Formula1:=listCsv
+        .IgnoreBlank = True
+        .InCellDropdown = True
+        .ShowError = False
     End With
 End Sub
 

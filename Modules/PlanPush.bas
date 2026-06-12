@@ -45,22 +45,24 @@ Private Const PLAN_FIRST_ROW As Long = 6
 Private Const PLAN_MAX_ROWS  As Long = 60
 
 ' Middle-zone column numbers
-Private Const COL_STEP        As Long = 13  ' M
-Private Const COL_ANCHOR_TYPE As Long = 14  ' N
-Private Const COL_ANCHOR_REF  As Long = 15  ' O
-Private Const COL_OFFSET      As Long = 16  ' P
-Private Const COL_FIRES_AT    As Long = 17  ' Q
-Private Const COL_TOTAL_DUR   As Long = 18  ' R
-Private Const COL_ACTION      As Long = 19  ' S
-Private Const COL_TARGET      As Long = 20  ' T
-Private Const COL_RATE        As Long = 21  ' U
-Private Const COL_RY          As Long = 22  ' V
-Private Const COL_RP          As Long = 23  ' W
-Private Const COL_DYAW        As Long = 24  ' X
-Private Const COL_DPITCH      As Long = 25  ' Y
-Private Const COL_EASE        As Long = 26  ' Z
-Private Const COL_MOVE_T      As Long = 27  ' AA
-Private Const COL_NOTE        As Long = 28  ' AB
+' MIDDLE columns resolved by header name at run time via EnsureCols ->
+' PlanCols.ResolveMiddleCols, so a column reorder in Excel cannot break this
+' push. Populated at the top of each public entry point.
+Private COL_STEP        As Long
+Private COL_ANCHOR_TYPE As Long
+Private COL_ANCHOR_REF  As Long
+Private COL_OFFSET      As Long
+Private COL_FIRES_AT    As Long
+Private COL_TOTAL_DUR   As Long
+Private COL_ACTION      As Long
+Private COL_TARGET      As Long
+Private COL_RATE        As Long
+Private COL_RY          As Long
+Private COL_RP          As Long
+Private COL_DYAW        As Long
+Private COL_DPITCH      As Long
+Private COL_MOVE_T      As Long
+Private COL_NOTE        As Long
 Private Const LOG_CATEGORY As String = "P7"
 
 ' Cart-side track interval slot limit (sketch TRACK_PLAN_MAX,
@@ -72,6 +74,21 @@ Private Const PREVIEW_PLAN_MAX As Long = 20
 
 ' ============================================================
 ' Public - PushGimbalPlan
+' Populate the module COL_* indices from the shared header-name resolver.
+' Returns False (caller should abort) if a required header is missing.
+Private Function EnsureCols(ByVal ws As Worksheet) As Boolean
+    EnsureCols = False
+    Dim cols As Object: Set cols = PlanCols.ResolveMiddleCols(ws)
+    If cols Is Nothing Then Exit Function
+    COL_STEP = cols("step"): COL_ANCHOR_TYPE = cols("anchortype")
+    COL_ANCHOR_REF = cols("anchorref"): COL_OFFSET = cols("offset(min)")
+    COL_FIRES_AT = cols("firesat"): COL_TOTAL_DUR = cols("stay(min)")
+    COL_ACTION = cols("action"): COL_TARGET = cols("target")
+    COL_RATE = cols("panspeed"): COL_RY = cols("ry"): COL_RP = cols("rp")
+    COL_DYAW = cols("dyaw"): COL_DPITCH = cols("dpitch")
+    COL_MOVE_T = cols("movet"): COL_NOTE = cols("note")
+    EnsureCols = True
+End Function
 ' ============================================================
 Public Sub PushGimbalPlan()
     On Error GoTo ErrHandler
@@ -88,6 +105,7 @@ Public Sub PushGimbalPlan()
 
     Dim wsPlan As Worksheet
     Set wsPlan = ThisWorkbook.Sheets("Plan")
+    If Not EnsureCols(wsPlan) Then Exit Sub   ' header-map (fail-loud)
 
     ' --- Phase 1: Validate ---
     Dim errCount As Long
@@ -396,8 +414,54 @@ Public Function EvalAstro(ByVal target As String, ByVal atTime As Double, _
             ok = Astro.GetMoonGimbalAngles(CDate(atTime), cartHeading, yaw, pitch)
         Case "gc", "mw"
             ok = Astro.GetGCGimbalAngles(CDate(atTime), cartHeading, yaw, pitch)
+        ' Event-locked targets: aim at the body's position AT THE EVENT TIME,
+        ' independent of the row's fire-time (atTime is ignored here). The
+        ' event times are the same workbook named ranges the Fires-at formula
+        ' uses (full date-time serials).
+        Case "sunset"
+            ok = EvalAstroAtEvent("sun", "dataSunsetTime", cartHeading, yaw, pitch)
+        Case "sunrise"
+            ok = EvalAstroAtEvent("sun", "dataSunriseTime", cartHeading, yaw, pitch)
+        Case "moonrise"
+            ok = EvalAstroAtEvent("moon", "dataMoonriseTime", cartHeading, yaw, pitch)
+        Case "moonset"
+            ok = EvalAstroAtEvent("moon", "dataMoonsetTime", cartHeading, yaw, pitch)
+        Case "gcrise"
+            ok = EvalAstroAtEvent("gc", "dataGCRiseTime", cartHeading, yaw, pitch)
+        Case "gcset"
+            ok = EvalAstroAtEvent("gc", "dataGCSetTime", cartHeading, yaw, pitch)
     End Select
     EvalAstro = ok
+End Function
+
+' ============================================================
+' Event-locked astro resolution. An event word (sunset, sunrise,
+' moonrise, moonset, gcrise, gcset) aims at the body's position AT THE
+' NAMED EVENT TIME, not at the row's fire-time. Reuses the same
+' Astro.bas evaluators (single source of truth for the ephemeris).
+' Reads the event time from the workbook named range - the same names
+' the Fires-at formula uses, each a full date-time serial. Returns False
+' if the name is missing/empty/non-date or the body is below the horizon.
+' ============================================================
+Private Function EvalAstroAtEvent(ByVal body As String, ByVal nm As String, _
+                                  ByVal cartHeading As Double, _
+                                  ByRef yaw As Double, ByRef pitch As Double) As Boolean
+    On Error GoTo fail
+    Dim v As Variant
+    v = ThisWorkbook.names(nm).RefersToRange.value
+    If Not IsDate(v) Then GoTo fail
+    Dim et As Date: et = CDate(v)
+    Select Case body
+        Case "sun"
+            EvalAstroAtEvent = Astro.GetSunGimbalAngles(et, cartHeading, yaw, pitch)
+        Case "moon"
+            EvalAstroAtEvent = Astro.GetMoonGimbalAngles(et, cartHeading, yaw, pitch)
+        Case "gc"
+            EvalAstroAtEvent = Astro.GetGCGimbalAngles(et, cartHeading, yaw, pitch)
+    End Select
+    Exit Function
+fail:
+    EvalAstroAtEvent = False
 End Function
 
 
@@ -561,8 +625,12 @@ End Function
 ' "mw" defensively - the cart wire protocol still uses "mw", and
 ' a pre-rename plan or copy-paste from older notes might carry it.
 Public Function IsAstroTarget(ByVal target As String) As Boolean
+    ' Event-locked words (sunset/sunrise/moonrise/moonset/gcrise/gcset) are
+    ' also astro targets - they resolve to the body's position at that event
+    ' time (see EvalAstro / EvalAstroAtEvent), not at the row's fire-time.
     Select Case LCase(Trim(target))
-        Case "sun", "moon", "gc", "mw"
+        Case "sun", "moon", "gc", "mw", _
+             "sunset", "sunrise", "moonrise", "moonset", "gcrise", "gcset"
             IsAstroTarget = True
         Case Else
             IsAstroTarget = False
@@ -675,6 +743,7 @@ Public Sub PushPreviewPlanToCart()
     LogP7 "--- PushPreviewPlanToCart start (" & mode & ") ---"
 
     Dim ws As Worksheet: Set ws = ThisWorkbook.Sheets("Plan")
+    If Not EnsureCols(ws) Then Exit Sub   ' header-map (fail-loud)
     Dim cartHeading As Double: cartHeading = ReadCartHeading()
 
     ' Collect populated GP rows in order (for te look-ahead).

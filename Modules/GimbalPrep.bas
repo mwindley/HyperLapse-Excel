@@ -50,10 +50,10 @@ Public Sub PrepSession()
     rpt = "Prep Session  " & Format(Now, "yyyy-mm-dd HH:nn") & vbCrLf & String(34, "-") & vbCrLf
     LogEvent "PREP", "--- PrepSession start ---"
 
-    If Not RunStep("GetSunsetTime", "Get Sunset Time", rpt) Then GoTo Done
-    If Not RunStep("Astro.UpdateGCTimes", "Update GC Times", rpt) Then GoTo Done
-    If Not RunStep("InitShoot", "Init Shoot", rpt) Then GoTo Done
-    If Not RunStep("GenerateGCTable", "Generate GC Table", rpt) Then GoTo Done
+    If Not RunStep("GetSunsetTime", "Get Sunset Time", rpt) Then GoTo done
+    If Not RunStep("Astro.UpdateGCTimes", "Update GC Times", rpt) Then GoTo done
+    If Not RunStep("InitShoot", "Init Shoot", rpt) Then GoTo done
+    If Not RunStep("GenerateGCTable", "Generate GC Table", rpt) Then GoTo done
 
     ' Map: conditional (only if missing, or REFRESH_MAP). Soft.
     Dim mapPng As String
@@ -66,7 +66,7 @@ Public Sub PrepSession()
         LogEvent "PREP", "Fetch Gimbal Map skipped (map.png present)"
     End If
 
-Done:
+done:
     LogEvent "PREP", "--- PrepSession end ---"
     MsgBox rpt, vbInformation, "Prep Session"
 End Sub
@@ -77,11 +77,21 @@ Public Sub BuildPlan()
     rpt = "Build Plan  " & Format(Now, "yyyy-mm-dd HH:nn") & vbCrLf & String(34, "-") & vbCrLf
     LogEvent "PREP", "--- BuildPlan start ---"
 
-    ' Plan view first - the cable strip depends on the rendered gimbal plan.
-    If Not RunStep("RenderPlanView", "Render Plan View", rpt) Then GoTo Done
-    If Not RunStep("RenderCableStrip", "Render Cable Strip", rpt) Then GoTo Done
+    ' Native gimbal-plan validation FIRST: it re-lays the GimbalViz sweep table
+    ' plus the Fires-at / Actual / Pan Time / Dir formulas. Everything downstream
+    ' (Pan Time, the acquire_ms the push reads, the renderers) depends on this
+    ' being current, so it must run before the renderers or those read a stale
+    ' sweep from a previous plan.
+    If Not RunStep("BuildGimbalPlanViz", "Build Gimbal Plan + Validation", rpt) Then GoTo done
 
-Done:
+    ' Plan view next - the cable strip depends on the rendered gimbal plan.
+    If Not RunStep("RenderPlanView", "Render Plan View", rpt) Then GoTo done
+    If Not RunStep("RenderCableStrip", "Render Cable Strip", rpt) Then GoTo done
+
+    ' Cable-span guard: detect + alert (does not block). Prep Cart enforces it.
+    RunStep "CableSpan.DetectCableSpan", "Check Cable Span", rpt
+
+done:
     LogEvent "PREP", "--- BuildPlan end ---"
     MsgBox rpt, vbInformation, "Build Plan"
 End Sub
@@ -95,22 +105,41 @@ Public Sub PushToCart()
     rpt = "Push To Cart  " & Format(Now, "yyyy-mm-dd HH:nn") & vbCrLf & String(34, "-") & vbCrLf
     LogEvent "PREP", "--- PushToCart start ---"
 
+    ' Cable-span hard stop: refuse to push a plan that over-winds the gimbal.
+    If Not CableSpan.CableSpanOK() Then
+        LogEvent "PREP", "PushToCart ABORTED: cable span over 450 limit"
+        rpt = rpt & "ABORTED: cable span exceeds 450 deg - fix plan, re-run Prep Plan." & vbCrLf
+        MsgBox rpt, vbCritical, "Push To Cart - BLOCKED"
+        Exit Sub
+    End If
+
     ' UTC realtime anchor first (cubic + anchor share one clock).
     ok = RunStep("AstroPush.SetRealtimeAnchor", "Set Realtime Anchor", rpt)
-    If Not ok And STOP_ON_CART_FAIL Then GoTo Done
+    If Not ok And STOP_ON_CART_FAIL Then GoTo done
 
     ok = RunStep("PushCartPlan", "Push Cart Plan", rpt)
-    If Not ok And STOP_ON_CART_FAIL Then GoTo Done
+    If Not ok And STOP_ON_CART_FAIL Then GoTo done
+    ' Exposure ramp (sunset->sunrise Tv/ISO crossovers + ceilings -> /exposure/load).
+    ' The cart's LUM walk ramps from these overnight; was a separate button, so a
+    ' plan pushed without it ran the camera off the bare baseline with no planned
+    ' night ramp. Folded in here so one Push To Cart sends everything.
+    ok = RunStep("PushFormulaToCart", "Push Exposure Formula", rpt)
+    If Not ok And STOP_ON_CART_FAIL Then GoTo done
+    ' Astro keyframe positions (sun/moon/MW rise/set/mid -> /settings/astropos).
+    ' These populate the cart's keyframe slots (Show astro, snapvar). They were
+    ' NOT in the push chain, so the slots read empty after every reboot.
+    ok = RunStep("AstroPush.PushAstroToCart", "Push Astro Positions", rpt)
+    If Not ok And STOP_ON_CART_FAIL Then GoTo done
     ok = RunStep("PushTrackPlanToCart", "Push Track Plan", rpt)
-    If Not ok And STOP_ON_CART_FAIL Then GoTo Done
+    If Not ok And STOP_ON_CART_FAIL Then GoTo done
     ok = RunStep("PushTrackPathsToCart", "Push Track Paths", rpt)
-    If Not ok And STOP_ON_CART_FAIL Then GoTo Done
+    If Not ok And STOP_ON_CART_FAIL Then GoTo done
     ok = RunStep("PushChartToCart", "Push Chart", rpt)
-    If Not ok And STOP_ON_CART_FAIL Then GoTo Done
+    If Not ok And STOP_ON_CART_FAIL Then GoTo done
     ok = RunStep("PushCableStripToCart", "Push Cable Strip", rpt)
-    If Not ok And STOP_ON_CART_FAIL Then GoTo Done
+    If Not ok And STOP_ON_CART_FAIL Then GoTo done
 
-Done:
+done:
     LogEvent "PREP", "--- PushToCart end ---"
     MsgBox rpt, vbInformation, "Push To Cart"
 End Sub

@@ -60,6 +60,52 @@ Private g_tvLoaded     As Boolean
 '
 ' Returns sunset time on success, 0 on failure (e.g. polar
 ' regions on solstice where sun never crosses the target).
+' ============================================================
+' Shared dated-fire-time helper (single source of truth).
+'
+' The Plan's "Fires at" and "Commences" cells store TIME-OF-DAY only
+' (no date). Every consumer must attach the shoot date the SAME way or
+' the overnight timeline diverges. This is that one way:
+'   baseDate  = the date on dataSunsetTime (the shoot-night anchor)
+'   dayAnchor = earliest of the sunset clock and the plan-start clock
+'   any clock earlier than dayAnchor belongs to the NEXT calendar day
+'     (post-midnight fires + the end-of-shoot sunrise)
+' Falls back to today's date if sun times are unset.
+'
+' planStartRaw: the first GP/WP clock value (used to widen dayAnchor so a
+' plan that itself starts before sunset still anchors correctly). Pass 0
+' if not known; sunset clock is then the sole anchor.
+' ============================================================
+Public Function DatedFireSerial(ByVal clockRaw As Double, _
+                                 ByVal planStartRaw As Double) As Double
+    Dim ss As Worksheet: Set ss = ThisWorkbook.Sheets("Settings")
+    Dim sunsetRaw As Double: sunsetRaw = DateSerialOf(ss.Range("dataSunsetTime").value)
+    Dim clk As Double: clk = clockRaw - Int(clockRaw)
+    If sunsetRaw <= 0 Then
+        DatedFireSerial = Int(Date) + clk          ' no shoot date: today
+        Exit Function
+    End If
+    Dim baseDate As Double: baseDate = Int(sunsetRaw)
+    Dim sunsetClock As Double: sunsetClock = sunsetRaw - Int(sunsetRaw)
+    Dim dayAnchor As Double: dayAnchor = sunsetClock
+    If planStartRaw > 0 Then
+        Dim startClock As Double: startClock = planStartRaw - Int(planStartRaw)
+        If startClock < dayAnchor Then dayAnchor = startClock
+    End If
+    DatedFireSerial = baseDate + clk
+    If clk < dayAnchor Then DatedFireSerial = DatedFireSerial + 1#
+End Function
+
+Public Function DateSerialOf(ByVal v As Variant) As Double
+    If IsDate(v) Then
+        DateSerialOf = CDbl(CDate(v))
+    ElseIf IsNumeric(v) Then
+        DateSerialOf = CDbl(v)
+    Else
+        DateSerialOf = 0
+    End If
+End Function
+
 Public Function GetSunsetTime() As Date
     On Error GoTo ErrHandler
 
@@ -86,13 +132,21 @@ Public Function GetSunsetTime() As Date
     Dim astroDawn    As Date
     Dim astroDusk    As Date
 
-    sunriseT = FindSunCrossing(shootDate, -0.833, 1)
+    ' Evening (setting, dir=-1) events are TONIGHT (shootDate). Morning (rising,
+    ' dir=+1) events - sunrise + the dawns - belong to the NEXT morning of the
+    ' overnight shoot, so scan from tomorrow. Without this the morning values come
+    ' back as TODAY's already-passed sunrise, which makes the dark window run
+    ' backward and hangs the MW keypoint scan.
+    Dim morningDate As Date
+    morningDate = shootDate + 1#       ' tomorrow midnight (overnight shoot ends next morning)
+
+    sunriseT = FindSunCrossing(morningDate, -0.833, 1)
     sunsetT = FindSunCrossing(shootDate, -0.833, -1)
-    civilDawn = FindSunCrossing(shootDate, -6#, 1)
+    civilDawn = FindSunCrossing(morningDate, -6#, 1)
     civilDusk = FindSunCrossing(shootDate, -6#, -1)
-    nauticalDawn = FindSunCrossing(shootDate, -12#, 1)
+    nauticalDawn = FindSunCrossing(morningDate, -12#, 1)
     nauticalDusk = FindSunCrossing(shootDate, -12#, -1)
-    astroDawn = FindSunCrossing(shootDate, -18#, 1)
+    astroDawn = FindSunCrossing(morningDate, -18#, 1)
     astroDusk = FindSunCrossing(shootDate, -18#, -1)
 
     ws.Range("dataSunsetTime").value = sunsetT

@@ -33,12 +33,19 @@ Private Const PLAN_FIRST_ROW  As Long = 6
 Private Const PLAN_MAX_ROWS   As Long = 60
 
 ' Plan middle-zone columns (match TrackPlanPush)
-Private Const COL_ACTION      As Long = 19  ' S
-Private Const COL_TARGET      As Long = 20  ' T
-Private Const COL_RY          As Long = 22  ' V
-Private Const COL_RP          As Long = 23  ' W
-Private Const COL_DYAW        As Long = 24  ' X
-Private Const COL_DPITCH      As Long = 25  ' Y
+' MIDDLE columns resolved by header name (PlanCols.ResolveMiddleCols) at the
+' top of PushChartToCart, so a column reorder cannot break the chart push.
+Private COL_ACTION As Long
+Private COL_TARGET As Long
+Private COL_RY     As Long
+Private COL_RP     As Long
+Private COL_DYAW   As Long
+Private COL_DPITCH As Long
+Private COL_FIRESAT As Long
+Private COL_ACTUAL  As Long
+
+' Astro track sampling: points across a Track GP's window (yaw,pitch path).
+Private Const TRACK_NSAMP As Long = 12
 
 ' Chart contract
 Private Const VB_W            As Double = 355
@@ -54,11 +61,17 @@ Public Sub PushChartToCart()
 
     Dim ws As Worksheet
     Set ws = ThisWorkbook.Sheets("Plan")
+    Dim cols As Object: Set cols = PlanCols.ResolveMiddleCols(ws)
+    If cols Is Nothing Then Exit Sub                 ' header missing -> abort
+    COL_ACTION = cols("action"): COL_TARGET = cols("target")
+    COL_RY = cols("ry"): COL_RP = cols("rp")
+    COL_DYAW = cols("dyaw"): COL_DPITCH = cols("dpitch")
+    COL_FIRESAT = cols("firesat"): COL_ACTUAL = cols("actual(mins)")
 
     ' Collect Move / Pan Follow marker targets in plan order.
     Dim yaw() As Double, pit() As Double
-    ReDim yaw(0 To PLAN_MAX_ROWS)
-    ReDim pit(0 To PLAN_MAX_ROWS)
+    ReDim yaw(0 To PLAN_MAX_ROWS * 16)
+    ReDim pit(0 To PLAN_MAX_ROWS * 16)
     Dim n As Long: n = 0
 
     Dim r As Long
@@ -84,7 +97,41 @@ Public Sub PushChartToCart()
             LogCH "  GP point " & n & ": yaw=" & Format(yaw(n), "0.0") & " pitch=" & Format(pit(n), "0.0")
             n = n + 1
         ElseIf act = "TRACK" Or act = "TRACK-YAW" Then
-            LogCH "  NOTE row " & r & ": " & act & " (astro) - charting deferred, skipped"
+            ' Astro track: sample the target's gimbal yaw/pitch across its window
+            ' (cart-heading-at-time per sample, same angle math as the plan view).
+            ' Each sample is a point on the same yaw-vs-pitch path the cart icon rides.
+            Dim ttgt As String
+            ttgt = LCase(Trim(CStr(ws.Cells(r, COL_TARGET).value)))
+            Dim rawF As Variant: rawF = ws.Cells(r, COL_FIRESAT).value
+            Dim winV As Variant: winV = ws.Cells(r, COL_ACTUAL).value
+            If (ttgt = "sun" Or ttgt = "moon" Or ttgt = "gc" Or ttgt = "mw") _
+               And IsNumeric(rawF) And IsNumeric(winV) Then
+              If CDbl(winV) > 0 Then
+                ' Fires-at is stored TIME-OF-DAY only; attach the shoot date
+                ' (same dated-timeline anchor TrackPlanPush uses) so an overnight
+                ' GP samples the correct calendar day, not 1899/today.
+                Dim fStartRaw As Double: fStartRaw = Utils.DateSerialOf(ThisWorkbook.Sheets("Plan").Cells(PLAN_FIRST_ROW, COL_FIRESAT).value)
+                Dim fT As Double: fT = Utils.DatedFireSerial(CDbl(rawF), fStartRaw)
+                Dim winMin As Double: winMin = CDbl(winV)
+                Dim dyw As Double, dpt As Double
+                dyw = SafeNum(ws.Cells(r, COL_DYAW).value)
+                dpt = SafeNum(ws.Cells(r, COL_DPITCH).value)
+                Dim k As Long, sy As Double, sp As Double, ch As Double, tt As Double
+                Dim added As Long: added = 0
+                For k = 0 To TRACK_NSAMP
+                    tt = fT + (winMin / 1440#) * (CDbl(k) / CDbl(TRACK_NSAMP))
+                    ch = CartHeadingAtChart(ws, tt)
+                    If PlanPush.EvalAstro(ttgt, tt, ch, sy, sp) Then
+                        yaw(n) = sy + dyw: pit(n) = sp + dpt
+                        n = n + 1: added = added + 1
+                        If n > UBound(yaw) Then Exit For
+                    End If
+                Next k
+                LogCH "  GP track " & ttgt & ": " & added & " pts over " & Format(winMin, "0") & " min"
+              End If
+            Else
+                LogCH "  NOTE row " & r & ": " & act & " '" & ttgt & "' - not sampleable, skipped"
+            End If
         End If
 NextRow:
     Next r
@@ -127,7 +174,7 @@ NextRow:
     ' waypoint dots
     For i = 0 To n - 1
         svg = svg & "<circle cx='" & Format(XOf(yaw(i), yawMin), "0.0") & _
-              "' cy='" & Format(YOf(pit(i)), "0.0") & "' r='3' fill='#333'/>"
+              "' cy='" & Format(YOf(pit(i)), "0.0") & "' r='1.2' fill='#333'/>"
     Next i
 
     LogCH "  yaw_min=" & Format(yawMin, "0.0") & " points=" & n & " svg_len=" & Len(svg)
@@ -154,7 +201,7 @@ NextRow:
     pos = 1: idx = 0: okAll = True
     Do While pos <= Len(svg)
         Dim raw As String
-        raw = Mid$(svg, pos, CHUNK_RAW)
+        raw = mid$(svg, pos, CHUNK_RAW)
         pos = pos + CHUNK_RAW
         Dim isLast As Long
         isLast = IIf(pos > Len(svg), 1, 0)
@@ -219,6 +266,38 @@ Private Function Line2(ByVal x1 As Double, ByVal y1 As Double, _
 End Function
 
 ' ---- helpers ----
+Private Function CartHeadingAtChart(ByVal ws As Worksheet, ByVal t As Double) As Double
+    ' Cart's expected heading where it is PARKED at time t = the latest cart WP
+    ' (col B id "WP..") whose Commence (col J) <= t. Same rule as CartHeadingAtTime
+    ' and the python cart_heading_at. Cart block is fixed B..K: B=2,H=8,J=10.
+    Dim r As Long, tod As Double
+    Dim bestC As Double, bestH As Double, haveBest As Boolean
+    Dim firstH As Double, haveFirst As Boolean
+    tod = t - Int(t)                              ' time-of-day fraction
+    For r = PLAN_FIRST_ROW To PLAN_FIRST_ROW + PLAN_MAX_ROWS - 1
+        Dim idv As String: idv = Trim(CStr(ws.Cells(r, 2).value))
+        If Len(idv) = 0 Then Exit For
+        If UCase(Left$(idv, 2)) = "WP" And IsNumeric(ws.Cells(r, 8).value) Then
+            Dim hd As Double: hd = CDbl(ws.Cells(r, 8).value)
+            If Not haveFirst Then firstH = hd: haveFirst = True
+            Dim cmv As Variant: cmv = ws.Cells(r, 10).value
+            If IsNumeric(cmv) Then
+                Dim cmd As Double: cmd = CDbl(cmv) - Int(CDbl(cmv))
+                If cmd <= tod Then
+                    If (Not haveBest) Or (cmd >= bestC) Then bestC = cmd: bestH = hd: haveBest = True
+                End If
+            End If
+        End If
+    Next r
+    If haveBest Then
+        CartHeadingAtChart = bestH
+    ElseIf haveFirst Then
+        CartHeadingAtChart = firstH
+    Else
+        CartHeadingAtChart = 0#
+    End If
+End Function
+
 Private Function SafeNum(ByVal v As Variant) As Double
     If IsNumeric(v) Then SafeNum = CDbl(v) Else SafeNum = 0
 End Function
@@ -230,7 +309,7 @@ Private Function UrlEncode(ByVal s As String) As String
     Dim o As String, i As Long, c As String, a As Integer
     o = ""
     For i = 1 To Len(s)
-        c = Mid$(s, i, 1)
+        c = mid$(s, i, 1)
         a = Asc(c)
         If (a >= 48 And a <= 57) Or (a >= 65 And a <= 90) Or _
            (a >= 97 And a <= 122) Or c = "-" Or c = "_" Or c = "." Or c = "~" Then

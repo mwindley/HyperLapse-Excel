@@ -352,7 +352,42 @@ leg, extend a distance, move the action to a later waypoint) — NOT
 by stretching the gimbal rate. This keeps the rate vocabulary
 consistent and the visual feel of pans uniform across the night.
 
-### Columns (Session E layout — middle zone M..AB, 16 cols)
+### Columns (CURRENT layout — Day-31 reorder, middle zone M..AC, 17 cols)
+
+> **NOTE (Day 31):** the middle zone was reordered toward reading order and a
+> **Dir (CW/CCW)** column was added at col 21 (after Target). All MIDDLE readers/
+> writers now resolve columns BY HEADER NAME via `PlanCols.ResolveMiddleCols`, so
+> fixed letters are no longer load-bearing — the table below is the current
+> physical layout for reference only. The pre-reorder table that followed is
+> retained further down as history.
+
+| Col | Field         | Editable | Notes |
+|-----|---------------|----------|-------|
+| M (13) | Step       | derived  | `GP01`, `GP02`, ... text formula |
+| N (14) | Anchor type| yes      | WP / TIME / ASTRO |
+| O (15) | Anchor ref | yes      | "WP05" / "23:30" / "sunset" / "moonrise" / "gcrise" / "gctransit" / "gcset" |
+| P (16) | Offset (min)| yes     | Plain number, +/-. Blank = 0. |
+| Q (17) | Fires at   | derived  | Anchor resolver formula. Wall-clock time. |
+| R (18) | Total dur  | derived  | Next Fires-at − this Fires-at. |
+| S (19) | Action     | yes      | Pan Follow / Lock / Move / Track / Track-yaw / END |
+| T (20) | Target     | yes      | Marker label / astro object ("sun" / "moon" / "gc") / `—` |
+| **U (21)** | **Dir (CW/CCW)** | yes | **NEW** — wound direction per leg; auto-filled shortest by GimbalSweepDir, operator overrides to send the long way to unwind cable; renderer reads, never recomputes. Blank = shortest. |
+| V (22) | Rate       | yes      | Pan Speed band (Slow/Mid/Fast) or `—` |
+| W (23) | Ry         | yes      | Auto for marker target; `—` else. Override OK. |
+| X (24) | Rp         | yes      | Auto for marker; **typed for Track-yaw** (held pitch); `—` else. |
+| Y (25) | Δyaw       | yes      | Offset from Ry, default 0 |
+| Z (26) | Δpitch     | yes      | Offset from Rp, default 0 |
+| AA (27)| Ease       | yes      | none / Just-perceptible / Comfortable / Cinematic |
+| AB (28)| Move t     | derived  | Excel-computed slew duration |
+| AC (29)| Note       | yes      | Operator free text |
+
+(Object naming: "mw" was renamed to "gc" — the cart token and object-identity
+code are now `gc`; the firmware "Movewatch" feature still uses the letters MW,
+unrelated.)
+
+---
+
+### Columns (HISTORICAL — pre-reorder Session E layout, M..AB, 16 cols)
 
 | Col | Field         | Editable | Notes                                                                                          |
 |-----|---------------|----------|------------------------------------------------------------------------------------------------|

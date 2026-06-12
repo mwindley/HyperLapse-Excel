@@ -7,10 +7,6 @@ Attribute VB_Name = "AstroPush"
 ' ============================================================
 Public Const ASTROPUSH_VERSION As String = "ASTROPUSH_v2026-06-08-zenithband"
 
-Public Sub AstroPushVersion()
-    MsgBox "AstroPush loaded: " & ASTROPUSH_VERSION, vbInformation, "AstroPush version"
-    LogEvent "ASTROPUSH", "version " & ASTROPUSH_VERSION
-End Sub
 ' ============================================================
 ' HyperLapse Cart                     AstroPush module (Day 17, Workfront #50)
 '
@@ -49,6 +45,11 @@ Option Explicit
 ' Step size for MW dark-window scan (minutes).
 ' 5 minutes is fine-grained enough for ~1-degree yaw precision.
 Private Const MW_SCAN_STEP_MIN As Double = 5
+
+Public Sub AstroPushVersion()
+    MsgBox "AstroPush loaded: " & ASTROPUSH_VERSION, vbInformation, "AstroPush version"
+    LogEvent "ASTROPUSH", "version " & ASTROPUSH_VERSION
+End Sub
 
 Public Sub PushAstroToCart()
     LogEvent "ASTROPUSH", "=== PushAstroToCart ==="
@@ -187,6 +188,7 @@ Public Sub PushAstroToCart()
 
     On Error Resume Next
     http.Open "GET", url, False
+    http.SetTimeouts 5000, 5000, 5000, 8000   ' AFTER Open - resolve/connect/send/receive ms; fail fast, never wedge the chain
     http.Send
     Dim sc As Long, respText As String
     sc = http.Status
@@ -310,14 +312,17 @@ Private Function FitAndPushTrackPath(ByVal objName As String, _
     Dim stepDays As Double
     stepDays = STEP_MIN / 1440#
 
-    ' Zenith-band yaw ease (mw/GC only) - design guard against the azimuth
+    ' Zenith-band yaw ease (mw/GC AND moon) - design guard against the azimuth
     ' whip artifact. Above this TRUE ALTITUDE the bearing-to-object races
     ' (~1/cos(alt)); we stop fitting the real (whipping) azimuth and instead
     ' ease yaw smoothly from the band-entry azimuth to the band-exit azimuth.
     ' Applies to BOTH Track GC (full) and Track GC yaw-only (acts on yaw).
+    ' Moon included: at this latitude the moon transits >70 deg for ~1 week each
+    ' month (declination strongly negative -> transit alt up to ~83 deg), so it
+    ' hits the same whip. Sun never gets near the band here, so it is excluded.
     Const BAND_ALT_DEG As Double = 70#
     Dim bandEase As Boolean
-    bandEase = (objName = "mw")
+    bandEase = (objName = "mw") Or (objName = "moon")
 
     ' ---- Global single-frame pre-scan for mw: one unwrapped yaw frame for
     ' the whole window, with the band samples replaced by the ease. Done once
@@ -341,7 +346,13 @@ Private Function FitAndPushTrackPath(ByVal objName As String, _
         Dim gi As Long, gaz As Double, galtv As Double
         gi = 0
         For tt = winStart To winEnd Step stepDays
-            GetGCAzAltAtTime tt, gaz, galtv
+            ' Per-object ephemeris: moon now also takes the band-ease path, so the
+            ' scan must read the MOON's az/alt, not GC's. mw/GC -> GetGCAzAltAtTime.
+            If objName = "moon" Then
+                GetMoonAzAltAtTime tt, gaz, galtv
+            Else
+                GetGCAzAltAtTime tt, gaz, galtv
+            End If
             gT(gi) = (tt - t0) * 86400#
             gYaw(gi) = gaz
             gAlt(gi) = galtv
@@ -668,6 +679,7 @@ Private Function FindMWKeypoints(ByVal darkStart As Date, _
 
     Dim stepDays As Double
     stepDays = MW_SCAN_STEP_MIN / 1440#   ' minutes to Excel-date fraction
+    If stepDays <= 0# Then Exit Function   ' guard: a zero/neg step would loop forever
 
     Dim t As Date, az As Double, alt As Double
     Dim haveRise As Boolean, haveAny As Boolean
@@ -701,6 +713,7 @@ Private Function FindMWKeypoints(ByVal darkStart As Date, _
         End If
     Next t
 
+    Debug.Print "FMW window "; Format(darkStart, "mm-dd hh:nn"); " -> "; Format(darkEnd, "mm-dd hh:nn"); "  maxAlt="; maxAlt; "  haveAny="; haveAny
     FindMWKeypoints = haveAny
 End Function
 
@@ -1100,13 +1113,13 @@ Private Function LocalUtcOffsetMs() As Double
     Dim i As Long, pidx As Long, ch As String
     pidx = 0
     For i = Len(lct) To 1 Step -1
-        ch = Mid(lct, i, 1)
+        ch = mid(lct, i, 1)
         If ch = "+" Or ch = "-" Then pidx = i: Exit For
     Next i
     If pidx = 0 Then GoTo Fallback
     Dim mins As Double
-    mins = CDbl(Mid(lct, pidx + 1))
-    If Mid(lct, pidx, 1) = "-" Then mins = -mins
+    mins = CDbl(mid(lct, pidx + 1))
+    If mid(lct, pidx, 1) = "-" Then mins = -mins
     LocalUtcOffsetMs = mins * 60000#
     Exit Function
 Fallback:

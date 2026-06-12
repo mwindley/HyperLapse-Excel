@@ -1,6 +1,11 @@
 # Exposure Fallback — Table-Driven Exposure Continuity
 
-**Status:** Design document. No firmware or Excel code yet.
+**Status:** Design document — NOW BUILT (Day 32). The table-driven exposure
+formula is implemented: Excel `Formula.FallbackFormula` ramps Tv/ISO sunset->
+sunrise, `Formula.PushFormulaToCart` POSTs it to the cart `/exposure/load`, and
+PushFormulaToCart is folded into the `PushToCart` prep chain. The cart's LUM walk
+runs table-driven when CCAPI luminance is unavailable. This doc remains the design
++ rate-table + validation reference; the original "no code yet" status is retired.
 **Created:** 15 May 2026 (Session C day 9).
 **Supersedes:** `CCAPI_FALLBACK.md`, `WORKFRONT_36.md`, `OLD_SUN_TABLE.md` (all folded in here).
 **Companion files:** `WORKFRONTS.md` (queued tasks under "Exposure fallback + validation"), `PROJECT_STATE.md` (handoff).

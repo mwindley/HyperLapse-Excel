@@ -26,45 +26,44 @@ Attribute VB_Name = "GimbalSweepDir"
 
 Option Explicit
 
-Private Const DIR_OFFSET As Long = 16   ' Step=M(13) -> Dir=AC(29); +16. matches viz col map.
+' (DIR_OFFSET removed - columns now resolved by header name via PlanCols.)
 
 Public Sub FillSweepDirections(Optional ByVal forceAll As Boolean = False)
     Dim ws As Worksheet
     Set ws = ThisWorkbook.Worksheets("Plan")
 
-    ' --- locate the gimbal section: row/col of the "Step" header ---
+    ' --- resolve columns BY HEADER NAME (reorder-safe). Replaces the old
+    ' fixed-offset-from-Step math, which wrote Dir to the wrong column once
+    ' the MIDDLE columns were reordered. ---
+    Dim cols As Object: Set cols = PlanCols.ResolveMiddleCols(ws)
+    If cols Is Nothing Then Exit Sub
     Dim hdrRow As Long, stepCol As Long
     If Not FindStepHeader(ws, hdrRow, stepCol) Then
         MsgBox "Could not find the gimbal 'Step' header on the Plan sheet.", vbExclamation
         Exit Sub
     End If
-
-    Dim colAnchor As Long, colRy As Long, colDyaw As Long, colDir As Long
-    colAnchor = stepCol + 2     ' N Anchor ref is O = Step+2
-    colRy = stepCol + 9         ' V Ry
-    colDyaw = stepCol + 11      ' X dyaw
-    colDir = stepCol + DIR_OFFSET   ' AC
-
-    ' header for the Dir column if missing
-    If Trim$(CStr(ws.Cells(hdrRow, colDir).Value)) = "" Then
-        ws.Cells(hdrRow, colDir).Value = "Dir (CW/CCW)"
-    End If
+    Dim colAnchor As Long, colRy As Long, colDyaw As Long, colDir As Long, colAction As Long
+    colAnchor = cols("anchorref")
+    colRy = cols("ry")
+    colDyaw = cols("dyaw")
+    colDir = cols("dir(cw/ccw)")
+    colAction = cols("action")
 
     ' --- walk the GP rows, build cf() and remember each row ---
     Dim r As Long, n As Long
     Dim cf() As Double, rowOf() As Long
     ReDim cf(1 To 200): ReDim rowOf(1 To 200)
     r = hdrRow + 1
-    Do While Trim$(CStr(ws.Cells(r, stepCol).Value)) <> ""
+    Do While Trim$(CStr(ws.Cells(r, stepCol).value)) <> ""
         Dim act As String
-        act = UCase$(Trim$(CStr(ws.Cells(r, stepCol + 6).Value)))   ' S Action
+        act = UCase$(Trim$(CStr(ws.Cells(r, colAction).value)))   ' Action (by name)
         If act = "END" Then Exit Do
 
         Dim anchor As String, heading As Double, ryV As Variant, dyaw As Double, base As Double
-        anchor = Trim$(CStr(ws.Cells(r, colAnchor).Value))
+        anchor = Trim$(CStr(ws.Cells(r, colAnchor).value))
         heading = LookupWPHeading(ws, anchor)
-        ryV = ws.Cells(r, colRy).Value
-        dyaw = SafeNum(ws.Cells(r, colDyaw).Value)
+        ryV = ws.Cells(r, colRy).value
+        dyaw = SafeNum(ws.Cells(r, colDyaw).value)
         If IsNumeric(ryV) And Trim$(CStr(ryV)) <> "" Then
             base = CDbl(ryV)            ' earth-frame world anchor
         Else
@@ -84,9 +83,9 @@ Public Sub FillSweepDirections(Optional ByVal forceAll As Boolean = False)
     For i = 2 To n
         d = Norm180(cf(i) - cf(i - 1))
         If d >= 0 Then lbl = "CW" Else lbl = "CCW"
-        cur = UCase$(Trim$(CStr(ws.Cells(rowOf(i), colDir).Value)))
+        cur = UCase$(Trim$(CStr(ws.Cells(rowOf(i), colDir).value)))
         If forceAll Or cur = "" Then
-            ws.Cells(rowOf(i), colDir).Value = lbl
+            ws.Cells(rowOf(i), colDir).value = lbl
         End If
         ' GP1 has no incoming leg -> leave its Dir blank
     Next i
@@ -102,7 +101,7 @@ Private Function FindStepHeader(ByVal ws As Worksheet, ByRef hdrRow As Long, _
     Dim rr As Long, cc As Long
     For rr = 1 To 40
         For cc = 1 To 40
-            If Trim$(CStr(ws.Cells(rr, cc).Value)) = "Step" Then
+            If Trim$(CStr(ws.Cells(rr, cc).value)) = "Step" Then
                 hdrRow = rr: stepCol = cc: FindStepHeader = True: Exit Function
             End If
         Next cc
@@ -116,8 +115,8 @@ Private Function LookupWPHeading(ByVal ws As Worksheet, ByVal wpId As String) As
     LookupWPHeading = 0#
     If wpId = "" Then Exit Function
     For rr = 1 To 200
-        If UCase$(Trim$(CStr(ws.Cells(rr, 2).Value))) = UCase$(wpId) Then   ' col B
-            LookupWPHeading = SafeNum(ws.Cells(rr, 8).Value)                ' col H
+        If UCase$(Trim$(CStr(ws.Cells(rr, 2).value))) = UCase$(wpId) Then   ' col B
+            LookupWPHeading = SafeNum(ws.Cells(rr, 8).value)                ' col H
             Exit Function
         End If
     Next rr

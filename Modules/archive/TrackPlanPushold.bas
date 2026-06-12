@@ -56,14 +56,13 @@ Private COL_ANCHOR_TYPE As Long
 Private COL_ANCHOR_REF  As Long
 Private COL_OFFSET_MIN  As Long
 Private COL_FIRES_AT    As Long
-Private COL_STEP        As Long
 Private COL_ACTION      As Long
 Private COL_TARGET      As Long
 Private COL_RY          As Long
 Private COL_RP          As Long
 Private COL_DYAW        As Long
 Private COL_DPITCH      As Long
-Private COL_PANTIME     As Long
+Private COL_EASE        As Long
 
 Private Const TRACK_PLAN_MAX  As Long = 10
 Private Const LOG_CATEGORY    As String = "TRACKPLAN"
@@ -79,7 +78,6 @@ Public Sub PushTrackPlanToCart()
     LogTP "--- PushTrackPlanToCart start (" & mode & ") ---"
     LogTP "  (build: Day28 dated-timeline ease fix)"
     LogTP "  (build: Day29 Phase-1 WP-event binding -- tail tokens awp/offms)"
-    LogTP "  (build: Day32 step-scan + cart-position eh for Track/Move)"
 
     Dim ws As Worksheet
     Set ws = ThisWorkbook.Sheets("Plan")
@@ -88,11 +86,9 @@ Public Sub PushTrackPlanToCart()
     If cols Is Nothing Then Exit Sub                 ' header missing -> abort
     COL_ANCHOR_TYPE = cols("anchortype"): COL_ANCHOR_REF = cols("anchorref")
     COL_OFFSET_MIN = cols("offset(min)"): COL_FIRES_AT = cols("firesat")
-    COL_STEP = cols("step")
     COL_ACTION = cols("action"): COL_TARGET = cols("target")
     COL_RY = cols("ry"): COL_RP = cols("rp")
-    COL_DYAW = cols("dyaw"): COL_DPITCH = cols("dpitch")
-    COL_PANTIME = cols("pantime")
+    COL_DYAW = cols("dyaw"): COL_DPITCH = cols("dpitch"): COL_EASE = cols("ease")
 
     ' --- Collect populated GP rows in order; find shoot t=0 ---
     Dim rows() As Long
@@ -100,10 +96,7 @@ Public Sub PushTrackPlanToCart()
     Dim nRows As Long: nRows = 0
     Dim r As Long
     For r = PLAN_FIRST_ROW To PLAN_FIRST_ROW + PLAN_MAX_ROWS - 1
-        ' Collect every gimbal row by STEP (GP01..END). Anchor type is now
-        ' optional (timing only) so it is no longer a reliable row key; END
-        ' is collected to bound the last GP's te and skipped in the loop.
-        If Len(Trim(CStr(ws.Cells(r, COL_STEP).value))) > 0 Then
+        If Not IsEmpty(ws.Cells(r, COL_ANCHOR_TYPE).value) Then
             rows(nRows) = r
             nRows = nRows + 1
         End If
@@ -271,17 +264,16 @@ Public Sub PushTrackPlanToCart()
                         End If
                 End Select
 
-                ' Phase-A acquire = the Pan Speed get-there. Pan Time (min) on
-                ' the plan IS swing / rate (Slow/Mid/Fast); push it as ms so the
-                ' gimbal eases onto the target over EXACTLY the duration the plan
-                ' shows -> plan and gimbal agree. Blank/0 -> push 0 (cart uses its
-                ' safety-floor default ease). The yaw+pitch CAP is the backstop.
-                Dim ptv As Variant: ptv = ws.Cells(rowIdx, COL_PANTIME).value
-                If IsNumeric(ptv) Then
-                    If CDbl(ptv) > 0 Then ivAcq(n) = CDbl(ptv) * 60000# Else ivAcq(n) = 0#
-                Else
-                    ivAcq(n) = 0#
-                End If
+                ' Phase-A acquire: ease_frames (ease band, col Z) x cadence
+                ' at this GP's fire time. acquire_ms = 0 when ease is none/--
+                ' or cadence unavailable -> cart falls back to no-ease snap.
+                Dim easeName As String
+                easeName = CStr(ws.Cells(rowIdx, COL_EASE).value)
+                Dim eFrames As Long: eFrames = EaseFrames(easeName)
+                Dim cadSec As Double: cadSec = CadenceSecAt(ts, sunsetT, sunriseT, astroDuskT, branch)
+                ivAcq(n) = eFrames * cadSec * 1000#
+                If eFrames > 0 And cadSec = 0 Then _
+                    LogTP "    WARNING: ease '" & easeName & "' set but cadence unavailable -> acquire_ms=0 (snap)"
 
                 ' Phase-1 WP-event binding. Only WP-anchored rows carry a real
                 ' awp; TIME/ASTRO rows keep awp=0 so the cart falls back to the
@@ -321,7 +313,8 @@ Public Sub PushTrackPlanToCart()
                       Format(ivEh(n), "0.0") & " deg (cart expected heading at fire time)", _
                       "(none -> NAN: " & IIf(ivMode(n) = "F" Or ivMode(n) = "Y" Or ivMode(n) = "M", _
                       "cart position at fire time unknown", "relative row") & ")")
-                LogTP "    acquire (Pan Time get-there) -> acquire_ms=" & Format(ivAcq(n), "0") & " (" & Format(ivAcq(n) / 60000#, "0.0") & " min)"
+                LogTP "    acquire: ease='" & easeName & "' frames=" & eFrames & _
+                      " cadence=" & Format(cadSec, "0.0") & "s -> acquire_ms=" & Format(ivAcq(n), "0")
                 n = n + 1
             End If
         End If

@@ -31,31 +31,72 @@ USED="#3b82f6"      # used-span fill
 FREE="#1f2a37"      # headroom fill
 LIMIT="#ff5470"     # span-limit line
 
-def unwrap_world(gps):
-    """Accumulate world bearing leg-by-leg honouring col AC; returns list."""
-    wu=[]; prev_w=None; prev_u=0.0
+def unwrap_cart(gps, wp_hdg):
+    """Accumulate CART-FRAME yaw leg-by-leg honouring col AC.
+
+    Cable wind is the gimbal's yaw RELATIVE TO THE CART BODY, not the world
+    bearing -- the cables tangle around the cart. So we unwrap cart-frame yaw
+    cf = world - anchor_heading, for both point GPs and every track sample.
+
+    Returns (wu, sweeps): wu[i] is the unwrapped value AT each GP (track GPs use
+    their END, since that's where the wind sits when the next leg begins);
+    sweeps[i] is (u_start,u_end) for a track GP (the continuous yaw excursion
+    over its window) or None for a point GP. Track samples unwrap continuously
+    so a multi-turn sweep counts every degree toward the span."""
+    wu=[]; sweeps=[]; prev_w=None; prev_u=0.0
+    def step_dir(short,d):
+        if d=="CW":    return short if short>=0 else short+360
+        if d=="CCW":   return short if short<=0 else short-360
+        return short                                  # auto = shortest
     for g in gps:
-        w=g["world"]
-        if prev_w is None:
-            u=w
+        h=g["cart_hdg"]                               # cart heading where parked at fire time
+        tr=g.get("track")
+        if tr:                                        # walk the sampled azimuths, cart-frame
+            azs=[((s[0]-h+540)%360)-180 for s in tr]  # world -> cart-frame, wrapped
+            if prev_w is None:
+                u0=azs[0]
+            else:
+                short=((azs[0]-prev_w+540)%360)-180
+                u0=prev_u+step_dir(short,g["dir"])
+            u=u0; pw=azs[0]
+            for w in azs[1:]:
+                short=((w-pw+540)%360)-180            # continuous unwrap within track
+                u+=short; pw=w
+            wu.append(u); sweeps.append((u0,u))
+            prev_w=azs[-1]; prev_u=u
         else:
-            short=((w-prev_w+540)%360)-180          # shortest signed step
-            d=g["dir"]
-            if d=="CW":    step=short if short>=0 else short+360
-            elif d=="CCW": step=short if short<=0 else short-360
-            else:          step=short               # auto = shortest
-            u=prev_u+step
-        wu.append(u); prev_w=w; prev_u=u
-    return wu
+            w=((g["world"]-h+540)%360)-180            # cart-frame for the point GP
+            if prev_w is None:
+                u=w
+            else:
+                short=((w-prev_w+540)%360)-180
+                u=prev_u+step_dir(short,g["dir"])
+            wu.append(u); sweeps.append(None)
+            prev_w=w; prev_u=u
+    return wu,sweeps
 
 def render(d, out, hi=None, limit=450.0):
     gps=d["gps"]
     if not gps:
         print("no GPs in plan"); return
-    wu=unwrap_world(gps)
-    lo=min(wu); hi_used=max(wu); span=hi_used-lo
+    wu,sweeps=unwrap_cart(gps, d["wp_hdg"])
+    # an acquire-length track (negligible excursion) shouldn't draw its own bar;
+    # fold it out so only the real tracking sweep shows
+    for i,sw in enumerate(sweeps):
+        if sw and abs(sw[1]-sw[0])<1.0: sweeps[i]=None
+    # span must include the full excursion of any track sweep, not just GP points
+    allvals=list(wu)
+    for sw in sweeps:
+        if sw: allvals+=[sw[0],sw[1]]
+    lo=min(allvals); hi_used=max(allvals); span=hi_used-lo
     ceil=lo+limit; headroom=ceil-hi_used
-    imax=wu.index(hi_used)                          # turn-around / max-wind GP
+    # which GP carries the max-wind point (point value or either sweep end)
+    def maxwind_label():
+        for i,(g,x) in enumerate(zip(gps,wu)):
+            if abs(x-hi_used)<1e-6: return g["step"]
+            sw=sweeps[i]
+            if sw and (abs(sw[0]-hi_used)<1e-6 or abs(sw[1]-hi_used)<1e-6): return g["step"]
+        return gps[0]["step"]
 
     fig,ax=plt.subplots(figsize=(11,3.4))
     ax.set_xlim(lo-15, ceil+15); ax.set_ylim(-1.0,1.4)
@@ -72,8 +113,31 @@ def render(d, out, hi=None, limit=450.0):
     ax.plot([lo,lo],[y-0.32,y+0.32],color=RINGTXT,lw=1.5,zorder=5)
     ax.text(lo,y-0.42,f"min  {lo:.0f}\u00b0",color=RINGTXT,fontsize=8,ha="center",va="top")
 
-    # sweep order arrows between consecutive GPs (above the strip)
+    # track sweep bars: the continuous yaw excursion during a Track window,
+    # drawn as a bold segment on the strip (this is the wind the cables see)
+    pe=d.get("plan_end")
+    last_tr_i=max([i for i,sw in enumerate(sweeps) if sw], default=None)
+    for i,sw in enumerate(sweeps):
+        if not sw: continue
+        a,b=sorted(sw)
+        ax.add_patch(Rectangle((a,y-0.08),b-a,0.16,facecolor=MID,edgecolor="none",
+                     alpha=0.85,zorder=3))
+        ax.add_patch(FancyArrowPatch((sw[0],y+0.20),(sw[1],y+0.20),
+            connectionstyle="arc3,rad=0.0",arrowstyle="-|>",mutation_scale=12,
+            color=MID,lw=1.6,alpha=0.9,zorder=4))
+        ax.text((a+b)/2,y+0.30,f"{gps[i]['step']} track {sw[0]:.0f}\u00b0\u2192{sw[1]:.0f}\u00b0"
+                f"  ({abs(b-a):.0f}\u00b0)",color=MID,fontsize=8,ha="center",va="bottom",zorder=6)
+        # gimbal-plan end at the last track's end edge (END row step+time, any GP#)
+        if i==last_tr_i and pe:
+            etxt=f"end {pe[0]}" + (f"  {pe[1]}" if pe[1] else "")
+            ax.plot([sw[1],sw[1]],[y-0.20,y+0.12],color=MID,lw=1.5,zorder=5)
+            ax.text(sw[1],y-0.30,etxt,color=MID,fontsize=8,fontweight="bold",
+                    ha="center",va="top",zorder=6)
+
+    # sweep order arrows between consecutive GP-resting positions (point GPs only;
+    # a track GP's own arrow is drawn above as the sweep)
     for i in range(len(wu)-1):
+        if sweeps[i] or sweeps[i+1]: continue
         a,b=wu[i],wu[i+1]
         col=CHASSIS if b>=a else FLAG
         ax.add_patch(FancyArrowPatch((a,y+0.16),(b,y+0.16),
@@ -84,11 +148,14 @@ def render(d, out, hi=None, limit=450.0):
     side={}; order=sorted(range(len(wu)),key=lambda i:wu[i])
     for k,i in enumerate(order): side[i]=(k%2==0)   # True=above
 
-    # GP markers (label uses the UNWRAPPED swept value, e.g. 440 not 80)
+    # markers: point GPs get a dot+label; track GPs already have the sweep bar+label
     for i,(g,x) in enumerate(zip(gps,wu)):
+        if sweeps[i]: continue
+        # suppress a point GP that sits on the next GP's track start (acquire row)
+        if i+1<len(sweeps) and sweeps[i+1] and abs(x-sweeps[i+1][0])<2.0: continue
         focus = (hi is not None and (g["step"]==(hi if isinstance(hi,str) else None)
                                      or i+1==hi))
-        ismax=(i==imax)
+        ismax=(abs(x-hi_used)<1e-6)
         c = MID if focus else (LIMIT if ismax else CARD)
         ax.plot([x],[y],marker="o",ms=11 if (focus or ismax) else 8,
                 color=c,zorder=6,markeredgecolor=BG,markeredgewidth=1.2)
@@ -98,18 +165,34 @@ def render(d, out, hi=None, limit=450.0):
         ax.text(x, y+0.32 if up else y-0.32, lab, color=c,fontsize=8.5,
                 ha="center", va="bottom" if up else "top", zorder=6)
 
-    ax.set_title("Gimbal Cable Strip  —  yaw sweep (world bearing, unwrapped via col AC) vs span limit",
+    ax.set_title("Gimbal Cable Strip  —  cart-frame yaw wind (cable tangle, unwrapped via col AC) vs span limit",
                  color=TXT,fontsize=12,pad=12)
     sub=(f"used span {span:.0f}\u00b0   |   headroom to limit {headroom:.0f}\u00b0   |   "
-         f"max-wind {gps[imax]['step']} at {hi_used:.0f}\u00b0")
-    if headroom<0: sub+="   ***  EXCEEDS LIMIT  ***"
+         f"max-wind {maxwind_label()} at {hi_used:.0f}\u00b0")
     ax.text((lo+ceil)/2,-0.78,sub,color=(LIMIT if headroom<0 else RINGTXT),
             fontsize=9,ha="center")
+
+    # over-limit: unmissable banner + red wash over the strip. Cables would break;
+    # Prep Cart will refuse to push this plan.
+    if headroom<0:
+        ax.axhspan(y-0.13,y+0.13,xmin=0,xmax=1,facecolor=LIMIT,alpha=0.18,zorder=2.5)
+        ax.text((lo+ceil)/2, 1.18,
+                f"\u26a0  EXCEEDS {limit:.0f}\u00b0 CABLE LIMIT  by {-headroom:.0f}\u00b0  \u2014  CART PUSH BLOCKED",
+                color="#ffffff",fontsize=12,fontweight="bold",ha="center",va="center",zorder=10,
+                bbox=dict(boxstyle="round,pad=0.5",facecolor=LIMIT,edgecolor="none"))
 
     fig.savefig(out,facecolor=BG,bbox_inches="tight")
     svg=out.rsplit(".",1)[0]+".svg"; fig.savefig(svg,facecolor=BG,bbox_inches="tight")
     print("wrote",out,"and",svg)
     print("min %.0f  max %.0f  span %.0f  headroom %.0f"%(lo,hi_used,span,headroom))
+    # sidecar for the VBA cable-span guard (single source of truth):
+    # one line 'span headroom limit' so Prep Cart can gate without recomputing.
+    try:
+        import os
+        side=os.path.join(os.path.dirname(os.path.abspath(out)),"cablestrip_span.txt")
+        open(side,"w").write("%.0f %.0f %.0f\n"%(span,headroom,limit))
+    except Exception as e:
+        print("sidecar write failed:",e)
 
 if __name__=="__main__":
     ap=argparse.ArgumentParser()

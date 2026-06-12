@@ -40,13 +40,9 @@ Private Const PLAN_MAX_ROWS  As Long = 60
 ' Plan columns (match ChartPush / resolve)
 Private Const COL_WPID   As Long = 2    ' B  (WP rows: "WP..")
 Private Const COL_HEAD   As Long = 8    ' H  (WP heading)
-Private Const COL_ANCHOR As Long = 15   ' O  (GP anchor -> WP)
-Private Const COL_ACTION As Long = 19   ' S
-Private Const COL_TARGET As Long = 20   ' T
-Private Const COL_RY     As Long = 22   ' V
-Private Const COL_DYAW   As Long = 24   ' X
-Private Const COL_DIR    As Long = 29   ' AC (CW/CCW)
-Private Const COL_STEP   As Long = 13   ' M  (label)
+' MIDDLE columns resolved by header name at run time (PlanCols.ResolveMiddleCols),
+' so a column reorder in Excel does not break the cable-strip push. (COL_WPID /
+' COL_HEAD above are cart-WP block columns, not MIDDLE, so they stay fixed.)
 
 ' Contract
 Private Const VB_W      As Double = 355
@@ -64,6 +60,9 @@ Public Sub PushCableStripToCart()
     LogEvent LOG_CATEGORY, "--- PushCableStripToCart start (" & IIf(dry, "DRY RUN", "REAL PUSH") & ") ---"
 
     Dim ws As Worksheet: Set ws = ThisWorkbook.Sheets("Plan")
+
+    Dim cols As Object: Set cols = PlanCols.ResolveMiddleCols(ws)
+    If cols Is Nothing Then Exit Sub                 ' header missing -> abort
 
     ' WP -> heading lookup (col B starts "WP", heading col H)
     Dim hdg As Object: Set hdg = CreateObject("Scripting.Dictionary")
@@ -85,11 +84,11 @@ Public Sub PushCableStripToCart()
     Dim n As Long: n = 0
 
     For r = PLAN_FIRST_ROW To PLAN_FIRST_ROW + PLAN_MAX_ROWS - 1
-        Dim act As String: act = UCase(Trim(CStr(ws.Cells(r, COL_ACTION).value)))
+        Dim act As String: act = UCase(Trim(CStr(ws.Cells(r, cols("action")).value)))
         If act = "" Then Exit For
         If act = "END" Then GoTo NextRow
 
-        Dim tgt As String: tgt = LCase(Trim(CStr(ws.Cells(r, COL_TARGET).value)))
+        Dim tgt As String: tgt = LCase(Trim(CStr(ws.Cells(r, cols("target")).value)))
         If tgt = "sun" Or tgt = "moon" Or tgt = "mw" Or tgt = "sunrise" Or tgt = "sunset" Then
             LogEvent LOG_CATEGORY, "  NOTE row " & r & ": astro '" & tgt & "' - skipped (deferred)"
             GoTo NextRow
@@ -102,23 +101,23 @@ Public Sub PushCableStripToCart()
         ' cart-frame cf = world - heading(anchor)   [matches gimbal_planview_v2 resolver]
         '   Ry present : cf = (Ry + dyaw) - heading
         '   chassis    : cf = dyaw            (heading cancels)
-        Dim dyaw As Double: dyaw = SafeNum(ws.Cells(r, COL_DYAW).value)
-        Dim anc As String: anc = Trim(CStr(ws.Cells(r, COL_ANCHOR).value))
+        Dim dyaw As Double: dyaw = SafeNum(ws.Cells(r, cols("dyaw")).value)
+        Dim anc As String: anc = Trim(CStr(ws.Cells(r, cols("anchorref")).value))
         Dim h As Double: h = 0#
         If hdg.Exists(anc) Then h = hdg(anc)
         Dim w As Double
-        If IsNumeric(ws.Cells(r, COL_RY).value) And Trim(CStr(ws.Cells(r, COL_RY).value)) <> "" Then
-            w = SafeNum(ws.Cells(r, COL_RY).value) + dyaw - h
+        If IsNumeric(ws.Cells(r, cols("ry")).value) And Trim(CStr(ws.Cells(r, cols("ry")).value)) <> "" Then
+            w = SafeNum(ws.Cells(r, cols("ry")).value) + dyaw - h
         Else
             w = dyaw
         End If
         w = w - 360# * Int((w + 180#) / 360#)      ' wrap to [-180,180), VBA Int=floor (matches resolver)
 
-        Dim d As String: d = UCase(Trim(CStr(ws.Cells(r, COL_DIR).value)))
+        Dim d As String: d = UCase(Trim(CStr(ws.Cells(r, cols("dir(cw/ccw)")).value)))
         If d <> "CW" And d <> "CCW" Then d = ""
 
         cf(n) = w: dir(n) = d
-        lab(n) = Left$(CStr(ws.Cells(r, COL_STEP).value), 11)
+        lab(n) = Left$(CStr(ws.Cells(r, cols("step")).value), 11)
         n = n + 1
 NextRow:
     Next r

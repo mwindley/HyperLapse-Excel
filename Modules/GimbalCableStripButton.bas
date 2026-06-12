@@ -21,10 +21,10 @@ Private Const SCRIPT_NAME As String = "gimbal_cablestrip.py"
 Private Const SPAN_LIMIT As String = "450"          ' degrees, min->max ceiling
 
 Public Sub RenderCableStrip()
-    On Error GoTo Fail
+    On Error GoTo fail
 
     Dim base As String, pydir As String, script As String, xlsm As String, outPng As String
-    base = ThisWorkbook.Path
+    base = ThisWorkbook.path
     If base = "" Then
         MsgBox "Save the workbook once before rendering.", vbExclamation
         Exit Sub
@@ -34,7 +34,7 @@ Public Sub RenderCableStrip()
     script = pydir & Application.PathSeparator & SCRIPT_NAME
     outPng = pydir & Application.PathSeparator & "gimbal_cablestrip.png"
 
-    If Dir(script) = "" Then
+    If dir(script) = "" Then
         MsgBox "Cable strip renderer not found:" & vbCrLf & script, vbExclamation
         Exit Sub
     End If
@@ -42,7 +42,7 @@ Public Sub RenderCableStrip()
     ' fill sweep directions (blanks only; overrides preserved), then save
     On Error Resume Next
     Application.Run "GimbalSweepDir.FillSweepDirections", False
-    On Error GoTo Fail
+    On Error GoTo fail
     ThisWorkbook.Save
 
     Dim cmd As String
@@ -53,19 +53,23 @@ Public Sub RenderCableStrip()
     logf = pydir & Application.PathSeparator & "cablestrip_log.txt"
     rc = RunAndWait(cmd, logf)
     If rc <> 0 Then
-        MsgBox "Cable strip renderer exited with code " & rc & "." & vbCrLf & vbCrLf & _
-               "--- last output ---" & vbCrLf & TailFile(logf, 1500), vbExclamation
-        Exit Sub
+        Dim ptail As String: ptail = TailFile(logf, 1500)
+        LogEvent "PREP", "RenderCableStrip FAILED rc=" & rc
+        LogEvent "PREP", "py-tail: " & ptail
+        On Error GoTo 0
+        Err.Raise vbObjectError + 513, "RenderCableStrip", _
+            "Cable strip renderer exited code " & rc & " - see event log (py-tail traced)"
     End If
 
-    If Dir(outPng) <> "" Then
+    If dir(outPng) <> "" Then
         ThisWorkbook.FollowHyperlink outPng
     Else
         MsgBox "Render finished but PNG not found:" & vbCrLf & outPng, vbExclamation
     End If
     Exit Sub
 
-Fail:
+fail:
+    LogEvent "PREP", "RenderCableStrip ERROR: " & Err.Description
     MsgBox "Cable strip render failed: " & Err.Description, vbExclamation
 End Sub
 
@@ -79,7 +83,7 @@ End Function
 Private Function TailFile(ByVal path As String, ByVal maxChars As Long) As String
     On Error Resume Next
     Dim f As Integer, s As String
-    If Dir(path) = "" Then TailFile = "(no log written)": Exit Function
+    If dir(path) = "" Then TailFile = "(no log written)": Exit Function
     f = FreeFile
     Open path For Input As #f
     s = Input$(LOF(f), f)
