@@ -414,6 +414,10 @@ Public Function EvalAstro(ByVal target As String, ByVal atTime As Double, _
             ok = Astro.GetMoonGimbalAngles(CDate(atTime), cartHeading, yaw, pitch)
         Case "gc", "mw"
             ok = Astro.GetGCGimbalAngles(CDate(atTime), cartHeading, yaw, pitch)
+        Case "arch_rise"
+            ok = Astro.GetGCArchRiseGimbalAngles(CDate(atTime), cartHeading, yaw, pitch)
+        Case "arch_set"
+            ok = Astro.GetGCArchSetGimbalAngles(CDate(atTime), cartHeading, yaw, pitch)
         ' Event-locked targets: aim at the body's position AT THE EVENT TIME,
         ' independent of the row's fire-time (atTime is ignored here). The
         ' event times are the same workbook named ranges the Fires-at formula
@@ -629,7 +633,7 @@ Public Function IsAstroTarget(ByVal target As String) As Boolean
     ' also astro targets - they resolve to the body's position at that event
     ' time (see EvalAstro / EvalAstroAtEvent), not at the row's fire-time.
     Select Case LCase(Trim(target))
-        Case "sun", "moon", "gc", "mw", _
+        Case "sun", "moon", "gc", "mw", "arch_rise", "arch_set", _
              "sunset", "sunrise", "moonrise", "moonset", "gcrise", "gcset"
             IsAstroTarget = True
         Case Else

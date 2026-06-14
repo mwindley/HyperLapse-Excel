@@ -42,7 +42,7 @@ Public Sub BuildGimbalPlanViz()
     Dim wsP As Worksheet, wsV As Worksheet
     Dim stepCol As Long, n As Long, r As Long, hdrRow As Long, firstData As Long
     Dim cols As Object
-    Dim cV As String, cW As String, cx As String, cy As String, cM As String, cS As String, cU As String
+    Dim cV As String, cx As String, cM As String, cS As String
 
     On Error GoTo fail
     Application.ScreenUpdating = False
@@ -80,10 +80,7 @@ Public Sub BuildGimbalPlanViz()
     cM = ColLetter(stepCol)
     cS = ColLetter(cols("action"))
     cV = ColLetter(cols("ry"))
-    cW = ColLetter(cols("rp"))
     cx = ColLetter(cols("dyaw"))
-    cy = ColLetter(cols("dpitch"))
-    cU = ColLetter(cols("dir(cw/ccw)"))      ' Dir
 
     ' 2) Count gimbal plan rows (Step column non-empty from firstData down).
     '    Bounded + error-tolerant: never overflow the sheet; stop at first blank
@@ -113,26 +110,10 @@ Public Sub BuildGimbalPlanViz()
     ' 4) Title + tunable inputs (blue = you can change).
     mStage = "write header/inputs"
     With wsV
-        .Range("A1").value = "Gimbal Plan - validation"
+        .Range("A1").value = "Gimbal Plan - formula layer"
         .Range("A1").Font.Bold = True: .Range("A1").Font.Size = 13
-        .Range("A2").value = "Cumulative yaw vs pitch. Re-run after adding/removing plan rows."
-
-        .Range("A4").value = "Fast-yaw threshold (deg/step)"
-        .Range("B4").value = DEF_FASTYAW
-        .Range("A5").value = "Pitch limit (deg)"
-        .Range("B5").value = PITCH_LIMIT
-        .Range("A6").value = "Yaw cable limit (+/- deg)"
-        .Range("B6").value = YAW_CABLE
-        .Range("B4:B6").Font.Color = RGB(0, 0, 255)
-        .Range("B4:B6").Interior.Color = RGB(255, 255, 204)
-        .Range("A4:A6").Font.Italic = True
-
-        ' Live summary (computed below once data range known).
-        .Range("A8").value = "Max |cumulative yaw| (deg)"
-        .Range("A9").value = "Yaw cable headroom (deg)"
-        .Range("A10").value = "Max pitch (deg)"
-        .Range("A11").value = "Fast-yaw steps flagged"
-        .Range("A8:A11").Font.Italic = True
+        .Range("A2").value = "Working columns for the Plan sheet (Fires-at / Actual / Dir / Pan Time). " _
+            & "Cable safety = Python cable strip; pitch limit = plan view. Not operator-facing."
     End With
 
     ' 5) Trajectory table. Headers on row 14, data 15..(15+n-1).
@@ -142,21 +123,10 @@ Public Sub BuildGimbalPlanViz()
     With wsV
         .Cells(h, 1).value = "Step"
         .Cells(h, 2).value = "Action"
-        .Cells(h, 3).value = "Cum yaw (deg)"
-        .Cells(h, 4).value = "Pitch (deg)"
-        .Cells(h, 5).value = "Yaw step (deg)"
-        .Cells(h, 6).value = "Fast?"
-        .Cells(h, 7).value = "Fast pitch"     ' red-series Y (NA when not fast)
-        .Cells(h, 8).value = "Slow Y"          ' speed-band series: pitch when Pan Speed=Slow else NA
-        .Cells(h, 9).value = "Mid Y"           ' pitch when Pan Speed=Mid else NA
-        .Cells(h, 10).value = "Fast Y"         ' pitch when Pan Speed=Fast else NA
-        .Cells(h, 16).value = "Sun Y"          ' track-object series: pitch when Track sun else NA
-        .Cells(h, 17).value = "Moon Y"         ' pitch when Track moon else NA
-        .Cells(h, 18).value = "GC Y"           ' pitch when Track gc else NA
-        .Cells(h, 12).value = "Astro yaw"     ' internal: astro base @ BuildPlan
-        .Cells(h, 13).value = "Astro pitch"   ' internal: astro base @ BuildPlan
-        .Cells(h, 14).value = "Aim"           ' internal: absolute aim (base+dyaw)
-        .Cells(h, 15).value = "Short"         ' internal: shortest Dir (CW/CCW)
+        .Cells(h, 12).value = "Astro yaw"    ' internal: astro base @ BuildPlan
+        .Cells(h, 13).value = "Astro pitch"  ' internal: astro base @ BuildPlan
+        .Cells(h, 14).value = "Aim"          ' internal: absolute aim (base+dyaw); Pan Time swing source
+        .Cells(h, 15).value = "Short"        ' internal: shortest Dir (CW/CCW); drives Plan Dir paint
         .Range(.Cells(h, 1), .Cells(h, 7)).Font.Bold = True
         .Range(.Cells(h, 1), .Cells(h, 7)).Borders(xlEdgeBottom).LineStyle = xlContinuous
     End With
@@ -198,35 +168,14 @@ Public Sub BuildGimbalPlanViz()
             & "IF(ISNUMBER(L" & vr & "),L" & vr & "," & PLAN_SHEET & "!" & cV & pr & ")+IFERROR(VALUE(" & PLAN_SHEET & "!" & cx & pr & "),0)," _
             & dq & dq & ")"
 
-        ' Cum yaw (C): DIRECTED + UNWRAPPED. An absolute leg winds from the
-        ' previous cum to the Aim the Dir way (CW = +, CCW = -, the long way if
-        ' Dir says so); a relative leg just adds dyaw. Blank Dir defaults to the
-        ' shortest path (and is red-flagged). Cumulative (not wrapped to +/-180)
-        ' so the +/-450 cable limit is meaningful. prev = 0 first leg else C-1.
+        ' Short (O): which Dir is the shortest path from the previous aim to this
+        ' one - drives the not-shortest-direction paint on the Plan sheet's Dir
+        ' cell. prev = first row none else N(vr-1). (The old Cum-yaw/Pitch/Yaw-
+        ' step/Fast columns were chart-only and have been removed with the chart.)
         Dim pv As String
-        If i = 0 Then pv = "0" Else pv = "C" & (vr - 1)
-        wsV.Cells(vr, 3).Formula = _
-            "=IF(N" & vr & "=" & dq & dq & "," & pv & "+IFERROR(VALUE(" & PLAN_SHEET & "!" & cx & pr & "),0)," _
-            & pv & "+MOD(N" & vr & "-" & pv & ",360)-IF(OR(" & PLAN_SHEET & "!" & cU & pr & "=" & dq & "CCW" & dq _
-            & ",AND(" & PLAN_SHEET & "!" & cU & pr & "<>" & dq & "CW" & dq & ",MOD(N" & vr & "-" & pv & ",360)>180)),360,0))"
-        ' Shortest (O): which Dir is the short path (drives the not-shortest paint).
+        If i = 0 Then pv = "N" & vr Else pv = "N" & (vr - 1)
         wsV.Cells(vr, 15).Formula = _
             "=IF(N" & vr & "=" & dq & dq & "," & dq & dq & ",IF(MOD(N" & vr & "-" & pv & ",360)<=180," & dq & "CW" & dq & "," & dq & "CCW" & dq & "))"
-
-        ' Pitch (D): unchanged - astro M (or marker Rp) else carry; +dpitch.
-        If i = 0 Then
-            wsV.Cells(vr, 4).Formula = _
-                "=IF(ISNUMBER(M" & vr & "),M" & vr & ",IF(ISNUMBER(" & PLAN_SHEET & "!" & cW & pr & ")," & PLAN_SHEET & "!" & cW & pr & _
-                ",0))+IFERROR(VALUE(" & PLAN_SHEET & "!" & cy & pr & "),0)"
-            wsV.Cells(vr, 5).value = 0
-        Else
-            wsV.Cells(vr, 4).Formula = _
-                "=IF(ISNUMBER(M" & vr & "),M" & vr & ",IF(ISNUMBER(" & PLAN_SHEET & "!" & cW & pr & ")," & PLAN_SHEET & "!" & cW & pr & _
-                ",D" & (vr - 1) & "))+IFERROR(VALUE(" & PLAN_SHEET & "!" & cy & pr & "),0)"
-            wsV.Cells(vr, 5).Formula = "=C" & vr & "-C" & (vr - 1)
-        End If
-        wsV.Cells(vr, 6).Formula = "=ABS(E" & vr & ")>$B$4"                    ' Fast?
-        wsV.Cells(vr, 7).Formula = "=IF(F" & vr & ",D" & vr & ",NA())"         ' red series Y
     Next i
 
     ' 6b) Pan Time (Plan col AB) on EVERY gimbal row + "< For" validation.
@@ -249,10 +198,23 @@ Public Sub BuildGimbalPlanViz()
     Dim q As String: q = Chr(34)     ' double-quote for in-formula strings
     For i = 0 To n - 1
         pr = firstData + i
+        ' Pan Time = acquire SWING / rate. The swing is the SHORTEST-PATH angle
+        ' from the previous row's aim to this row's aim (col N) - bounded 0..180,
+        ' so it never inflates the way the directed/unwrapped cumulative step
+        ' (col E) does on a track-entry row (the phantom 360). vr/vrPrev are the
+        ' GimbalViz table rows for this plan row and the one above. First row has
+        ' no predecessor -> no swing.
+        Dim vrPT As Long: vrPT = d0 + i
+        Dim swingExpr As String
+        If i = 0 Then
+            swingExpr = "0"
+        Else
+            ' shortest signed delta between aims, absolute value
+            swingExpr = "ABS(MOD(GimbalViz!$N$" & vrPT & "-GimbalViz!$N$" & (vrPT - 1) & "+540,360)-180)"
+        End If
         wsP.Cells(pr, cols("pantime")).Formula = _
             "=IF($" & cZ & pr & "=" & q & q & "," & q & q & _
-            ",IFERROR(ABS(INDEX(GimbalViz!$E:$E,MATCH($" & cM & pr & _
-            ",GimbalViz!$A:$A,0)))/IF($" & cZ & pr & "=" & q & "Slow" & q & _
+            ",IFERROR(" & swingExpr & "/IF($" & cZ & pr & "=" & q & "Slow" & q & _
             ",3,IF($" & cZ & pr & "=" & q & "Mid" & q & ",6,IF($" & cZ & pr & _
             "=" & q & "Fast" & q & ",12,1)))," & q & q & "))"
         ' Speed-band chart Y values: the pitch (col D) on rows whose Pan Speed
@@ -260,15 +222,6 @@ Public Sub BuildGimbalPlanViz()
         ' (Slow=blue, Mid=green, Fast=orange) so the operator SEES the swing
         ' speed they set per leg. vr = the GimbalViz table row for this plan row.
         Dim vrB As Long: vrB = d0 + i
-        wsV.Cells(vrB, 8).Formula = "=IF($" & cZ & pr & "=" & q & "Slow" & q & ",D" & vrB & ",NA())"
-        wsV.Cells(vrB, 9).Formula = "=IF($" & cZ & pr & "=" & q & "Mid" & q & ",D" & vrB & ",NA())"
-        wsV.Cells(vrB, 10).Formula = "=IF($" & cZ & pr & "=" & q & "Fast" & q & ",D" & vrB & ",NA())"
-        ' Track-object chart Y values: the pitch on Track rows, coloured by the
-        ' object being tracked (Sun=yellow, Moon=grey, GC=white). Keyed on
-        ' Action=Track AND Target; NA() on non-track rows. cS=Action, cTgt=Target.
-        wsV.Cells(vrB, 16).Formula = "=IF(AND(LOWER($" & cS & pr & ")=" & q & "track" & q & ",LOWER($" & cTgt & pr & ")=" & q & "sun" & q & "),D" & vrB & ",NA())"
-        wsV.Cells(vrB, 17).Formula = "=IF(AND(LOWER($" & cS & pr & ")=" & q & "track" & q & ",LOWER($" & cTgt & pr & ")=" & q & "moon" & q & "),D" & vrB & ",NA())"
-        wsV.Cells(vrB, 18).Formula = "=IF(AND(LOWER($" & cS & pr & ")=" & q & "track" & q & ",LOWER($" & cTgt & pr & ")=" & q & "gc" & q & "),D" & vrB & ",NA())"
         ' Actual (mins) = real window. Next GP anchored (Anchor type non-blank)
         ' -> next Fires-at minus this Fires-at; next carries (blank) -> Stay.
         ' Both reduce to the true duration; the operator never types this.
@@ -293,29 +246,6 @@ Public Sub BuildGimbalPlanViz()
 
     ' 7) Pitch-limit reference line (2 points spanning the yaw range) in I:J.
     mStage = "write limit-line helper"
-    wsV.Range("I14").value = "limX": wsV.Range("J14").value = "limY"
-    wsV.Range("I15").Formula = "=MIN(C" & d0 & ":C" & d1 & ")"
-    wsV.Range("I16").Formula = "=MAX(C" & d0 & ":C" & d1 & ")"
-    wsV.Range("J15").Formula = "=$B$5"
-    wsV.Range("J16").Formula = "=$B$5"
-
-    ' 8) Live summary values.
-    mStage = "write summary + conditional formats"
-    wsV.Range("B8").Formula = "=MAX(ABS(MIN(C" & d0 & ":C" & d1 & ")),ABS(MAX(C" & d0 & ":C" & d1 & ")))"
-    wsV.Range("B9").Formula = "=$B$6-B8"
-    wsV.Range("B10").Formula = "=MAX(D" & d0 & ":D" & d1 & ")"
-    wsV.Range("B11").Formula = "=SUMPRODUCT(--(F" & d0 & ":F" & d1 & "))"
-    ' red flags if a limit is breached
-    wsV.Range("B9").FormatConditions.Delete
-    wsV.Range("B9").FormatConditions.Add Type:=xlCellValue, Operator:=xlLess, Formula1:="=0"
-    wsV.Range("B9").FormatConditions(1).Font.Color = RGB(192, 0, 0)
-    wsV.Range("B10").FormatConditions.Delete
-    wsV.Range("B10").FormatConditions.Add Type:=xlCellValue, Operator:=xlGreater, Formula1:="=$B$5"
-    wsV.Range("B10").FormatConditions(1).Font.Color = RGB(192, 0, 0)
-    wsV.Range("B11").FormatConditions.Delete
-    wsV.Range("B11").FormatConditions.Add Type:=xlCellValue, Operator:=xlGreater, Formula1:="=0"
-    wsV.Range("B11").FormatConditions(1).Font.Color = RGB(192, 0, 0)
-
     wsV.Columns("A").ColumnWidth = 28
     wsV.Columns("B:G").ColumnWidth = 13
 
@@ -326,10 +256,24 @@ Public Sub BuildGimbalPlanViz()
     '     the astro base / cum formulas (the first-paint blank watch item).
     mStage = "Dir validation + not-shortest paint"
     Application.Calculate
-    Dim dcell As Range, shrt As String, dirv As String
+    Dim dcell As Range, shrt As String, dirv As String, actv As String
     For i = 0 To n - 1
         pr = firstData + i
         Set dcell = wsP.Cells(pr, cols("dir(cw/ccw)"))
+        actv = LCase(Trim(CStr(wsP.Cells(pr, cols("action")).value)))
+
+        ' Direction is only a real operator choice on rows that SLEW to a pose
+        ' (Move, and any get-there). On a Track / Track-yaw row the gimbal follows
+        ' the ephemeris bearing - direction is dictated by the sky, not chosen -
+        ' so Dir is N/A: no validation list, no shortest/long paint, and crucially
+        ' NO mandatory-red (a red demand there is a false alarm for a choice that
+        ' does not exist). Leave those cells blank and unpainted.
+        If actv = "track" Or actv = "track-yaw" Then
+            dcell.Validation.Delete
+            dcell.Interior.ColorIndex = xlNone
+            GoTo NextDir
+        End If
+
         dcell.Validation.Delete
         dcell.Validation.Add Type:=xlValidateList, AlertStyle:=xlValidAlertStop, Formula1:="CW,CCW"
         shrt = UCase(Trim(CStr(wsV.Cells(d0 + i, 15).value)))     ' Shortest
@@ -337,24 +281,28 @@ Public Sub BuildGimbalPlanViz()
         If Len(shrt) = 0 Then
             dcell.Interior.ColorIndex = xlNone                     ' relative leg - Dir N/A
         ElseIf Len(dirv) = 0 Then
-            dcell.Interior.Color = RGB(255, 150, 150)              ' red - mandatory, missing
+            dcell.Interior.Color = RGB(255, 150, 150)              ' red - mandatory, missing (advisory only - nothing is gated by colour; blank Dir defaults to the shortest path at push time)
         ElseIf dirv = shrt Then
             dcell.Interior.ColorIndex = xlNone                     ' on the short path - clear
         Else
             dcell.Interior.Color = RGB(255, 220, 130)              ' amber - long way (deliberate)
         End If
+NextDir:
     Next i
 
-    ' 9) Build the chart.
-    mStage = "build chart"
-    BuildChart wsV, d0, d1
+    ' 9) Chart RETIRED. The cumulative-yaw chart used a point-to-point model
+    ' that cannot represent astro-track sweeps (it inflated the cable count with
+    ' a phantom 360 on track-entry rows). Cable safety is now owned by the Python
+    ' cable strip (gimbal_cablestrip.py, pops up during prep); pitch-limit is
+    ' shown in the plan view PNG; the firmware 20 deg/s slew floor covers the old
+    ' fast-yaw concern. What remains here (and is KEPT) is the load-bearing
+    ' formula layer: Fires-at, Actual, Dir, and the re-homed Pan Time (acquire
+    ' swing = shortest-path aim delta / rate). The chart-build code and its
+    ' chart-only working columns (Cum yaw / Pitch / Yaw step / Fast / series /
+    ' summary) were removed with it.
 
     Application.ScreenUpdating = True
-    wsV.Activate: wsV.Range("A1").Select
-    MsgBox "Gimbal Plan viz built: " & n & " steps." & vbCrLf & _
-           "Path = cumulative yaw vs pitch; red dots = fast yaw (> " & DEF_FASTYAW & " deg/step);" & vbCrLf & _
-           "dashed line = pitch limit " & PITCH_LIMIT & " deg. Check the summary block (A8:B11).", _
-           vbInformation, "GimbalViz"
+    wsP.Activate
     Exit Sub
 fail:
     Application.ScreenUpdating = True
@@ -362,91 +310,7 @@ fail:
            Err.Description, vbExclamation
 End Sub
 
-'------------------------------------------------------------------------------
-Private Sub BuildChart(ws As Worksheet, d0 As Long, d1 As Long)
-    Dim co As ChartObject, ch As Chart, s As Series
-    mStage = "chart: add object"
-    Set co = ws.ChartObjects.Add(Left:=ws.Range("I2").Left, Top:=ws.Range("I2").Top, _
-                                 Width:=560, Height:=360)
-    co.Name = "GimbalPlanChart"
-    Set ch = co.Chart
-    ch.ChartType = xlXYScatterLines
 
-    ' Series 1: the path (cum yaw X, pitch Y) - line + circle markers
-    mStage = "chart: path series"
-    Set s = ch.SeriesCollection.NewSeries
-    s.Name = "Path"
-    s.XValues = ws.Range("C" & d0 & ":C" & d1)
-    s.values = ws.Range("D" & d0 & ":D" & d1)
-    s.MarkerStyle = xlMarkerStyleCircle: s.MarkerSize = 5
-    s.MarkerBackgroundColor = RGB(50, 102, 173)
-    s.MarkerForegroundColor = RGB(50, 102, 173)
-    s.Border.Color = RGB(50, 102, 173)
-    s.Border.LineStyle = xlContinuous: s.Border.Weight = xlMedium
-
-    ' Series 2a/2b/2c: speed-band markers (blue=Slow, green=Mid, orange=Fast),
-    ' no connecting line. Each plots pitch only on rows matching that Pan Speed
-    ' (NA elsewhere) so the operator sees the swing speed set per leg. Replaces
-    ' the old binary red fast-yaw flag (cadence-blind 90 deg/step).
-    mStage = "chart: speed-band series"
-    Dim bandName(2) As String, bandCol(2) As Long, bandRGB(2) As Long
-    bandName(0) = "Slow": bandCol(0) = 8:  bandRGB(0) = RGB(50, 102, 173)   ' blue
-    bandName(1) = "Mid":  bandCol(1) = 9:  bandRGB(1) = RGB(60, 160, 90)    ' green
-    bandName(2) = "Fast": bandCol(2) = 10: bandRGB(2) = RGB(230, 145, 40)   ' orange
-    Dim bi As Long
-    For bi = 0 To 2
-        Set s = ch.SeriesCollection.NewSeries
-        s.Name = bandName(bi)
-        s.XValues = ws.Range("C" & d0 & ":C" & d1)
-        s.values = ws.Range(ColLetter(bandCol(bi)) & d0 & ":" & ColLetter(bandCol(bi)) & d1)
-        s.MarkerStyle = xlMarkerStyleCircle: s.MarkerSize = 8
-        s.MarkerBackgroundColor = bandRGB(bi)
-        s.MarkerForegroundColor = bandRGB(bi)
-        s.Border.LineStyle = xlNone
-    Next bi
-
-    ' Series 2d/2e/2f: track-object markers (Sun=yellow, Moon=grey, GC=white),
-    ' no connecting line. Pitch on Track rows only, coloured by the object being
-    ' tracked. Distinct from the get-there swing bands (blue/green/orange).
-    mStage = "chart: track-object series"
-    Dim objName(2) As String, objCol(2) As Long, objRGB(2) As Long
-    objName(0) = "Sun track":  objCol(0) = 16: objRGB(0) = RGB(255, 200, 40)    ' yellow
-    objName(1) = "Moon track": objCol(1) = 17: objRGB(1) = RGB(150, 150, 150)   ' grey
-    objName(2) = "GC track":   objCol(2) = 18: objRGB(2) = RGB(245, 245, 245)   ' white
-    Dim oi As Long
-    For oi = 0 To 2
-        Set s = ch.SeriesCollection.NewSeries
-        s.Name = objName(oi)
-        s.XValues = ws.Range("C" & d0 & ":C" & d1)
-        s.values = ws.Range(ColLetter(objCol(oi)) & d0 & ":" & ColLetter(objCol(oi)) & d1)
-        s.MarkerStyle = xlMarkerStyleCircle: s.MarkerSize = 8
-        s.MarkerBackgroundColor = objRGB(oi)
-        s.MarkerForegroundColor = objRGB(oi)
-        s.Border.LineStyle = xlNone
-    Next oi
-
-    ' Series 3: pitch-limit line (dashed grey, no markers)
-    mStage = "chart: limit series"
-    Set s = ch.SeriesCollection.NewSeries
-    s.Name = "Pitch limit"
-    s.XValues = ws.Range("I15:I16")
-    s.values = ws.Range("J15:J16")
-    s.MarkerStyle = xlNone
-    s.Border.Color = RGB(140, 140, 140)
-    s.Border.LineStyle = xlDash
-
-    mStage = "chart: titles + axes"
-    ch.HasTitle = True
-    ch.ChartTitle.tExt = "Gimbal Plan - validation (cumulative yaw vs pitch)"
-    With ch.Axes(xlValue)
-        .HasTitle = True: .AxisTitle.tExt = "Pitch (deg)"
-        .MinimumScale = 0: .MajorUnit = 10   ' max auto-fits so a >80 breach stays visible
-    End With
-    With ch.Axes(xlCategory)
-        .HasTitle = True: .AxisTitle.tExt = "Cumulative yaw (deg)"
-    End With
-    ch.HasLegend = True
-End Sub
 
 '------------------------------------------------------------------------------
 Private Function ColLetter(ByVal n As Long) As String

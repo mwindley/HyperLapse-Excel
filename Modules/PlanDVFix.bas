@@ -74,7 +74,7 @@ Public Sub FixPlanValidations()
     SetListValidation ColRange(ws, cols("action"), r1, r2), _
                       "Pan Follow,Lock,Move,Track,Track-yaw,END"
     SetListValidation ColRange(ws, cols("target"), r1, r2), _
-                      "sun,moon,gc,sunset,sunrise,moonrise,moonset,gcrise,gcset"
+                      "sun,moon,gc,arch_rise,arch_set,sunset,sunrise,moonrise,moonset,gcrise,gcset"
     SetListValidation ColRange(ws, cols("dir(cw/ccw)"), r1, r2), "CW,CCW"
     SetListValidation ColRange(ws, cols("panspeed"), r1, r2), _
                       "Slow,Mid,Fast"

@@ -628,6 +628,33 @@ Public Sub PushFormulaToCart()
     Else
         LogEvent "FORMULA", "GET /exposure/load HTTP " & sc & " " & respText
     End If
+
+    ' Push the phase-aware luminance target pair. The cart owns the exposure
+    ' walk; without this it sits on the boot default (128). ss = sunset target
+    ' (BRIGHTEN phase), sr = sunrise target (DARKEN phase). The cart selects by
+    ' its own phase (isCurrentlySunrise), same as the Tv/ISO table.
+    Dim ssT As Long, srT As Long
+    ssT = 60: srT = 40
+    Dim vss As Variant, vsr As Variant
+    vss = ThisWorkbook.Sheets("Settings").Range("dataLumTargetSunset").value
+    vsr = ThisWorkbook.Sheets("Settings").Range("dataLumTargetSunrise").value
+    If IsNumeric(vss) Then ssT = CLng(vss)
+    If IsNumeric(vsr) Then srT = CLng(vsr)
+
+    Dim tgtUrl As String
+    tgtUrl = arduinoIP & "/exposure/target?ss=" & ssT & "&sr=" & srT
+    On Error Resume Next
+    http.Open "GET", tgtUrl, False
+    http.Send
+    Dim tsc As Long, tResp As String
+    tsc = http.Status
+    tResp = CStr(http.responseText)
+    On Error GoTo 0
+    If tsc = 200 Then
+        LogEvent "FORMULA", "GET /exposure/target ss=" & ssT & " sr=" & srT & " OK " & tResp
+    Else
+        LogEvent "FORMULA", "GET /exposure/target ss=" & ssT & " sr=" & srT & " HTTP " & tsc
+    End If
 End Sub
 
 

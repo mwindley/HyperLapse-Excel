@@ -417,12 +417,15 @@ End Sub
 ' ============================================================
 ' Helpers
 ' ============================================================
-' Plan target token -> cart obj char. sun->S, moon->M, gc/mw->W.
+' Plan target token -> cart obj char. sun->S, moon->M, gc/mw->W,
+' arch_rise->A, arch_set->B (match firmware GTO_ARCH_RISE/SET).
 Private Function ObjToChar(ByVal t As String) As String
     Select Case t
         Case "sun":          ObjToChar = "S"
         Case "moon":         ObjToChar = "M"
         Case "gc", "mw":     ObjToChar = "W"
+        Case "arch_rise":    ObjToChar = "A"
+        Case "arch_set":     ObjToChar = "B"
         Case Else:           ObjToChar = ""
     End Select
 End Function

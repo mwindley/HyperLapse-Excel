@@ -88,6 +88,10 @@ Public Sub BuildPlan()
     If Not RunStep("RenderPlanView", "Render Plan View", rpt) Then GoTo done
     If Not RunStep("RenderCableStrip", "Render Cable Strip", rpt) Then GoTo done
 
+    ' Pano planner image (soft - exploration aid, not load-bearing). Shows the
+    ' landscape/portrait pano configs: edges, overlap, buckets, final-video cost.
+    RunStep "RenderPanoPlanner", "Render Pano Planner", rpt
+
     ' Cable-span guard: detect + alert (does not block). Prep Cart enforces it.
     RunStep "CableSpan.DetectCableSpan", "Check Cable Span", rpt
 
@@ -133,6 +137,9 @@ Public Sub PushToCart()
     ok = RunStep("PushTrackPlanToCart", "Push Track Plan", rpt)
     If Not ok And STOP_ON_CART_FAIL Then GoTo done
     ok = RunStep("PushTrackPathsToCart", "Push Track Paths", rpt)
+    If Not ok And STOP_ON_CART_FAIL Then GoTo done
+    ' Pano configs (landscape + portrait) - cart holds both; trigger picks which.
+    ok = RunStep("PanoConfigPush.PushPanoConfigs", "Push Pano Configs", rpt)
     If Not ok And STOP_ON_CART_FAIL Then GoTo done
     ok = RunStep("PushChartToCart", "Push Chart", rpt)
     If Not ok And STOP_ON_CART_FAIL Then GoTo done

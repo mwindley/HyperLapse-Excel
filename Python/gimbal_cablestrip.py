@@ -56,8 +56,14 @@ def unwrap_cart(gps, wp_hdg):
             if prev_w is None:
                 u0=azs[0]
             else:
+                # ENTRY into a track uses the SHORTEST path to its first sample.
+                # Do NOT apply the row's CW/CCW here: a track row's dir describes
+                # the *track* motion (handled by the per-sample unwrap below), not
+                # the entry slew. Forcing dir on a near-zero entry delta (e.g. when
+                # the previous Move already arrived at the track's start) injects a
+                # phantom +/-360 turn - the cause of false cable-limit overruns.
                 short=((azs[0]-prev_w+540)%360)-180
-                u0=prev_u+step_dir(short,g["dir"])
+                u0=prev_u+short
             u=u0; pw=azs[0]
             for w in azs[1:]:
                 short=((w-pw+540)%360)-180            # continuous unwrap within track

@@ -130,6 +130,36 @@ Public Function GetGCGimbalAngles(ByVal atTime As Date, _
 End Function
 
 ' ============================================================
+' GC Arch gimbal angles (rise / set). Mirror of GetGCGimbalAngles but
+' for the arch perpendicular bearing. The arch is a horizon bearing
+' (alt 0), so gimbalPitch comes back 0 and the held pitch is supplied
+' by Rp on the Track-yaw GP - NOT by this function. Returns True
+' whenever the bearing is defined (always), unlike the body evaluators
+' which gate on alt>0, because the arch yaw aim is valid all night even
+' though its nominal altitude is 0.
+Public Function GetGCArchRiseGimbalAngles(ByVal atTime As Date, _
+                                           ByVal cartHeading As Double, _
+                                           ByRef gimbalYaw As Double, _
+                                           ByRef gimbalPitch As Double) As Boolean
+    Dim az As Double, alt As Double
+    GetGCArchRiseAzAltAtTime atTime, az, alt
+    gimbalYaw = AzimuthToGimbalYaw(az, cartHeading)
+    gimbalPitch = alt                          ' 0; held pitch is Rp
+    GetGCArchRiseGimbalAngles = True
+End Function
+
+Public Function GetGCArchSetGimbalAngles(ByVal atTime As Date, _
+                                          ByVal cartHeading As Double, _
+                                          ByRef gimbalYaw As Double, _
+                                          ByRef gimbalPitch As Double) As Boolean
+    Dim az As Double, alt As Double
+    GetGCArchSetAzAltAtTime atTime, az, alt
+    gimbalYaw = AzimuthToGimbalYaw(az, cartHeading)
+    gimbalPitch = alt
+    GetGCArchSetGimbalAngles = True
+End Function
+
+' ============================================================
 ' Day 17 additions -- Workfront #50 push astro
 '
 ' Public wrappers around the private *Position subs. Use these
@@ -153,6 +183,46 @@ Public Sub GetGCAzAltAtTime(ByVal atTime As Date, _
                              ByRef azimuth As Double, _
                              ByRef altitude As Double)
     GetGCPosition atTime, azimuth, altitude
+End Sub
+
+' ============================================================
+' GC ARCH - virtual point: the perpendicular to the line joining
+' the two horizon "feet" of the Milky Way band (the band modelled
+' as the galactic equator, b=0, a great circle). That bearing
+' equals the band APEX azimuth and follows the arch continuously
+' (no whip - it is a horizon-feet bearing, not an overhead point).
+' Altitude returned 0 (feet on the horizon).
+'
+' rise / set both return this SAME continuous bearing - they do NOT
+' differ by hemisphere. They differ only by the time window the
+' operator authors:
+'  - "rise" -> authored BEFORE the overhead pass (apex climbing).
+'  - "set"  -> authored AFTER the overhead pass (apex descending).
+' The 180 deg difference between the two windows is the real fact
+' that the arch went over the top; an operator Move bridges that
+' overhead gap. The `side` string is carried for logging/clarity
+' only - the geometry is identical (apex-nearest bearing).
+'
+' The rise/set targets are authored as Track-yaw GPs at a fixed
+' foreground pitch (Rp = offP on the cart); the held pitch comes
+' from Rp, not from this solver (which returns altitude 0).
+' ============================================================
+Public Sub GetGCArchAzAltAtTime(ByVal atTime As Date, _
+                                 ByRef azimuth As Double, _
+                                 ByRef altitude As Double)
+    GetGCArchPosition atTime, "apex", azimuth, altitude
+End Sub
+
+Public Sub GetGCArchRiseAzAltAtTime(ByVal atTime As Date, _
+                                     ByRef azimuth As Double, _
+                                     ByRef altitude As Double)
+    GetGCArchPosition atTime, "rise", azimuth, altitude
+End Sub
+
+Public Sub GetGCArchSetAzAltAtTime(ByVal atTime As Date, _
+                                    ByRef azimuth As Double, _
+                                    ByRef altitude As Double)
+    GetGCArchPosition atTime, "set", azimuth, altitude
 End Sub
 
 ' Generate a table of Milky Way galactic centre positions
@@ -338,6 +408,77 @@ Private Sub GetGCPosition(ByVal atTime As Date, _
     ' Convert to altitude/azimuth
     RADecToAltAz ha, GC_DEC_DEG, lat, altitude, azimuth
 End Sub
+
+' ============================================================
+' GC Arch position - bisector azimuth of the two horizon feet
+' of the galactic-equator great circle (b=0).
+' Method (matches the validated prototype):
+'   1. For LST at this time, sample the b=0 circle (galactic long
+'      0..360) -> equatorial (gal->eq rotation) -> alt/az.
+'   2. Find the two horizon crossings (alt sign change) -> feet az.
+'   3. Track the max-alt sample -> apex az (the arch side).
+'   4. Bisect the two feet (circular, short-way midpoint); of the
+'      two candidates 180 apart, return the one nearer the apex az.
+' azimuth = arch bisector bearing; altitude = 0 (feet on horizon).
+' If fewer than two feet are above-horizon transitions (band fully
+' up or fully down in the sample), fall back to the apex azimuth.
+' ============================================================
+Private Sub GetGCArchPosition(ByVal atTime As Date, _
+                               ByVal side As String, _
+                               ByRef azimuth As Double, _
+                               ByRef altitude As Double)
+
+    ' The perpendicular to the line joining the band's two horizon feet is,
+    ' exactly, the AZIMUTH OF THE GALACTIC POLE (the pole of the b=0 great
+    ' circle). So the arch bearing = the galactic north pole's azimuth, computed
+    ' directly - no feet scan, no candidate pick, no carry-state, and (because
+    ' the pole never goes near the zenith from this latitude, max alt ~27 deg)
+    ' NO whip and NO flip: it is smooth across the whole GC rise->set window.
+    '   side "rise" -> galactic NORTH pole azimuth (the east-side one at GC rise)
+    '   side "set"  -> + 180 deg (= galactic SOUTH pole azimuth)
+    ' Both are defined and continuous the entire night; the operator chooses when
+    ' to Move from rise to set purely for composition. Altitude returned 0 (the
+    ' tracked point is a horizon bearing; the held pitch comes from Rp / offP on
+    ' the Track-yaw GP, not from this solver).
+    Const GNP_RA  As Double = 192.85948      ' galactic north pole RA  (J2000)
+    Const GNP_DEC As Double = 27.12825       ' galactic north pole Dec (J2000)
+
+    Dim lat As Double, lng As Double, utcOffset As Double
+    lat = Sheets("Settings").Range("dataLatitude").value
+    lng = Sheets("Settings").Range("dataLongitude").value
+    utcOffset = Sheets("Settings").Range("dataUTCOffset").value
+
+    Dim utcTime As Date
+    utcTime = atTime - (utcOffset / 24)
+    Dim jd As Double
+    jd = DateToJulian(utcTime)
+    Dim nDays As Double
+    nDays = jd - 2451545#
+    Dim gmst As Double
+    gmst = NormalizeDeg(280.46061837 + 360.98564736629 * nDays)
+    Dim lst As Double
+    lst = NormalizeDeg(gmst + lng)
+
+    Dim ha As Double
+    ha = NormalizeDeg(lst - GNP_RA)
+    If ha > 180 Then ha = ha - 360
+
+    Dim poleAlt As Double, poleAz As Double
+    RADecToAltAz ha, GNP_DEC, lat, poleAlt, poleAz   ' -> alt, az
+
+    altitude = 0#
+    ' arch_rise must point AT the arch at the start of the window (the apex is on
+    ' the SOUTH side as the GC rises), which is the galactic SOUTH pole azimuth
+    ' = north pole az + 180. arch_set is the opposite perpendicular (north pole
+    ' az). Both are continuous all night; the operator chooses when to Move.
+    If LCase$(side) = "set" Then
+        azimuth = NormalizeDeg(poleAz)               ' north pole az (opposite side)
+    Else
+        azimuth = NormalizeDeg(poleAz + 180#)        ' rise: south pole az (arch side at start)
+    End If
+End Sub
+
+
 
 ' ============================================================
 ' Coordinate conversion helpers
@@ -577,10 +718,10 @@ Private Sub GetMoonPosition(ByVal atTime As Date, _
 
     ' --- Perturbations (Schlyter's main moon terms) ---
     ' Sun's mean anomaly + longitude (we need them as offsets)
-    Dim ws_ As Double, Ms As Double, Ls As Double, Lm As Double
+    Dim ws_ As Double, ms As Double, Ls As Double, Lm As Double
     ws_ = NormalizeDeg(282.9404 + 0.0000470935 * d)
-    Ms = NormalizeDeg(356.047 + 0.9856002585 * d)
-    Ls = NormalizeDeg(ws_ + Ms)                       ' Sun mean longitude
+    ms = NormalizeDeg(356.047 + 0.9856002585 * d)
+    Ls = NormalizeDeg(ws_ + ms)                       ' Sun mean longitude
     Lm = NormalizeDeg(NN + w + m)                      ' Moon mean longitude
 
     Dim Mm As Double, Dm As Double, f As Double
@@ -592,14 +733,14 @@ Private Sub GetMoonPosition(ByVal atTime As Date, _
     Dim dLon As Double
     dLon = -1.274 * Sin((Mm - 2 * Dm) * DEG2RAD) _
          + 0.658 * Sin(2 * Dm * DEG2RAD) _
-         - 0.186 * Sin(Ms * DEG2RAD) _
+         - 0.186 * Sin(ms * DEG2RAD) _
          - 0.059 * Sin((2 * Mm - 2 * Dm) * DEG2RAD) _
-         - 0.057 * Sin((Mm - 2 * Dm + Ms) * DEG2RAD) _
+         - 0.057 * Sin((Mm - 2 * Dm + ms) * DEG2RAD) _
          + 0.053 * Sin((Mm + 2 * Dm) * DEG2RAD) _
-         + 0.046 * Sin((2 * Dm - Ms) * DEG2RAD) _
-         + 0.041 * Sin((Mm - Ms) * DEG2RAD) _
+         + 0.046 * Sin((2 * Dm - ms) * DEG2RAD) _
+         + 0.041 * Sin((Mm - ms) * DEG2RAD) _
          - 0.035 * Sin(Dm * DEG2RAD) _
-         - 0.031 * Sin((Mm + Ms) * DEG2RAD)
+         - 0.031 * Sin((Mm + ms) * DEG2RAD)
     eclLon = NormalizeDeg(eclLon + dLon)
 
     ' Latitude perturbations (degrees)     largest terms
@@ -615,16 +756,16 @@ Private Sub GetMoonPosition(ByVal atTime As Date, _
     Dim epsilon As Double
     epsilon = 23.4393 - 0.0000003563 * d   ' Obliquity at time d
 
-    Dim xe As Double, ye As Double, ze As Double
+    Dim xe As Double, yE As Double, ze As Double
     xe = Cos(eclLon * DEG2RAD) * Cos(eclLat * DEG2RAD)
-    ye = Sin(eclLon * DEG2RAD) * Cos(eclLat * DEG2RAD) * Cos(epsilon * DEG2RAD) _
+    yE = Sin(eclLon * DEG2RAD) * Cos(eclLat * DEG2RAD) * Cos(epsilon * DEG2RAD) _
        - Sin(eclLat * DEG2RAD) * Sin(epsilon * DEG2RAD)
     ze = Sin(eclLon * DEG2RAD) * Cos(eclLat * DEG2RAD) * Sin(epsilon * DEG2RAD) _
        + Sin(eclLat * DEG2RAD) * Cos(epsilon * DEG2RAD)
 
     Dim ra As Double, dec As Double
-    ra = NormalizeDeg(RAD2DEG * Atn2(ye, xe))
-    dec = RAD2DEG * Atn2(ze, Sqr(xe * xe + ye * ye))
+    ra = NormalizeDeg(RAD2DEG * Atn2(yE, xe))
+    dec = RAD2DEG * Atn2(ze, Sqr(xe * xe + yE * yE))
 
     ' Greenwich Sidereal Time     Local Sidereal Time
     ' Use the same formula as GetSunPosition for consistency.
@@ -901,6 +1042,8 @@ Public Function FindGCTransit(ByVal fromTime As Date, _
     Next t
     FindGCTransit = bestT
 End Function
+
+
 
 ' ============================================================
 ' Driver: compute tonight's GC rise / transit / set and write to

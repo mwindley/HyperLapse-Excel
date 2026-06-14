@@ -192,6 +192,35 @@ End Function
 ' Stores results in dataMoonriseTime / dataMoonsetTime. Either
 ' may be 0 if no crossing exists in the envelope.
 ' ============================================================
+' Ensure the true-arc moon named ranges exist (created one column to the right
+' of the clamped moon cells if absent), so FetchMoonTimesForNight can write the
+' unclamped rise/set used by the own-window cubic fit without erroring.
+Private Sub EnsureMoonTrueNames(ByVal ws As Worksheet)
+    On Error Resume Next
+    Dim haveRise As Boolean, haveSet As Boolean
+    haveRise = Not (ThisWorkbook.Names("dataMoonriseTrue") Is Nothing)
+    haveSet = Not (ThisWorkbook.Names("dataMoonsetTrue") Is Nothing)
+    On Error GoTo 0
+    If haveRise And haveSet Then Exit Sub
+
+    ' Anchor to the existing clamped cells, place true values one column right.
+    Dim riseCell As Range, setCell As Range
+    On Error Resume Next
+    Set riseCell = ThisWorkbook.Names("dataMoonriseTime").RefersToRange
+    Set setCell = ThisWorkbook.Names("dataMoonsetTime").RefersToRange
+    On Error GoTo 0
+    If riseCell Is Nothing Or setCell Is Nothing Then Exit Sub
+
+    If Not haveRise Then
+        ThisWorkbook.Names.Add Name:="dataMoonriseTrue", _
+            RefersTo:="=" & ws.Name & "!" & riseCell.Offset(0, 1).Address(True, True)
+    End If
+    If Not haveSet Then
+        ThisWorkbook.Names.Add Name:="dataMoonsetTrue", _
+            RefersTo:="=" & ws.Name & "!" & setCell.Offset(0, 1).Address(True, True)
+    End If
+End Sub
+
 Public Sub FetchMoonTimesForNight(ByVal shootDate As Date)
     On Error GoTo ErrHandler
 
@@ -214,7 +243,13 @@ Public Sub FetchMoonTimesForNight(ByVal shootDate As Date)
     ' Scan starts at shootSunset, extends to shootSunrise.
     Dim chosenRise As Date
     chosenRise = FindMoonCrossing(shootSunset, MOON_HORIZON, 1)
-    ' FindMoonCrossing scans 24h from its start  -  clamp to envelope
+    ' TRUE (unclamped) rise - kept for the own-window cubic fit, which tracks the
+    ' moon over its real above-horizon arc like the sun/GC do (not the borrowed
+    ' dark window). The clamped chosenRise below is only for the dark-window
+    ' "is the moon a night subject" display/flag.
+    Dim trueRise As Date
+    trueRise = chosenRise
+    ' FindMoonCrossing scans 24h from its start  -  clamp to envelope (display)
     If chosenRise > shootSunrise Then chosenRise = 0
 
     ' Find moonset. Start the scan from chosenRise if we got one,
@@ -231,13 +266,29 @@ Public Sub FetchMoonTimesForNight(ByVal shootDate As Date)
     ' Clamp: only accept moonset within reasonable window of envelope
     If chosenSet > shootSunrise + 0.5 Then chosenSet = 0
 
+    ' TRUE rise->set arc for the own-window cubic fit. trueRise is the real
+    ' moonrise (may be after sunrise, in daylight). trueSet = the set after that
+    ' rise (scan downward from trueRise) so the pair bounds one coherent
+    ' above-horizon arc, exactly like the sun's sunset->sunrise window.
+    Dim trueSet As Date
+    If trueRise > 0 Then
+        trueSet = FindMoonCrossing(trueRise, MOON_HORIZON, -1)
+    Else
+        trueSet = chosenSet
+    End If
+    EnsureMoonTrueNames ws
+    ws.Range("dataMoonriseTrue").value = trueRise
+    ws.Range("dataMoonsetTrue").value = trueSet
+
     ws.Range("dataMoonriseTime").value = chosenRise
     ws.Range("dataMoonsetTime").value = chosenSet
 
     LogEvent "UTILS", "Moon (local): rise=" & _
              IIf(chosenRise = 0, "(none in window)", Format(chosenRise, "HH:nn")) & _
              " set=" & _
-             IIf(chosenSet = 0, "(none in window)", Format(chosenSet, "HH:nn"))
+             IIf(chosenSet = 0, "(none in window)", Format(chosenSet, "HH:nn")) & _
+             " | TRUE arc rise=" & IIf(trueRise = 0, "-", Format(trueRise, "dd/mm HH:nn")) & _
+             " set=" & IIf(trueSet = 0, "-", Format(trueSet, "dd/mm HH:nn"))
     Exit Sub
 ErrHandler:
     LogEvent "UTILS", "FetchMoonTimesForNight error: " & Err.Description

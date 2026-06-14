@@ -88,6 +88,7 @@ Public Sub PushChartToCart()
             ' (blank, "-", em-dash, etc.) is a marker Move -> chartable.
             ' Tested by content (ASCII) to avoid any non-ASCII dash literal.
             If tgt = "sun" Or tgt = "moon" Or tgt = "mw" Or _
+               tgt = "arch_rise" Or tgt = "arch_set" Or _
                tgt = "sunrise" Or tgt = "sunset" Then
                 LogCH "  NOTE row " & r & ": astro target '" & tgt & "' - skipped (astro charting deferred)"
                 GoTo NextRow
@@ -104,7 +105,8 @@ Public Sub PushChartToCart()
             ttgt = LCase(Trim(CStr(ws.Cells(r, COL_TARGET).value)))
             Dim rawF As Variant: rawF = ws.Cells(r, COL_FIRESAT).value
             Dim winV As Variant: winV = ws.Cells(r, COL_ACTUAL).value
-            If (ttgt = "sun" Or ttgt = "moon" Or ttgt = "gc" Or ttgt = "mw") _
+            If (ttgt = "sun" Or ttgt = "moon" Or ttgt = "gc" Or ttgt = "mw" _
+               Or ttgt = "arch_rise" Or ttgt = "arch_set") _
                And IsNumeric(rawF) And IsNumeric(winV) Then
               If CDbl(winV) > 0 Then
                 ' Fires-at is stored TIME-OF-DAY only; attach the shoot date

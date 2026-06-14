@@ -36,7 +36,7 @@ from matplotlib.lines import Line2D
 from matplotlib.patches import Circle, FancyArrowPatch
 
 BG="#0d1117"; RING="#2b3340"; RINGTXT="#5b6675"; CARD="#c9d4e3"
-CHASSIS="#36d399"; EARTH={"sun":"#ffb02e","gc":"#9b8cff","moon":"#7fd4ff"}
+CHASSIS="#36d399"; EARTH={"sun":"#ffb02e","gc":"#9b8cff","moon":"#7fd4ff","arch_rise":"#5ce6c0","arch_set":"#e65ca8"}
 EARTH_DEF="#ffb02e"; HDG="#ff5c7a"; FLAG="#ff5470"; MID="#ffd24a"; TXT="#e6edf3"
 DIM=0.22
 R=1.0
@@ -138,7 +138,31 @@ def moon_az_alt(local_dt,lat,lng,utc_off):
     alt=alt-mpar*math.cos(math.radians(alt))
     return az,alt
 
-EPHEM={"gc":gc_az_alt,"sun":sun_az_alt,"moon":moon_az_alt}
+# ---- GC Arch ephemeris (mirrors Astro.bas GetGCArchPosition) ----
+# Virtual point: the perpendicular to the line joining the two horizon "feet"
+# of the Milky Way band = the AZIMUTH OF THE GALACTIC POLE (the pole of the
+# b=0 great circle). Computed directly - no feet scan, no flip: the pole never
+# nears the zenith here (max alt ~27 deg) so the bearing is smooth across the
+# whole GC rise->set window. arch_rise = galactic NORTH pole azimuth (east at
+# GC rise); arch_set = +180. Altitude 0 (horizon bearing; held pitch = Rp).
+_GNP_RA=192.85948; _GNP_DEC=27.12825      # galactic north pole, J2000
+def _gcarch_pole_az(local_dt,lat,lng,utc_off):
+    utc=local_dt-datetime.timedelta(hours=utc_off)
+    n=_date_to_julian(utc)-2451545.0
+    gmst=_norm(280.46061837+360.98564736629*n); lst=_norm(gmst+lng)
+    ha=_norm(lst-_GNP_RA)
+    if ha>180: ha-=360
+    z,a=_radec_to_altaz(ha,_GNP_DEC,lat)   # az, alt
+    return z
+def gcarch_rise_az_alt(local_dt,lat,lng,utc_off):
+    """arch_rise points AT the arch at the start = galactic SOUTH pole az (NP+180); altitude 0."""
+    return _norm(_gcarch_pole_az(local_dt,lat,lng,utc_off)+180.0),0.0
+def gcarch_set_az_alt(local_dt,lat,lng,utc_off):
+    """arch_set = the opposite perpendicular = galactic north pole az; altitude 0."""
+    return _norm(_gcarch_pole_az(local_dt,lat,lng,utc_off)),0.0
+
+EPHEM={"gc":gc_az_alt,"sun":sun_az_alt,"moon":moon_az_alt,
+       "arch_rise":gcarch_rise_az_alt,"arch_set":gcarch_set_az_alt}
 BAND_ALT_DEG=70.0       # zenith-band yaw ease threshold (matches AstroPush; mw/GC only)
 def sample_track(obj,start_dt,dur_min,lat,lng,utc_off,step_min=0.5):
     """Sampled astro track over [start_dt, start_dt+dur] as the cart EXECUTES it.
@@ -275,7 +299,8 @@ def resolve(path):
         if fmin is None: return None,None
         day=plan_date + (datetime.timedelta(days=1) if fmin<shoot_min-1 else datetime.timedelta(0))
         when=datetime.datetime.combine(day,datetime.time())+datetime.timedelta(minutes=fmin)
-        fn={"sun":sun_az_alt,"gc":gc_az_alt,"moon":moon_az_alt}.get(obj)
+        fn={"sun":sun_az_alt,"gc":gc_az_alt,"moon":moon_az_alt,
+            "arch_rise":gcarch_rise_az_alt,"arch_set":gcarch_set_az_alt}.get(obj)
         if fn is None: return None,None
         return fn(when,lat,lon,utc_off)
 
@@ -294,7 +319,7 @@ def resolve(path):
             break
         anchor=str(r[C("Anchor ref")]).strip() if r[C("Anchor ref")] else ""
         target=str(r[C("Target")]).strip().lower() if r[C("Target")] else ""
-        target=target if target in ("sun","gc","moon") else ""
+        target=target if target in ("sun","gc","moon","arch_rise","arch_set") else ""
         def num(c):
             try: return float(r[c])
             except (TypeError,ValueError): return None
@@ -302,11 +327,13 @@ def resolve(path):
         dlbl=str(r[C("Dir (CW/CCW)")]).strip().upper() if r[C("Dir (CW/CCW)")] else None
         dlbl=dlbl if dlbl in ("CW","CCW") else None
 
-        # Track on an astro target -> sample the full executed track over the
-        # GP's window (fire-time .. + total dur) rather than a single
-        # fire-time point. Sun/moon/GC; GC carries the zenith-band ease.
+        # Track / Track-yaw on an astro target -> sample the full executed
+        # track over the GP's window (fire-time .. + total dur) rather than a
+        # single fire-time point. sun/moon/gc/arch_rise/arch_set; gc/moon carry
+        # the zenith-band ease, arch is a smooth horizon-feet bearing (no ease).
         track=None
-        if act.lower()=="track" and target in ("sun","moon","gc"):
+        ASTRO_TRACK_TARGETS=("sun","moon","gc","arch_rise","arch_set")
+        if act.lower() in ("track","track-yaw") and target in ASTRO_TRACK_TARGETS:
             def _hms(v):
                 if v is None: return None
                 if isinstance(v,(datetime.time,datetime.datetime)): return v.hour*60+v.minute+v.second/60.0
@@ -321,6 +348,11 @@ def resolve(path):
                 day=plan_date + (datetime.timedelta(days=1) if fmin<shoot_min-1 else datetime.timedelta(0))
                 start_dt=datetime.datetime.combine(day,datetime.time())+datetime.timedelta(minutes=fmin)
                 track=sample_track(target,start_dt,dmin,lat,lon,utc_off)
+                # Track-yaw holds a FIXED pitch (Rp); the cubic's own pitch
+                # (0 for arch - a horizon bearing) is not used. Re-pitch every
+                # sample to Rp so the rendered sweep sits at the held elevation.
+                if act.lower()=="track-yaw" and track and rp is not None:
+                    track=[(w,rp,a) for (w,_p,a) in track]
 
         # NON-cumulative, per-GP. Ry/Rp = real-world (earth) anchor; blank Ry = cart-frame.
         if ry is not None:                       # earth-frame: Ry is the world bearing
@@ -447,14 +479,16 @@ def render(d,out,hi=None,map_img=None):
         return 0.9 if focus in names else DIM
     nlegs=len(gps)-1
     for i in range(nlegs):
-        # Skip the connector when both ends are astro-track GPs essentially at the
-        # same point (e.g. the 36s acquire row + its track row) - the swept track
-        # polyline already conveys the motion; a leg arrow there is just noise.
-        if gps[i].get("track") and gps[i+1].get("track") \
-           and abs(((gps[i+1]["world"]-gps[i]["world"]+540)%360)-180)<2.0:
+        # Track-aware endpoints (defined below) decide both the skip and the draw.
+        tr_i = gps[i].get("track")
+        tr_j = gps[i+1].get("track")
+        a0 = tr_i[-1][0] if tr_i else gps[i]["world"]    # leg starts where GP i LEAVES the gimbal
+        a1 = tr_j[0][0]  if tr_j else gps[i+1]["world"]  # leg ends where GP i+1 PICKS UP
+        # Skip a connector whose real travel is ~0 (e.g. a track that ends where
+        # the next picks up) - the polylines already convey the motion.
+        if abs(((a1-a0+540)%360)-180) < 2.0 and (tr_i or tr_j):
             continue
         legr=R*(0.72+0.055*i)                      # fan consecutive legs onto separate radii
-        a0=gps[i]["world"]; a1=gps[i+1]["world"]
         dlbl=gps[i+1]["dir"]
         short=((a1-a0+540)%360)-180
         if dlbl=="CW":    diff=short if short>=0 else short+360

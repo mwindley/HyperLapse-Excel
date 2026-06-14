@@ -1,10 +1,77 @@
 # HyperLapse Cart - PROJECT_STATE
 
-_Last updated: 12 Jun 2026 (Day 32 cont.) - current firmware **soak-v114**._
+_Last updated: 14 Jun 2026 (Day 33) - current firmware **soak-v135**._
 _The detailed body below is the **Day-31 / soak-v101-v102 checkpoint** and is kept
 as the build record. For the freshest state read **SOON_LIST.md** (status review at
 top); for open work read **WORKFRONTS.md**. The Day-32 deltas since the v101
 headline are summarised immediately below._
+
+## Day-33 deltas (v128 -> v135 + Excel), 14 Jun
+
+Firmware (all flashed + on-rig verified except where noted):
+- **v128 idle de-energise fix** - boot no longer exitSafeStart on the Tics
+  (which, with auto-energize config, brought coils live before asked and left
+  cart_motor_state DEENERGISED so the idle check never fired). Boot leaves Tics
+  in safe-start; exitSafeStart+energize only in cartEnergise; cartDeenergise
+  also enterSafeStart so de-energise sticks. 2-min idle auto-de-energise verified.
+- **v129 auto-energise on motion** - cartSetSpeed energises the Tics if
+  de-energised and a non-zero speed is commanded (recon jog / move "just works"
+  without a separate ENRG; starts the 2-min idle clock). Zero never energises.
+- **v130 cam status** - label cam->Cam; comms 'deg' fix: a successful battery
+  poll (free-running every 60s) now recovers comms_mode->NORMAL out-of-plan (the
+  PROBING->NORMAL recovery probe only ran inside the shutter cadence, so 'deg'
+  stuck outside a plan). Verified "UI reports Cam as OK".
+- **v131 phase-aware lum target** - exposure moved cart-side long ago but the
+  target was never pushed, so the LIVE walk centred on the boot default 128 not
+  the authored 60/40. /exposure/target now takes ss=<sunset> sr=<sunrise>;
+  meterAndAdjustLive picks target+mode by isCurrentlySunrise (sunset->ss+BRIGHTEN,
+  sunrise->sr+DARKEN), same phase switch as the Tv/ISO table. Excel Formula.bas
+  PushFormulaToCart pushes the pair from dataLumTargetSunset/Sunrise.
+- **v132 acquire-ease shortest-path** - the entry ease onto a Track/Move interval
+  interpolated raw (target-start) yaw with no wrap. Cubic/astro yaw is 0-360
+  azimuth while the Ronin pose is +-180, so easing from pose 0/22 onto a sun
+  target of 346 drove the LONG way (through SW). Steady-state track already
+  wrapped to +-180; the acquire ease now wraps its delta the same way. ON-RIG
+  VERIFIED: gimbal slews short way to the sun, no SW swing.
+- **v133 exposure walk to target** - the deadzone was one-sided (BRIGHTEN stopped
+  at target-10, DARKEN at target+10), settling up to 10 lum short. Now each mode
+  walks to the target itself (BRIGHTEN while lum<target, DARKEN while lum>target);
+  one-sided per mode so no dither.
+- **v134 Tv ceiling in LIVE walk** - the Tv ceiling (tvc) was only honoured in
+  TABLE fallback, so LIVE BRIGHTEN slowed Tv to the ladder end (30s) past the
+  ceiling. LIVE BRIGHTEN now caps Tv at exp_tv_ceiling_sec and hands off to ISO
+  there.
+- **v135 ISO ceiling/base in LIVE walk** - same gap for ISO: LIVE walked ISO to
+  the ladder ends (1600/100) ignoring isoc/isob. LIVE BRIGHTEN now caps ISO at
+  exp_iso_ceiling, DARKEN floors at exp_iso_base. With v134 the LIVE walk now
+  respects all the same Tv/ISO bounds as TABLE (TABLE = time-curve fallback when
+  CCAPI is down; LIVE = metered walk).
+
+Excel (AstroPush.bas, Formula.bas):
+- **Cubics fit over the GP's plan window, not a fixed astronomical window** -
+  ROOT CAUSE of "sun track didn't point at sun". PushTrackPathsToCart fit the sun
+  cubic over sunset->sunrise (night), so for a midday GP the cart evaluated the
+  cubic ~5h before its window start and CLAMPED to the sunset endpoint (~298deg).
+  New PlanTrackWindows() scans the plan's Track GPs and returns each object's
+  window [fire-pad, next-fire+pad]; each cubic is fit over its GP window (so the
+  evaluated time is always inside by construction). Objects the plan doesn't
+  track are skipped (no stale cubic). ON-RIG VERIFIED: sun cubic seg0 ts ~= -299
+  brackets the GP fire; gimbal points at the live sun.
+- **Coverage gate (Prep Cart)** - after the fits, any object the plan TRACKS
+  whose cubic failed to fit/push aborts the push with a clear "do NOT arm"
+  message - caught on the bench, not the cart. It already caught a real case:
+  the moon, forced to 8 segments over a 120-min GP window, starved each segment
+  below the 6-sample minimum.
+- **Window-aware segment count** - FitAndPushTrackPath caps nSegs so each segment
+  keeps >=6 samples at the 5-min step (moon auto 8->4 over a short window). The
+  fixed 8 was sized for the old 30h moon window.
+
+On-rig end-of-session state: cart at north, eh=0; full chain verified on a
+sun->moon bench plan - sun pointing correct (short-way acquire), cart MOVE 200mm
+then STOP halts at ~7s (velFactor 0), exposure LIVE walk settles at the authored
+target with Tv/ISO bounds honoured. STILL OPEN: moon GP in this test plan is
+mostly below horizon (timing, not a bug); cable-strip swing/fire-order cue
+(not requested); night-palette red tuning.
 
 ## Day-32 deltas (v103 -> v114), since the v101 headline
 

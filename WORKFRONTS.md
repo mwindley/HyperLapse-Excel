@@ -1,9 +1,35 @@
 # HyperLapse Cart — Open Workfronts
 
-**As of:** Day 32 cont., 12 Jun 2026 (firmware soak-v114). For the freshest
+**As of:** Day 33, 14 Jun 2026 (firmware soak-v135). For the freshest
 status read **SOON_LIST.md** (status review at top); this file keeps the
 workfront catalog. The Day-31 block + numbered catalog below are kept as the
 standing record.
+
+## Closed since Day 32 (Day-33 work)
+
+- **Sun track didn't point at sun (cubic window)** — ROOT-CAUSED + FIXED (Excel
+  AstroPush.bas). Cubics were fit over fixed astronomical windows (sun =
+  sunset->sunrise) independent of the GP, so a midday GP evaluated the cubic
+  before its window and clamped to the sunset endpoint (~298deg). Now each cubic
+  is fit over its GP's plan window (PlanTrackWindows), with a Prep-Cart coverage
+  gate + window-aware segment count. ON-RIG VERIFIED.
+- **Gimbal long-way swing at acquire** — FIXED (v132). Acquire ease didn't wrap
+  the yaw delta to +-180 (cubic is 0-360 azimuth, Ronin is +-180), so it slewed
+  the long way round. Ease now wraps shortest-path like steady-state. ON-RIG
+  VERIFIED.
+- **Exposure target never reached cart** — FIXED (v131 + Formula.bas). Cart ran
+  on the boot default 128; now Excel pushes the sunset/sunrise target pair and
+  the LIVE walk selects by phase. Walk-to-target (v133) removed the one-sided
+  deadzone undershoot. Tv ceiling (v134) and ISO ceiling/base (v135) now honoured
+  in the LIVE walk, matching TABLE.
+- **Cart idle de-energise / auto-energise** — FIXED (v128/v129). Boot leaves Tics
+  de-energised; first motion auto-energises; 2-min idle drops it. VERIFIED.
+- **Cam status 'deg' stuck out of plan** — FIXED (v130). Battery poll recovers
+  comms_mode->NORMAL out-of-plan. VERIFIED.
+
+STILL OPEN (this session): moon GP mostly below horizon in the bench test plan is
+timing not a bug; cable-strip swing/fire-order cue (not requested to build);
+night-palette red tuning first-cut.
 
 ## Closed since Day 31 (Day-32 work)
 

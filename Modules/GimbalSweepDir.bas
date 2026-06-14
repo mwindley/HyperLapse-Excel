@@ -79,13 +79,23 @@ Public Sub FillSweepDirections(Optional ByVal forceAll As Boolean = False)
     If n < 2 Then Exit Sub
 
     ' --- per leg: shortest cart-frame step -> CW/CCW on destination row ---
+    ' Only rows that SLEW to a pose (Move / get-there) have a meaningful sweep
+    ' direction. A Track / Track-yaw row follows the ephemeris bearing, so its
+    ' direction is dictated by the sky, not chosen - never auto-fill or overwrite
+    ' Dir on those rows (and clear any stale value a prior run left).
     Dim i As Long, d As Double, lbl As String, cur As String
     For i = 2 To n
-        d = Norm180(cf(i) - cf(i - 1))
-        If d >= 0 Then lbl = "CW" Else lbl = "CCW"
-        cur = UCase$(Trim$(CStr(ws.Cells(rowOf(i), colDir).value)))
-        If forceAll Or cur = "" Then
-            ws.Cells(rowOf(i), colDir).value = lbl
+        Dim actI As String
+        actI = UCase$(Trim$(CStr(ws.Cells(rowOf(i), colAction).value)))
+        If actI = "TRACK" Or actI = "TRACK-YAW" Then
+            ws.Cells(rowOf(i), colDir).value = ""      ' Dir N/A on a track row
+        Else
+            d = Norm180(cf(i) - cf(i - 1))
+            If d >= 0 Then lbl = "CW" Else lbl = "CCW"
+            cur = UCase$(Trim$(CStr(ws.Cells(rowOf(i), colDir).value)))
+            If forceAll Or cur = "" Then
+                ws.Cells(rowOf(i), colDir).value = lbl
+            End If
         End If
         ' GP1 has no incoming leg -> leave its Dir blank
     Next i

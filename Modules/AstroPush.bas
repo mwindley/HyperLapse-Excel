@@ -236,6 +236,69 @@ End Sub
 '   mw:   astroDusk                     darkEnd (next day if needed)
 '   moon: astroDusk -> darkEnd (same window as mw)
 ' ============================================================
+' Scan the plan's MIDDLE Track GPs and return, per astro object, the GP window
+' [fireTime, nextFireTime] that tracks it. This is the window the cubic must
+' cover so the cart (which evaluates the cubic at the GP's time) never falls
+' outside it. Returns a Dictionary keyed by lowercase object name
+' ("sun"/"moon"/"mw"/"arch_rise"/"arch_set") -> Array(winStartDate, winEndDate).
+' Objects the plan does not track are absent. A small pad is added each side so
+' the cubic comfortably brackets the GP.
+Private Function PlanTrackWindows() As Object
+    Dim ws As Worksheet: Set ws = ThisWorkbook.Sheets("Plan")
+    Dim cols As Object: Set cols = PlanCols.ResolveMiddleCols(ws)
+    Dim cStep As Long: cStep = cols("step")
+    Dim cFires As Long: cFires = cols("firesat")
+    Dim cAction As Long: cAction = cols("action")
+    Dim cTarget As Long: cTarget = cols("target")
+
+    Const FIRST_ROW As Long = 6
+    Const MAX_ROWS As Long = 60
+    Const PAD_MIN As Double = 5#      ' minutes pad each side of the GP window
+
+    ' Collect populated gimbal rows in order (GP01..END) by STEP.
+    Dim rws() As Long: ReDim rws(0 To MAX_ROWS)
+    Dim nr As Long: nr = 0
+    Dim r As Long
+    For r = FIRST_ROW To FIRST_ROW + MAX_ROWS - 1
+        If Len(Trim(CStr(ws.Cells(r, cStep).value))) > 0 Then
+            rws(nr) = r: nr = nr + 1
+        End If
+    Next r
+
+    Dim dict As Object: Set dict = CreateObject("Scripting.Dictionary")
+    If nr = 0 Then Set PlanTrackWindows = dict: Exit Function
+
+    Dim i As Long
+    For i = 0 To nr - 2          ' last row is END (bounds te, not its own GP)
+        Dim act As String
+        act = UCase(Trim(CStr(ws.Cells(rws(i), cAction).value)))
+        If act = "TRACK" Or act = "TRACK-YAW" Then
+            Dim tgt As String
+            tgt = LCase(Trim(CStr(ws.Cells(rws(i), cTarget).value)))
+            If tgt = "gc" Then tgt = "mw"
+            If tgt <> "" Then
+                Dim fT As Double, nT As Double
+                fT = CDbl(ws.Cells(rws(i), cFires).value)
+                nT = CDbl(ws.Cells(rws(i + 1), cFires).value)
+                If nT < fT Then nT = nT + 1#         ' crosses midnight
+                ' store the widest window if an object is tracked by >1 GP
+                Dim ws0 As Double, we0 As Double
+                ws0 = fT - PAD_MIN / 1440#
+                we0 = nT + PAD_MIN / 1440#
+                If dict.Exists(tgt) Then
+                    Dim cur As Variant: cur = dict(tgt)
+                    If ws0 < cur(0) Then cur(0) = ws0
+                    If we0 > cur(1) Then cur(1) = we0
+                    dict(tgt) = cur
+                Else
+                    dict.Add tgt, Array(ws0, we0)
+                End If
+            End If
+        End If
+    Next i
+    Set PlanTrackWindows = dict
+End Function
+
 Public Sub PushTrackPathsToCart()
     LogEvent "TRACKPUSH", "=== PushTrackPathsToCart ==="
 
@@ -273,26 +336,79 @@ Public Sub PushTrackPathsToCart()
     Dim t0 As Date
     t0 = Now()
 
-    ' Sun: fit cubic over sunset                     sunrise window
-    Dim sunOK As Boolean
-    sunOK = FitAndPushTrackPath("sun", t0, sunsetTime, sunriseTime, arduinoIP)
+    ' Cubics must cover the window the GP actually tracks (the cart evaluates the
+    ' cubic at the GP's fire time; if that time is outside the cubic the cart
+    ' clamps to an endpoint and aims wrong - the midday-sun-clamps-to-sunset bug).
+    ' So fit each object over its PLAN GP window, not a fixed astronomical window.
+    ' Objects the plan does not track are skipped (no stale cubic pushed).
+    Dim pw As Object: Set pw = PlanTrackWindows()
+    Dim sunOK As Boolean, mwOK As Boolean, moonOK As Boolean
+    Dim archRiseOK As Boolean, archSetOK As Boolean
+    sunOK = True: mwOK = True: moonOK = True: archRiseOK = True: archSetOK = True
 
-    ' MW: fit cubic over the full GC above-horizon arc (rise -> set)
-    Dim mwOK As Boolean
-    mwOK = FitAndPushTrackPath("mw", t0, gcRise, gcSet, arduinoIP)
+    If pw.Exists("sun") Then
+        Dim sw As Variant: sw = pw("sun")
+        sunOK = FitAndPushTrackPath("sun", t0, CDate(sw(0)), CDate(sw(1)), arduinoIP)
+    Else
+        LogEvent "TRACKPUSH", "sun: not tracked by plan - cubic skipped"
+    End If
 
-    ' Moon: fit cubic over the SAME dark window as MW (#55 closed Day 24
-    ' pt B). No horizon gating: if the moon is below the horizon for part
-    ' or all of the window the cubic simply asks for a steep-down pitch,
-    ' which the gimbal's own pitch limit clamps and preview makes visible.
-    ' Operator owns plan shootability.
-    Dim moonOK As Boolean
-    moonOK = FitAndPushTrackPath("moon", t0, astroDusk, darkEnd, arduinoIP)
+    If pw.Exists("mw") Then
+        Dim ww As Variant: ww = pw("mw")
+        mwOK = FitAndPushTrackPath("mw", t0, CDate(ww(0)), CDate(ww(1)), arduinoIP)
+    Else
+        LogEvent "TRACKPUSH", "mw: not tracked by plan - cubic skipped"
+    End If
+
+    If pw.Exists("moon") Then
+        Dim mw2 As Variant: mw2 = pw("moon")
+        moonOK = FitAndPushTrackPath("moon", t0, CDate(mw2(0)), CDate(mw2(1)), arduinoIP, 8)
+    Else
+        LogEvent "TRACKPUSH", "moon: not tracked by plan - cubic skipped"
+    End If
+
+    If pw.Exists("arch_rise") Then
+        Dim ar As Variant: ar = pw("arch_rise")
+        archRiseOK = FitAndPushTrackPath("arch_rise", t0, CDate(ar(0)), CDate(ar(1)), arduinoIP)
+    Else
+        LogEvent "TRACKPUSH", "arch_rise: not tracked by plan - cubic skipped"
+    End If
+
+    If pw.Exists("arch_set") Then
+        Dim ast As Variant: ast = pw("arch_set")
+        archSetOK = FitAndPushTrackPath("arch_set", t0, CDate(ast(0)), CDate(ast(1)), arduinoIP)
+    Else
+        LogEvent "TRACKPUSH", "arch_set: not tracked by plan - cubic skipped"
+    End If
+
+AfterFits:
+    ' Coverage gate (Prep Cart): every object the plan TRACKS must have pushed a
+    ' good cubic over its GP window. A tracked object that failed to fit means the
+    ' cart would have no/!stale cubic for that GP and would aim wrong - catch it
+    ' here on the bench, not after it is on the cart.
+    Dim coverageBad As String: coverageBad = ""
+    If pw.Exists("sun") And Not sunOK Then coverageBad = coverageBad & "  sun" & vbCrLf
+    If pw.Exists("mw") And Not mwOK Then coverageBad = coverageBad & "  mw" & vbCrLf
+    If pw.Exists("moon") And Not moonOK Then coverageBad = coverageBad & "  moon" & vbCrLf
+    If pw.Exists("arch_rise") And Not archRiseOK Then coverageBad = coverageBad & "  arch_rise" & vbCrLf
+    If pw.Exists("arch_set") And Not archSetOK Then coverageBad = coverageBad & "  arch_set" & vbCrLf
+
+    If Len(coverageBad) > 0 Then
+        LogEvent "TRACKPUSH", "COVERAGE FAIL - tracked object(s) without a good cubic:" & vbCrLf & coverageBad
+        MsgBox "Track-path push FAILED coverage check." & vbCrLf & vbCrLf & _
+               "These objects are tracked by the plan but their cubic did not " & _
+               "fit/push over the GP window:" & vbCrLf & coverageBad & vbCrLf & _
+               "Do NOT arm. Fix the plan/window and re-run Prep Cart.", _
+               vbCritical, "Push Track Paths to Cart - COVERAGE FAIL"
+        Exit Sub
+    End If
 
     Dim summary As String
-    summary = "Sun:  " & IIf(sunOK, "pushed", "FAILED") & vbCrLf & _
-              "MW:   " & IIf(mwOK, "pushed", "FAILED") & vbCrLf & _
-              "Moon: " & IIf(moonOK, "pushed", "FAILED")
+    summary = "Sun:  " & IIf(pw.Exists("sun"), IIf(sunOK, "pushed", "FAILED"), "skipped (not in plan)") & vbCrLf & _
+              "MW:   " & IIf(pw.Exists("mw"), IIf(mwOK, "pushed", "FAILED"), "skipped (not in plan)") & vbCrLf & _
+              "Moon: " & IIf(pw.Exists("moon"), IIf(moonOK, "pushed", "FAILED"), "skipped (not in plan)") & vbCrLf & _
+              "Arch rise: " & IIf(pw.Exists("arch_rise"), IIf(archRiseOK, "pushed", "FAILED"), "skipped (not in plan)") & vbCrLf & _
+              "Arch set:  " & IIf(pw.Exists("arch_set"), IIf(archSetOK, "pushed", "FAILED"), "skipped (not in plan)")
     MsgBox summary, vbInformation, "Push Track Paths to Cart"
 End Sub
 
@@ -303,14 +419,34 @@ Private Function FitAndPushTrackPath(ByVal objName As String, _
                                       ByVal t0 As Date, _
                                       ByVal winStart As Date, _
                                       ByVal winEnd As Date, _
-                                      ByVal arduinoIP As String) As Boolean
+                                      ByVal arduinoIP As String, _
+                                      Optional ByVal nSegs As Long = 4) As Boolean
 
-    ' Segments per object (cart TRACK_SEGS_MAX = 8). 4 over the full GC arc.
-    Const N_SEGMENTS As Long = 4
-    ' Sample resolution within each segment.
+    ' Segments per object (cart TRACK_SEGS_MAX = 8). The window is now the GP's
+    ' track window (often short), so the segment count must scale to it: each
+    ' segment needs >=6 samples at the 5-min step or the per-segment fit fails.
+    ' Cap nSegs so segCount <= totalSamples/6 (and >=1, <=8). This is why the
+    ' moon (was forced to 8) failed over a 120-min window: 8 segs = ~3 samples
+    ' each. Now it auto-reduces to fit.
     Const STEP_MIN As Double = 5
     Dim stepDays As Double
     stepDays = STEP_MIN / 1440#
+
+    Dim N_SEGMENTS As Long
+    N_SEGMENTS = nSegs
+    If N_SEGMENTS < 1 Then N_SEGMENTS = 1
+    If N_SEGMENTS > 8 Then N_SEGMENTS = 8
+    ' window-aware cap: keep >=6 samples per segment
+    Dim totalSamples As Long
+    totalSamples = CLng((winEnd - winStart) / stepDays) + 1
+    Dim maxSegs As Long
+    maxSegs = totalSamples \ 6
+    If maxSegs < 1 Then maxSegs = 1
+    If N_SEGMENTS > maxSegs Then
+        LogEvent "TRACKPUSH", objName & " nSegs " & N_SEGMENTS & " -> " & maxSegs & _
+                 " (window has " & totalSamples & " samples, >=6/seg)"
+        N_SEGMENTS = maxSegs
+    End If
 
     ' Zenith-band yaw ease (mw/GC AND moon) - design guard against the azimuth
     ' whip artifact. Above this TRUE ALTITUDE the bearing-to-object races
@@ -480,6 +616,10 @@ Private Function FitAndPushTrackPath(ByVal objName As String, _
                     GetSunAzAltAtTime t, az, alt
                 ElseIf objName = "moon" Then
                     GetMoonAzAltAtTime t, az, alt
+                ElseIf objName = "arch_rise" Then
+                    GetGCArchRiseAzAltAtTime t, az, alt
+                ElseIf objName = "arch_set" Then
+                    GetGCArchSetAzAltAtTime t, az, alt
                 Else
                     FitAndPushTrackPath = False
                     Exit Function
