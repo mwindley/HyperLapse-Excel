@@ -1,10 +1,63 @@
 # HyperLapse Cart - PROJECT_STATE
 
-_Last updated: 14 Jun 2026 (Day 33) - current firmware **soak-v135**._
+_Last updated: 16 Jun 2026 (Day 34) - current firmware **soak-v152**._
 _The detailed body below is the **Day-31 / soak-v101-v102 checkpoint** and is kept
 as the build record. For the freshest state read **SOON_LIST.md** (status review at
-top); for open work read **WORKFRONTS.md**. The Day-32 deltas since the v101
+top); for open work read **WORKFRONTS.md**. The Day-32/33/34 deltas since the v101
 headline are summarised immediately below._
+
+## Day-34 deltas (v143 -> v152 + renderers + Excel), 16 Jun
+
+PanoCentre + PanoCycle hardening (all bench/serial verified on rig; NOT yet flown
+overnight on real sky):
+- **v144** PanoCentre deferred trigger + current_tv. Exec-UI /gimbal/pano no longer
+  starts inline (could land mid-exposure / mid-CCAPI, dwell only 800ms while body
+  at 20s). Sets pano_request_pending; the cadence fire block runs it at the next
+  due-fire boundary, in place of that frame, with per-cell hold = current_tv (real
+  exposure). ISO untouched.
+- **v145** PanoCentre yaw-wrap fixes. Offsets past +-180 (centre 108 + 78 = 186)
+  vs Ronin wrapped pose (-174) read ~360deg via raw fabs -> forced SETTLE TIMEOUT
+  and inflated the return slew to the 6s cap. Arrival tests + panoIssueSlew now
+  wrap to +-180.
+- **v146/v147** Settle measured + flattened to PANO_SETTLE_MS = 800 (was per-cell
+  test scaffold; scaffold removed). New PANO_RESUME_SETTLE phase.
+- **v148** PanoCentre return-to-LIVE-centre + REJOIN FIRE. Return targets the live
+  cubic centre (panoLiveCentreYaw) not the frozen pose, absorbing sky drift; settles
+  800ms then fires the rejoin frame (no lost centre frame) and re-anchors cadence.
+- **v149** PanoCycle yaw-wrap fixes (same class as v145) on RETURN arrival, RETURN
+  duration, rate log.
+- **v150** E-STOP aborts pano. /plan/stop now kills pano_phase, clears the queued
+  latch, freezes the gimbal at current pose. Pause unchanged (defers to cycle end).
+- **v151** E-STOP confirm() prompt on the Exec button.
+
+Renderers + Excel (R10 + PanoCycle cable wind):
+- **R10 CLOSED** - cart Cable strip now draws astro track sweeps. gimbal_cablestrip.py
+  writes cablestrip_gps.txt (per-GP strip x); CableStripPush.bas reads + draws the
+  track bars (single source: Python computes, Excel draws). Was: track rows skipped.
+- **PanoCycle cable wind shown** - arch (PanoCycle) GPs widen the drawn band by the
+  portrait pano outer offset (+-89deg, read from PANO sheet) so the operator sees the
+  photo-1/X swing on top of the centre track. Folded into span/headroom/sidecar.
+- **arch below-horizon misclassification FIXED** (gimbal_planview_v2.py). arch_rise/
+  arch_set are all-night bearings; a Move/Track to arch_set was drawn as a spurious
+  "goto-rise + wait" marker. Excluded arch from the below-horizon test.
+
+R7 below-horizon + Exec UI pitch axis (16 Jun, later):
+- **R7 CLOSED (general rim hold), v152.** For GTM_FULL astro tracks (sun/moon/GC/mw)
+  the cubic pitch IS true altitude (AstroPush fits unclamped, goes negative below
+  horizon). When alt <= 0 the gimbal points at the target YAW and holds PITCH = 0
+  (rim); above horizon = normal tracking. Operator's simple rule, applies to rise
+  AND set for all rising/setting bodies - supersedes the narrow "moon step-5" framing.
+  Arch (GTM_YAW) never reaches this path (pitch = Rp) - exempt. Edge-logged.
+- **Exec UI pitch axis 20-80 -> 0-80** (firmware icon map + label) so the rim hold
+  (pitch 0) sits at the chart bottom instead of being clipped off the old 20 floor.
+- **ChartPush.bas pitch axis 20-80 -> 0-80** (PITCH_LO=0, gridlines 0/40/80) to match
+  the Exec icon - the authored curve and live icon now share one axis (the squashed-
+  corner symptom was the two on different axes).
+- **ChartPush.bas below-horizon samples KEPT (rim).** GetSunGimbalAngles returns
+  False when alt <= -5, so ChartPush was DROPPING the whole below-horizon arc (an
+  840-min overnight sun charted only 3 of 13 samples). Now rising/setting bodies keep
+  the sample at the computed yaw with pitch clamped to 0, matching the plan view
+  (max(0,alt)) and the firmware rim hold. All three surfaces now agree.
 
 ## Day-33 deltas (v128 -> v135 + Excel), 14 Jun
 
@@ -106,7 +159,7 @@ Excel / Python:
   everything (incl. the exposure ramp); 2 UI buttons (START/E-STOP) run it.
 
 Still open (see SOON_LIST): R7 moon step-5 (below-horizon goto-rise-and-wait
-firmware), R10 cable-strip index-alignment, F1 cart-motor-stop (future).
+firmware - CLOSED Day-34 as general rim hold v152), R10 cable-strip astro-track sweeps (CLOSED Day-34), F1 cart-motor-stop (future).
 
 ---
 

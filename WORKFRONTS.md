@@ -1,9 +1,39 @@
 # HyperLapse Cart — Open Workfronts
 
-**As of:** Day 33, 14 Jun 2026 (firmware soak-v135). For the freshest
+**As of:** Day 34, 16 Jun 2026 (firmware soak-v152). For the freshest
 status read **SOON_LIST.md** (status review at top); this file keeps the
 workfront catalog. The Day-31 block + numbered catalog below are kept as the
 standing record.
+
+## Closed Day-34 (16 Jun) — pano + cable wind
+
+- **PanoCentre hardening (v144–v151)** — deferred trigger at next due-fire
+  boundary; per-cell hold = current_tv (real exposure); yaw-wrap fixes (offsets
+  past ±180); settle flattened to 800ms; return-to-LIVE-centre + rejoin fire (no
+  lost centre frame). Bench/serial verified.
+- **PanoCycle hardening (v149)** — same ±180 yaw-wrap fixes on RETURN. Loops on
+  the live arch centre (already correct). Verified on an arch GP.
+- **E-STOP aborts pano (v150)** + **confirm() prompt (v151)**. Pause unchanged
+  (graceful, defers to cycle end). Inventory: cart Move, Track, shutter, both
+  pano modes all halt on E-STOP.
+- **R10 CLOSED — cable strip draws astro track sweeps.** gimbal_cablestrip.py
+  emits cablestrip_gps.txt; CableStripPush.bas reads + draws track bars (Python
+  computes, Excel draws — single source). Was: track rows skipped, under-reported.
+- **PanoCycle cable wind shown** — arch GPs widen the cable band by the portrait
+  pano reach (±89°, from PANO sheet) so the photo-1/X swing is visible on top of
+  the centre track; folded into span/headroom/sidecar.
+- **arch below-horizon misclassification FIXED** (gimbal_planview_v2.py) — a
+  Move/Track to arch_set was drawn as "goto-rise + wait"; arch bearings are valid
+  all night, now excluded from the below-horizon test.
+- **R7 CLOSED — general below-horizon rim hold (v152).** sun/moon/GC/mw: when the
+  cubic altitude <= 0 the gimbal holds yaw + pitch 0 (rim), normal tracking above.
+  Rise AND set, all rising/setting bodies — supersedes the narrow moon-only framing.
+  Arch exempt. Cart decides from the cubic altitude it already evaluates (no new push).
+- **Exec UI + ChartPush pitch axis 20-80 -> 0-80** so the rim hold (pitch 0) is on-
+  chart, and the authored curve + live icon share one axis.
+- **ChartPush below-horizon samples KEPT at rim** (was dropping them — GetSunGimbalAngles
+  returns False below -5, so an 840-min overnight sun charted only 3 of 13 samples).
+  Now matches the plan view + firmware rim hold; all three surfaces agree.
 
 ## Closed since Day 32 (Day-33 work)
 
@@ -49,8 +79,16 @@ night-palette red tuning first-cut.
   acquire ease retired in favour of Pan Speed rate.
 - **Dateless fire-time class** — root-fixed (Utils.DatedFireSerial; Python live).
 
-Still open: **R7** moon step-5 firmware, **R10** cable-strip index-alignment,
-**F1** cart-motor-stop (future). See SOON_LIST.
+Still open: **F1** cart-motor-stop (future). **R7 below-horizon rim hold CLOSED
+Day-34 (v152, general sun/moon/GC).** **R10 cable-strip astro-track sweeps CLOSED Day-34.**
+See SOON_LIST.
+
+Standing (not bugs): pano work (v144-v152) NOT yet flown overnight on real sky -
+on-sky is the real test. Chart axis (chartsvg) must push every plan load or the
+Exec icon maps to a stale yaw_min (saw a 3-push offset Day-34). E-STOP fetch chain
+is success-chained (shutter->plan->btn14) with no catch - a failed first call skips
+/plan/stop (seen Day-34: confirm hit, no serial). Fire the three independently,
+plan/stop first, each with a catch. E-STOP confirm() adds a tap in an emergency.
 
 ---
 

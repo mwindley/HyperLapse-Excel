@@ -30,6 +30,30 @@ from gimbal_planview_v2 import (resolve, BG, RING, RINGTXT, CARD, CHASSIS,
 USED="#3b82f6"      # used-span fill
 FREE="#1f2a37"      # headroom fill
 LIMIT="#ff5470"     # span-limit line
+PANO="#d9a441"      # pano-swing reach band (PanoCycle ±outer offset)
+
+def portrait_pano_reach(path):
+    """Max abs portrait pano offset (deg) from the PANO sheet, e.g. 89 for
+    {-89,-45,0,45,89}. This is the half-swing the camera reaches at photos 1
+    and X of every PanoCycle, on TOP of the tracked arch centre. Read from the
+    sheet (like pano_planner) so it tracks the config, not hardcoded. Returns
+    0.0 if not found (then no widening - silent, not wrong)."""
+    try:
+        from openpyxl import load_workbook
+        wb=load_workbook(path,read_only=True,data_only=True)
+        vals=[]
+        for nm in ("panoP_offsets","panoP_o0","panoP_o1","panoP_o2","panoP_o3","panoP_o4"):
+            try:
+                dn=wb.defined_names[nm]
+                for sheet,ref in dn.destinations:
+                    ws=wb[sheet]
+                    for row in ws[ref.replace("$","")]:
+                        for c in row:
+                            if isinstance(c.value,(int,float)): vals.append(abs(float(c.value)))
+            except Exception: pass
+        return max(vals) if vals else 0.0
+    except Exception:
+        return 0.0
 
 def unwrap_cart(gps, wp_hdg):
     """Accumulate CART-FRAME yaw leg-by-leg honouring col AC.
@@ -81,7 +105,7 @@ def unwrap_cart(gps, wp_hdg):
             prev_w=w; prev_u=u
     return wu,sweeps
 
-def render(d, out, hi=None, limit=450.0):
+def render(d, out, hi=None, limit=450.0, pano_reach=0.0):
     gps=d["gps"]
     if not gps:
         print("no GPs in plan"); return
@@ -90,10 +114,24 @@ def render(d, out, hi=None, limit=450.0):
     # fold it out so only the real tracking sweep shows
     for i,sw in enumerate(sweeps):
         if sw and abs(sw[1]-sw[0])<1.0: sweeps[i]=None
-    # span must include the full excursion of any track sweep, not just GP points
+    # PanoCycle widening: an arch-target track GP runs a PanoCycle every cadence
+    # frame - the camera swings +/-reach (portrait outer offset, e.g. 89deg)
+    # around the tracked centre at photos 1 and X. That swing is REAL cable wind
+    # the operator must see, on TOP of the centre track. Compute a widened band
+    # per arch sweep: (min-reach, max+reach). reach<=0 (no portrait cfg) = no-op.
+    pano_band=[None]*len(sweeps)
+    if pano_reach>0:
+        for i,sw in enumerate(sweeps):
+            if not sw: continue
+            if gps[i].get("target") in ("arch_rise","arch_set"):
+                a,b=sorted(sw)
+                pano_band[i]=(a-pano_reach, b+pano_reach)
+    # span must include the full excursion of any track sweep AND any pano band
     allvals=list(wu)
     for sw in sweeps:
         if sw: allvals+=[sw[0],sw[1]]
+    for pb in pano_band:
+        if pb: allvals+=[pb[0],pb[1]]
     lo=min(allvals); hi_used=max(allvals); span=hi_used-lo
     ceil=lo+limit; headroom=ceil-hi_used
     # which GP carries the max-wind point (point value or either sweep end)
@@ -123,6 +161,19 @@ def render(d, out, hi=None, limit=450.0):
     # drawn as a bold segment on the strip (this is the wind the cables see)
     pe=d.get("plan_end")
     last_tr_i=max([i for i,sw in enumerate(sweeps) if sw], default=None)
+    # PanoCycle reach bands (drawn FIRST, behind the centre track bars): the
+    # +/-reach swing the camera makes at photos 1 and X of every cycle. Shows
+    # the operator the FULL cable wind a PanoCycle GP produces, not just centre.
+    for i,pb in enumerate(pano_band):
+        if not pb: continue
+        pa,pbb=sorted(pb)
+        ax.add_patch(Rectangle((pa,y-0.13),pbb-pa,0.26,facecolor=PANO,edgecolor="none",
+                     alpha=0.22,zorder=2.2))
+        # label well BELOW the band, anchored at its LEFT edge, so it can't collide
+        # with the centre-track label (above) or the END marker (just under band).
+        ax.plot([pa,pa],[y-0.13,y-0.56],color=PANO,lw=0.8,alpha=0.7,zorder=5)
+        ax.text(pa,y-0.60,f"{gps[i]['step']} PanoCycle reach \u00b1{pano_reach:.0f}\u00b0",
+                color=PANO,fontsize=7.5,ha="left",va="top",zorder=6)
     for i,sw in enumerate(sweeps):
         if not sw: continue
         a,b=sorted(sw)
@@ -199,6 +250,36 @@ def render(d, out, hi=None, limit=450.0):
         open(side,"w").write("%.0f %.0f %.0f\n"%(span,headroom,limit))
     except Exception as e:
         print("sidecar write failed:",e)
+    # per-GP file for the cart's on-screen cable strip (CableStripPush.bas). The
+    # renderer already has every GP's unwrapped cart-frame wind; this writes it
+    # out so the cart strip can draw the TRACK sweeps it currently skips, WITHOUT
+    # recomputing (single source). Strip x is 0..STRIP_W mapped over [lo, ceil],
+    # so VBA just places what it reads. One line per GP:
+    #   point GP : "P <step> <x>"
+    #   track GP : "T <step> <x_start> <x_end>"
+    # Header line first: "STRIP <STRIP_W> <lo> <ceil>".
+    try:
+        import os
+        STRIP_W=355.0                              # cart strip width (matches chart contract)
+        rng=(ceil-lo) if (ceil-lo)>1e-6 else 1.0
+        def to_x(u): return (u-lo)/rng*STRIP_W
+        gp_file=os.path.join(os.path.dirname(os.path.abspath(out)),"cablestrip_gps.txt")
+        with open(gp_file,"w") as fh:
+            fh.write("STRIP %.0f %.2f %.2f\n"%(STRIP_W,lo,ceil))
+            for i,g in enumerate(gps):
+                sw=sweeps[i]
+                if sw:
+                    # arch (PanoCycle) GP: emit the WIDENED band so the cart strip
+                    # shows the +/-reach swing too; else the bare centre sweep.
+                    pb=pano_band[i]
+                    if pb:
+                        fh.write("T %s %.2f %.2f\n"%(g["step"],to_x(pb[0]),to_x(pb[1])))
+                    else:
+                        fh.write("T %s %.2f %.2f\n"%(g["step"],to_x(sw[0]),to_x(sw[1])))
+                else:
+                    fh.write("P %s %.2f\n"%(g["step"],to_x(wu[i])))
+    except Exception as e:
+        print("per-GP file write failed:",e)
 
 if __name__=="__main__":
     ap=argparse.ArgumentParser()
@@ -207,4 +288,5 @@ if __name__=="__main__":
     ap.add_argument("--limit",type=float,default=450.0)
     a=ap.parse_args()
     d=resolve(a.xlsm)
-    render(d,a.out,hi=a.gp,limit=a.limit)
+    reach=portrait_pano_reach(a.xlsm)
+    render(d,a.out,hi=a.gp,limit=a.limit,pano_reach=reach)

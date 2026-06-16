@@ -15,9 +15,11 @@ Attribute VB_Name = "CableStripPush"
 ' uses the SAME resolver rule: cf = world - heading(anchor), i.e. dyaw for
 ' chassis GPs (the cart's own per-WP turning is removed, not counted).
 '
-' SCOPE: chassis/marker Move, Lock, Pan Follow (same scope as ChartPush).
-' Astro Track/Track-yaw rows are skipped for now (their yaw sweeps over
-' time; charting them is the same deferred extension ChartPush notes).
+' SCOPE: chassis/marker Move, Lock, Pan Follow walked from the Plan rows.
+' Astro Track/Track-yaw sweeps are now DRAWN TOO (R10): the Python renderer
+' (gimbal_cablestrip.py) computes them and writes cablestrip_gps.txt; this
+' module READS that file and renders the track bars on the same axis, without
+' recomputing the cubic (single source of truth - Python computes, Excel draws).
 '
 ' COORDINATE CONTRACT (matches ChartPush / the cart):
 '   viewBox 0 0 355 90 ;  x = (yaw - yaw_min)/450 * 355
@@ -55,7 +57,7 @@ Private Const CHUNK_RAW As Long = 150
 Private Const ENDPOINT  As String = "/settings/cablesvg"   ' or "/settings/chartsvg" to preview
 
 Public Sub PushCableStripToCart()
-    On Error GoTo Fail
+    On Error GoTo fail
     Dim dry As Boolean: dry = ReadDryRun()
     LogEvent LOG_CATEGORY, "--- PushCableStripToCart start (" & IIf(dry, "DRY RUN", "REAL PUSH") & ") ---"
 
@@ -122,13 +124,23 @@ Public Sub PushCableStripToCart()
 NextRow:
     Next r
 
+    Dim u() As Double                                ' declared before any use
+    Dim hadPoints As Boolean: hadPoints = (n >= 1)
     If n < 1 Then
-        MsgBox "No chassis/Lock/Pan-Follow GPs to chart.", vbExclamation, "PushCableStripToCart"
-        Exit Sub
+        ' No chassis/Lock/Pan-Follow point GPs. Still proceed IF the Python file
+        ' has track sweeps to draw (a pure-track plan); else nothing to show.
+        Dim pPyLo As Double, pPyCeil As Double
+        Dim pStep() As String, pX0() As Double, pX1() As Double, pNT As Long
+        If Not ReadPyGPs(pPyLo, pPyCeil, pStep, pX0, pX1, pNT) Then
+            MsgBox "No chassis/Lock/Pan-Follow GPs to chart.", vbExclamation, "PushCableStripToCart"
+            Exit Sub
+        End If
+        ' seed one synthetic anchor at Python's lo so the arrays below are valid
+        n = 1: cf(0) = pPyLo: dir(0) = "": lab(0) = ""
     End If
 
     ' Unwrap cart-frame yaw leg-by-leg honouring col AC (cumulative cable wind)
-    Dim u() As Double: ReDim u(0 To n - 1)
+    ReDim u(0 To n - 1)
     Dim i As Long
     u(0) = cf(0)
     For i = 1 To n - 1
@@ -153,6 +165,41 @@ NextRow:
     Next i
     Dim used As Double: used = umax - umin
     Dim headroom As Double: headroom = YAW_SPAN - used
+
+    ' R10: read the Python renderer's track sweeps (it computes them; we render).
+    ' If present, adopt Python's lo as the strip's left edge (umin) so the cart
+    ' strip and the Python PNG share ONE axis, and extend the used span to cover
+    ' the track excursions the row-walk above can't see. Track bars are drawn
+    ' below, on this shared axis (their x is already 0..VB_W from Python).
+    Dim pyLo As Double, pyCeil As Double
+    Dim tStep() As String, tX0() As Double, tX1() As Double, nT As Long
+    Dim haveTracks As Boolean
+    haveTracks = ReadPyGPs(pyLo, pyCeil, tStep, tX0, tX1, nT)
+    If haveTracks Then
+        umin = pyLo                                  ' shared axis with Python
+        ' used span = full excursion across point GPs AND track bars, in degrees.
+        ' Python x maps [pyLo,pyCeil]->[0,VB_W] over the 450 span, so deg = lo + x/VB_W*450.
+        Dim loDeg As Double, hiDeg As Double, k As Long, xd As Double
+        loDeg = umin: hiDeg = umin
+        For i = 0 To n - 1                           ' point GPs already in deg
+            If u(i) < loDeg Then loDeg = u(i)
+            If u(i) > hiDeg Then hiDeg = u(i)
+        Next i
+        For k = 0 To nT - 1                           ' track bars: x->deg
+            Dim dA As Double, dB As Double
+            dA = umin + tX0(k) / VB_W * YAW_SPAN
+            dB = umin + tX1(k) / VB_W * YAW_SPAN
+            If dA < loDeg Then loDeg = dA
+            If dB < loDeg Then loDeg = dB
+            If dA > hiDeg Then hiDeg = dA
+            If dB > hiDeg Then hiDeg = dB
+        Next k
+        umax = hiDeg
+        used = umax - umin
+        headroom = YAW_SPAN - used
+        LogEvent LOG_CATEGORY, "  R10: folded " & nT & " track sweep(s) from Python -> used=" & _
+                 Format(used, "0.0") & " headroom=" & Format(headroom, "0.0")
+    End If
     LogEvent LOG_CATEGORY, "  min=" & Format(umin, "0.0") & " max=" & Format(umax, "0.0") & _
              " used=" & Format(used, "0.0") & " headroom=" & Format(headroom, "0.0")
     If used > YAW_SPAN Then LogEvent LOG_CATEGORY, "  WARNING: used span exceeds " & YAW_SPAN & " - cables would bind"
@@ -171,6 +218,24 @@ NextRow:
     ' span-limit line (right edge) + min tick
     svg = svg & Line2(VB_W, Y_MID - 22, VB_W, Y_MID + 22, "#ff5470", "")
     svg = svg & Line2(0, Y_MID - 22, 0, Y_MID + 22, "#5b6675", "")
+
+    ' R10: track sweep bars from Python (the wind the row-walk skips). x already
+    ' 0..VB_W on the shared axis; drawn as a bold MID band + label.
+    If haveTracks Then
+        Dim tb As Long
+        Dim sw As Double
+        For tb = 0 To nT - 1
+            Dim bx0 As Double, bx1 As Double
+            bx0 = tX0(tb): bx1 = tX1(tb)
+            If bx1 < bx0 Then
+                sw = bx0: bx0 = bx1: bx1 = sw
+            End If
+            svg = svg & "<rect x='" & Format(bx0, "0.0") & "' y='" & Format(Y_MID - 8, "0.0") & _
+                  "' width='" & Format(bx1 - bx0, "0.0") & "' height='16' fill='#d9a441' fill-opacity='0.85'/>"
+            svg = svg & "<text x='" & Format((bx0 + bx1) / 2#, "0.0") & "' y='" & Format(Y_MID - 12, "0.0") & _
+                  "' font-size='7' fill='#d9a441' text-anchor='middle'>" & tStep(tb) & " trk</text>"
+        Next tb
+    End If
 
     ' sweep-order arcs: green forward (x increasing), red reverse (x decreasing).
     ' Quadratic arc bowing above the band so direction reads at a glance.
@@ -198,6 +263,7 @@ NextRow:
 
     ' GP dots + labels (id above/below per x-order; cart-frame yaw below)
     For i = 0 To n - 1
+        If Not hadPoints Then Exit For               ' track-only plan: no point dots
         Dim col As String: col = IIf(u(i) = umax, "#ff5470", "#c9d4e3")
         Dim gx As Double: gx = XOf(u(i), umin)
         svg = svg & "<circle cx='" & Format(gx, "0.0") & "' cy='" & Format(Y_MID, "0.0") & _
@@ -254,7 +320,7 @@ NextRow:
         http.Open "GET", url, False
         http.Send
         Dim sc As Long: sc = http.Status
-        On Error GoTo Fail
+        On Error GoTo fail
         If sc <> 200 Then LogEvent LOG_CATEGORY, "    HTTP " & sc: okAll = False: Exit Do
         idx = idx + 1
     Loop
@@ -269,9 +335,57 @@ NextRow:
     End If
     Exit Sub
 
-Fail:
+fail:
     MsgBox "PushCableStripToCart error: " & Err.Description, vbExclamation
 End Sub
+
+' ---- R10: read the Python renderer's per-GP file (cablestrip_gps.txt) ----
+' The Python cable strip (gimbal_cablestrip.py) already computes the full wind
+' INCLUDING astro track sweeps, and now writes them out. We READ them here and
+' draw the track bars the row-walk skips - WITHOUT recomputing (single source).
+' File format (written by the renderer):
+'   STRIP <w> <lo> <ceil>
+'   P <step> <x>                (point GP, x already 0..w)
+'   T <step> <xStart> <xEnd>    (track GP sweep, x already 0..w)
+' Returns True if the file was read and at least one TRACK bar found; fills
+' pyLo/pyCeil (Python's axis) and the parallel arrays tStep/tX0/tX1 (nT bars).
+Private Function ReadPyGPs(ByRef pyLo As Double, ByRef pyCeil As Double, _
+                           ByRef tStep() As String, ByRef tX0() As Double, _
+                           ByRef tX1() As Double, ByRef nT As Long) As Boolean
+    ReadPyGPs = False: nT = 0
+    Dim base As String: base = ThisWorkbook.path
+    If base = "" Then Exit Function
+    Dim f As String
+    f = base & Application.PathSeparator & "Python" & Application.PathSeparator & "cablestrip_gps.txt"
+    If dir(f) = "" Then Exit Function
+
+    ReDim tStep(0 To PLAN_MAX_ROWS): ReDim tX0(0 To PLAN_MAX_ROWS): ReDim tX1(0 To PLAN_MAX_ROWS)
+    Dim hnd As Integer: hnd = FreeFile
+    Dim line As String, parts() As String
+    On Error GoTo done
+    Open f For Input As #hnd
+    Do While Not EOF(hnd)
+        Line Input #hnd, line
+        line = Trim$(line)
+        If line <> "" Then
+            parts = Split(line, " ")
+            If parts(0) = "STRIP" And UBound(parts) >= 3 Then
+                pyLo = val(parts(2)): pyCeil = val(parts(3))
+            ElseIf parts(0) = "T" And UBound(parts) >= 3 Then
+                tStep(nT) = parts(1)
+                tX0(nT) = val(parts(UBound(parts) - 1))
+                tX1(nT) = val(parts(UBound(parts)))
+                nT = nT + 1
+            End If
+        End If
+    Loop
+    Close #hnd
+    ReadPyGPs = (nT > 0)
+    Exit Function
+done:
+    On Error Resume Next
+    Close #hnd
+End Function
 
 ' ---- coordinate mapping (the contract) ----
 Private Function XOf(ByVal yaw As Double, ByVal yawMin As Double) As Double

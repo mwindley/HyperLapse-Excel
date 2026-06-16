@@ -20,7 +20,7 @@ Attribute VB_Name = "ChartPush"
 ' COORDINATE CONTRACT (must match the cart, soak-v43):
 '   viewBox 0 0 355 90
 '   x = (yaw   - yaw_min) / 450 * 355
-'   y = 90 - (pitch - 20) / 60  * 90        (pitch 20 bottom .. 80 top)
+'   y = 90 - (pitch - 0) / 80  * 90        (pitch 0 bottom .. 80 top)
 '   dashed mechanical-limit reminder at pitch 80 (y = 0)
 '
 ' Run: PushChartToCart. Honours dataPlanPushDryRun (TRUE = build +
@@ -51,7 +51,7 @@ Private Const TRACK_NSAMP As Long = 12
 Private Const VB_W            As Double = 355
 Private Const VB_H            As Double = 90
 Private Const YAW_SPAN        As Double = 450
-Private Const PITCH_LO        As Double = 20
+Private Const PITCH_LO        As Double = 0
 Private Const PITCH_HI        As Double = 80
 
 Private Const CHUNK_RAW       As Long = 150   ' raw SVG chars per push chunk
@@ -118,13 +118,29 @@ Public Sub PushChartToCart()
                 Dim dyw As Double, dpt As Double
                 dyw = SafeNum(ws.Cells(r, COL_DYAW).value)
                 dpt = SafeNum(ws.Cells(r, COL_DPITCH).value)
-                Dim k As Long, sy As Double, sp As Double, ch As Double, tt As Double
+                Dim k As Long, Sy As Double, sp As Double, ch As Double, tt As Double
                 Dim added As Long: added = 0
+                Dim isRiseSet As Boolean
+                isRiseSet = (ttgt = "sun" Or ttgt = "moon" Or ttgt = "gc" Or ttgt = "mw")
                 For k = 0 To TRACK_NSAMP
                     tt = fT + (winMin / 1440#) * (CDbl(k) / CDbl(TRACK_NSAMP))
                     ch = CartHeadingAtChart(ws, tt)
-                    If PlanPush.EvalAstro(ttgt, tt, ch, sy, sp) Then
-                        yaw(n) = sy + dyw: pit(n) = sp + dpt
+                    Dim okEval As Boolean
+                    okEval = PlanPush.EvalAstro(ttgt, tt, ch, Sy, sp)
+                    ' EvalAstro writes Sy/sp (yaw/pitch) BEFORE its below-horizon
+                    ' gate returns False (GetSunGimbalAngles etc. set them at the
+                    ' top, then return alt>-5). So for a rising/setting body the
+                    ' yaw is valid even when ok=False - keep the sample and clamp
+                    ' pitch to 0 (rim), matching the plan view (max(0,alt)) and the
+                    ' firmware R7 rim-hold. Without this the chart DROPS the whole
+                    ' below-horizon arc (an 840-min overnight sun showed only 3 of
+                    ' 13 samples). Arch is a bearing (no real alt) - use ok as-is.
+                    If okEval Then
+                        yaw(n) = Sy + dyw: pit(n) = sp + dpt
+                        n = n + 1: added = added + 1
+                        If n > UBound(yaw) Then Exit For
+                    ElseIf isRiseSet Then
+                        yaw(n) = Sy + dyw: pit(n) = 0#      ' below horizon -> rim
                         n = n + 1: added = added + 1
                         If n > UBound(yaw) Then Exit For
                     End If
@@ -160,9 +176,9 @@ NextRow:
     ' Build the inner SVG (axes + dashed 80deg + blue polyline + dots).
     Dim svg As String
     svg = ""
-    ' faint gridlines: pitch 20 (bottom), 50 (mid)
-    svg = svg & Line2(0, YOf(20), VB_W, YOf(20), "#0001", "")
-    svg = svg & Line2(0, YOf(50), VB_W, YOf(50), "#0001", "")
+    ' faint gridlines: pitch 0 (bottom), 40 (mid)
+    svg = svg & Line2(0, YOf(0), VB_W, YOf(0), "#0001", "")
+    svg = svg & Line2(0, YOf(40), VB_W, YOf(40), "#0001", "")
     ' dashed mechanical-limit reminder at pitch 80 (top)
     svg = svg & Line2(0, YOf(80), VB_W, YOf(80), "#0001", "3 3")
 

@@ -362,7 +362,12 @@ def resolve(path):
         elif target:                              # earth-frame astro: object az at fire time
             oaz,oalt=astro_az(target,r[C("Fires at")])
             world=((oaz or 0)+(dy or 0))%360
-            frame="earth"; below=(oalt is not None and oalt<=0)
+            # arch_rise/arch_set are galactic-pole BEARINGS, valid all night - their
+            # "altitude" is meaningless (returns ~0/<=0), so they must NEVER be
+            # classified below-horizon (that draws a spurious goto-rise+wait marker
+            # on a Move/Track to arch). Pitch comes from Rp, not altitude.
+            is_arch = target in ("arch_rise","arch_set")
+            frame="earth"; below=(False if is_arch else (oalt is not None and oalt<=0))
             pitch=(rp if rp is not None else 0.0)+(dp or 0.0)
         else:                                     # chassis-frame: offset from cart heading
             h=cart_heading_at(_tmin(r[C("Fires at")]))
