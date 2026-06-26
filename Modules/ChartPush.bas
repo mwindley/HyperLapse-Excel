@@ -1,27 +1,35 @@
 Attribute VB_Name = "ChartPush"
 ' ============================================================
-' HyperLapse Cart - Execution Chart Author (Day 30)
+' HyperLapse Cart - Execution Chart Author (Day 30, pano overlay Day 35)
 '
 ' Authors the gimbal-plan path as an inner SVG fragment and pushes
 ' it CHUNKED to the cart at /settings/chartsvg. The cart stores +
 ' serves it on the Execution screen and only animates the live
 ' camera icon over it ("Excel authors, Giga moves the icon").
 '
-' SCOPE (this build): Move / Pan Follow plans with marker targets
-' (the relative-pan plan). Each GP is a target point (Ry+dyaw,
-' Rp+dpitch); the path is the polyline through them with dots.
-' Move/ease transitions are BLUE per GIMBAL_VIZ section 7.
-' Astro Track curves (sampled cubic, velocity-banded green/amber/
-' red) are a later extension of this same author - they need the
-' col-H planned heading to map earth azimuth -> gimbal yaw, and a
-' daylight session to verify. Track/Track-yaw rows are skipped here
-' with a note.
+' SCOPE:
+'   - Move / Pan Follow marker targets: polyline + dots (blue).
+'   - FULL astro Track (sun/moon/gc/mw): sampled centre curve (dots).
+'   - arch Track-yaw (PanoCycle): the pano overlay - the rows x cols
+'     cell dots at the GP-START centre, firing-order arrows, and a
+'     "planned sweep" band from the start cluster out to where the
+'     leading yaw column reaches at the GP-window END (the cubic's
+'     end centre + max offset). Uncluttered: dots + arrows + 1 band.
+'     PanoCentre (landscape) is operator-triggered at runtime, not a
+'     plan row, so it is not authored here (only the live icon shows).
+'
+' The pano grid is read from the PANO sheet portrait block
+' (panoP_shots = yaw columns, panoP_offsets, panoP_rows, panoP_rowstep)
+' - the SAME source PanoConfigPush sends to the cart, so chart and
+' cart agree. Grid is variable (rows x cols come from the plan).
 '
 ' COORDINATE CONTRACT (must match the cart, soak-v43):
 '   viewBox 0 0 355 90
 '   x = (yaw   - yaw_min) / 450 * 355
 '   y = 90 - (pitch - 0) / 80  * 90        (pitch 0 bottom .. 80 top)
 '   dashed mechanical-limit reminder at pitch 80 (y = 0)
+'   sweep band fill uses the cart theme var --xsweep (gray Day /
+'   light-red Night); cell dots use --xtext; arrows use --xtext-mute.
 '
 ' Run: PushChartToCart. Honours dataPlanPushDryRun (TRUE = build +
 ' log the SVG, do not send).
@@ -47,6 +55,9 @@ Private COL_ACTUAL  As Long
 ' Astro track sampling: points across a Track GP's window (yaw,pitch path).
 Private Const TRACK_NSAMP As Long = 12
 
+' Pano grid cap (matches cart PANO_MAX_PHOTOS).
+Private Const PANO_MAXCELL As Long = 8
+
 ' Chart contract
 Private Const VB_W            As Double = 355
 Private Const VB_H            As Double = 90
@@ -68,11 +79,24 @@ Public Sub PushChartToCart()
     COL_DYAW = cols("dyaw"): COL_DPITCH = cols("dpitch")
     COL_FIRESAT = cols("firesat"): COL_ACTUAL = cols("actual(mins)")
 
-    ' Collect Move / Pan Follow marker targets in plan order.
+    ' Collect Move / Pan Follow marker targets (+ FULL track samples) in plan order.
     Dim yaw() As Double, pit() As Double
     ReDim yaw(0 To PLAN_MAX_ROWS * 16)
     ReDim pit(0 To PLAN_MAX_ROWS * 16)
     Dim n As Long: n = 0
+
+    ' Pano GPs (arch Track-yaw -> PanoCycle): store start + end centre yaw and the
+    ' row-0 centre pitch. The grid config (cols/offsets/rows/rowstep) is one shared
+    ' portrait block, read once.
+    Dim pgStartY() As Double, pgEndY() As Double, pgPitch() As Double
+    ReDim pgStartY(0 To PLAN_MAX_ROWS)
+    ReDim pgEndY(0 To PLAN_MAX_ROWS)
+    ReDim pgPitch(0 To PLAN_MAX_ROWS)
+    Dim pgN As Long: pgN = 0
+    Dim pCols As Long, pRows As Long
+    Dim pRowstep As Double
+    Dim pOff(0 To PANO_MAXCELL - 1) As Double
+    Dim pCfgOK As Boolean: pCfgOK = False
 
     Dim r As Long
     For r = PLAN_FIRST_ROW To PLAN_FIRST_ROW + PLAN_MAX_ROWS - 1
@@ -98,49 +122,79 @@ Public Sub PushChartToCart()
             LogCH "  GP point " & n & ": yaw=" & Format(yaw(n), "0.0") & " pitch=" & Format(pit(n), "0.0")
             n = n + 1
         ElseIf act = "TRACK" Or act = "TRACK-YAW" Then
-            ' Astro track: sample the target's gimbal yaw/pitch across its window
-            ' (cart-heading-at-time per sample, same angle math as the plan view).
-            ' Each sample is a point on the same yaw-vs-pitch path the cart icon rides.
             Dim ttgt As String
             ttgt = LCase(Trim(CStr(ws.Cells(r, COL_TARGET).value)))
             Dim rawF As Variant: rawF = ws.Cells(r, COL_FIRESAT).value
             Dim winV As Variant: winV = ws.Cells(r, COL_ACTUAL).value
-            If (ttgt = "sun" Or ttgt = "moon" Or ttgt = "gc" Or ttgt = "mw" _
-               Or ttgt = "arch_rise" Or ttgt = "arch_set") _
-               And IsNumeric(rawF) And IsNumeric(winV) Then
+            Dim isArch As Boolean
+            isArch = (act = "TRACK-YAW") And (ttgt = "arch_rise" Or ttgt = "arch_set")
+
+            If isArch And IsNumeric(rawF) And IsNumeric(winV) Then
+                If CDbl(winV) > 0 Then
+                    ' arch PanoCycle: capture START + END centre yaw and the centre
+                    ' pitch (= Rp + dpitch, the firmware's fixed row-0 pitch). The
+                    ' pano overlay (dots + band) is drawn from these + the grid cfg.
+                    If Not pCfgOK Then pCfgOK = ReadPanoPortrait(pCols, pRows, pRowstep, pOff)
+                    Dim afStart As Double: afStart = Utils.DateSerialOf(ThisWorkbook.Sheets("Plan").Cells(PLAN_FIRST_ROW, COL_FIRESAT).value)
+                    Dim afT As Double: afT = Utils.DatedFireSerial(CDbl(rawF), afStart)
+                    Dim aWin As Double: aWin = CDbl(winV)
+                    Dim aDyw As Double: aDyw = SafeNum(ws.Cells(r, COL_DYAW).value)
+                    Dim aDpt As Double: aDpt = SafeNum(ws.Cells(r, COL_DPITCH).value)
+                    Dim aRp As Double:  aRp = SafeNum(ws.Cells(r, COL_RP).value)
+
+                    Dim ch0 As Double, sy0 As Double, sp0 As Double
+                    Dim chE As Double, syE As Double, spE As Double
+                    Dim ttEnd As Double: ttEnd = afT + (aWin / 1440#)
+                    ch0 = CartHeadingAtChart(ws, afT)
+                    chE = CartHeadingAtChart(ws, ttEnd)
+                    Dim okS As Boolean, okE As Boolean
+                    okS = PlanPush.EvalAstro(ttgt, afT, ch0, sy0, sp0)   ' arch: yaw is a bearing,
+                    okE = PlanPush.EvalAstro(ttgt, ttEnd, chE, syE, spE) ' valid regardless of ok
+
+                    pgStartY(pgN) = sy0 + aDyw
+                    ' Seat the END centre onto the START's 360 branch: EvalAstro may
+                    ' return start and end on different +-360 copies (e.g. 245 vs -115),
+                    ' which would inflate the sweep band to ~270deg and stretch the axis.
+                    ' The arch drifts only a few deg over a GP window, so wrap the drift
+                    ' to +-180 (shortest) and rebuild end from start + that drift.
+                    Dim dEnd As Double: dEnd = (syE + aDyw) - pgStartY(pgN)
+                    Do While dEnd > 180#: dEnd = dEnd - 360#: Loop
+                    Do While dEnd < -180#: dEnd = dEnd + 360#: Loop
+                    pgEndY(pgN) = pgStartY(pgN) + dEnd
+                    pgPitch(pgN) = aRp + aDpt
+                    LogCH "  GP pano " & ttgt & ": startYaw=" & Format(pgStartY(pgN), "0.0") & _
+                          " endYaw=" & Format(pgEndY(pgN), "0.0") & " centrePitch=" & Format(pgPitch(pgN), "0.0")
+                    pgN = pgN + 1
+                End If
+
+            ElseIf (ttgt = "sun" Or ttgt = "moon" Or ttgt = "gc" Or ttgt = "mw") _
+                   And IsNumeric(rawF) And IsNumeric(winV) Then
+                ' FULL astro track: sample the centre yaw/pitch across its window
+                ' (unchanged - these GPs fire single frames, no pano).
               If CDbl(winV) > 0 Then
-                ' Fires-at is stored TIME-OF-DAY only; attach the shoot date
-                ' (same dated-timeline anchor TrackPlanPush uses) so an overnight
-                ' GP samples the correct calendar day, not 1899/today.
                 Dim fStartRaw As Double: fStartRaw = Utils.DateSerialOf(ThisWorkbook.Sheets("Plan").Cells(PLAN_FIRST_ROW, COL_FIRESAT).value)
                 Dim fT As Double: fT = Utils.DatedFireSerial(CDbl(rawF), fStartRaw)
                 Dim winMin As Double: winMin = CDbl(winV)
                 Dim dyw As Double, dpt As Double
                 dyw = SafeNum(ws.Cells(r, COL_DYAW).value)
                 dpt = SafeNum(ws.Cells(r, COL_DPITCH).value)
-                Dim k As Long, Sy As Double, sp As Double, ch As Double, tt As Double
+                Dim k As Long, sy As Double, sp As Double, ch As Double, tt As Double
                 Dim added As Long: added = 0
-                Dim isRiseSet As Boolean
-                isRiseSet = (ttgt = "sun" Or ttgt = "moon" Or ttgt = "gc" Or ttgt = "mw")
                 For k = 0 To TRACK_NSAMP
                     tt = fT + (winMin / 1440#) * (CDbl(k) / CDbl(TRACK_NSAMP))
                     ch = CartHeadingAtChart(ws, tt)
                     Dim okEval As Boolean
-                    okEval = PlanPush.EvalAstro(ttgt, tt, ch, Sy, sp)
-                    ' EvalAstro writes Sy/sp (yaw/pitch) BEFORE its below-horizon
-                    ' gate returns False (GetSunGimbalAngles etc. set them at the
-                    ' top, then return alt>-5). So for a rising/setting body the
-                    ' yaw is valid even when ok=False - keep the sample and clamp
-                    ' pitch to 0 (rim), matching the plan view (max(0,alt)) and the
-                    ' firmware R7 rim-hold. Without this the chart DROPS the whole
-                    ' below-horizon arc (an 840-min overnight sun showed only 3 of
-                    ' 13 samples). Arch is a bearing (no real alt) - use ok as-is.
+                    okEval = PlanPush.EvalAstro(ttgt, tt, ch, sy, sp)
+                    ' EvalAstro writes sy/sp BEFORE its below-horizon gate returns
+                    ' False, so a rising/setting body's yaw is valid even when
+                    ' ok=False - keep it and clamp pitch to 0 (rim), matching the
+                    ' plan view and the firmware R7 rim-hold.
                     If okEval Then
-                        yaw(n) = Sy + dyw: pit(n) = sp + dpt
+                        yaw(n) = sy + dyw: pit(n) = sp + dpt
                         n = n + 1: added = added + 1
                         If n > UBound(yaw) Then Exit For
-                    ElseIf isRiseSet Then
-                        yaw(n) = Sy + dyw: pit(n) = 0#      ' below horizon -> rim
+                    Else
+                        yaw(n) = sy + dyw: pit(n) = 0#      ' below horizon -> rim
                         n = n + 1: added = added + 1
                         If n > UBound(yaw) Then Exit For
                     End If
@@ -154,26 +208,47 @@ Public Sub PushChartToCart()
 NextRow:
     Next r
 
-    If n < 1 Then
+    If n < 1 And pgN < 1 Then
         LogCH "  no chartable points found"
-        MsgBox "No Move/Pan-Follow points to chart.", vbExclamation, "PushChartToCart"
+        MsgBox "No Move/Pan-Follow points or pano GPs to chart.", vbExclamation, "PushChartToCart"
         Exit Sub
     End If
 
-    ' yaw_min for the axis (left edge). Warn if the plan exceeds the span.
+    ' max abs yaw offset across the active columns = the pano fan half-width.
+    Dim maxOff As Double: maxOff = 0
+    If pCfgOK Then
+        Dim cc As Long
+        For cc = 0 To pCols - 1
+            If Abs(pOff(cc)) > maxOff Then maxOff = Abs(pOff(cc))
+        Next cc
+    End If
+
+    ' yaw_min/yaw_max for the axis (left edge). Fold in Move/track points AND the
+    ' full pano sweep (start/end centre +- fan) so the axis frames the whole thing.
+    Dim haveX As Boolean: haveX = False
     Dim yawMin As Double, yawMax As Double
-    yawMin = yaw(0): yawMax = yaw(0)
     Dim i As Long
-    For i = 1 To n - 1
+    For i = 0 To n - 1
+        If Not haveX Then yawMin = yaw(i): yawMax = yaw(i): haveX = True
         If yaw(i) < yawMin Then yawMin = yaw(i)
         If yaw(i) > yawMax Then yawMax = yaw(i)
     Next i
+    Dim g As Long
+    For g = 0 To pgN - 1
+        Dim loY As Double, hiY As Double
+        loY = IIf(pgStartY(g) < pgEndY(g), pgStartY(g), pgEndY(g)) - maxOff
+        hiY = IIf(pgStartY(g) > pgEndY(g), pgStartY(g), pgEndY(g)) + maxOff
+        If Not haveX Then yawMin = loY: yawMax = hiY: haveX = True
+        If loY < yawMin Then yawMin = loY
+        If hiY > yawMax Then yawMax = hiY
+    Next g
+
     If (yawMax - yawMin) > YAW_SPAN Then
         LogCH "  WARNING: yaw range " & Format(yawMax - yawMin, "0") & _
               " deg exceeds the " & Format(YAW_SPAN, "0") & " deg chart span - path will clip"
     End If
 
-    ' Build the inner SVG (axes + dashed 80deg + blue polyline + dots).
+    ' Build the inner SVG (axes + dashed 80deg + Move polyline/dots + pano overlay).
     Dim svg As String
     svg = ""
     ' faint gridlines: pitch 0 (bottom), 40 (mid)
@@ -182,25 +257,74 @@ NextRow:
     ' dashed mechanical-limit reminder at pitch 80 (top)
     svg = svg & Line2(0, YOf(80), VB_W, YOf(80), "#0001", "3 3")
 
-    ' blue polyline through the targets (Move/ease = blue per GIMBAL_VIZ)
-    Dim pts As String: pts = ""
-    For i = 0 To n - 1
-        pts = pts & Format(XOf(yaw(i), yawMin), "0.0") & "," & Format(YOf(pit(i)), "0.0") & " "
-    Next i
-    svg = svg & "<polyline points='" & Trim(pts) & "' fill='none' stroke='#7a8aa0' stroke-width='2'/>"
+    ' Move / Pan Follow + FULL track path: blue polyline + dots (only if present).
+    If n >= 1 Then
+        Dim pts As String: pts = ""
+        For i = 0 To n - 1
+            pts = pts & Format(XOf(yaw(i), yawMin), "0.0") & "," & Format(YOf(pit(i)), "0.0") & " "
+        Next i
+        svg = svg & "<polyline points='" & Trim(pts) & "' fill='none' stroke='#7a8aa0' stroke-width='2'/>"
+        For i = 0 To n - 1
+            svg = svg & "<circle cx='" & Format(XOf(yaw(i), yawMin), "0.0") & _
+                  "' cy='" & Format(YOf(pit(i)), "0.0") & "' r='1.2' fill='#333'/>"
+        Next i
+    End If
 
-    ' waypoint dots
-    For i = 0 To n - 1
-        svg = svg & "<circle cx='" & Format(XOf(yaw(i), yawMin), "0.0") & _
-              "' cy='" & Format(YOf(pit(i)), "0.0") & "' r='1.2' fill='#333'/>"
-    Next i
+    ' Pano overlay: per arch PanoCycle GP, the planned-sweep band + firing arrows +
+    ' the rows x cols start-cluster dots. Drawn after the Move path so dots sit on top.
+    If pgN >= 1 Then
+        svg = svg & "<defs><marker id='pfa' markerWidth='5' markerHeight='5' refX='4' refY='2.5' orient='auto'>" & _
+              "<path d='M0,0 L5,2.5 L0,5 z' fill='var(--xtext-mute)'/></marker></defs>"
+        For g = 0 To pgN - 1
+            ' planned-sweep band: the leading column (+maxOff if the centre drifts
+            ' right, else -maxOff) from its GP-start position to its GP-end position.
+            Dim drift As Double: drift = pgEndY(g) - pgStartY(g)
+            Dim leadOff As Double: leadOff = IIf(drift >= 0, maxOff, -maxOff)
+            Dim bx1 As Double, bx2 As Double
+            bx1 = XOf(pgStartY(g) + leadOff, yawMin)
+            bx2 = XOf(pgEndY(g) + leadOff, yawMin)
+            Dim bLo As Double, bHi As Double
+            bLo = IIf(bx1 < bx2, bx1, bx2): bHi = IIf(bx1 > bx2, bx1, bx2)
+            Dim pTop As Double: pTop = pgPitch(g) + CDbl(pRows - 1) * pRowstep
+            Dim yT As Double, yB As Double
+            yT = YOf(pTop): yB = YOf(pgPitch(g))
+            If (bHi - bLo) > 0.3 Then
+                svg = svg & "<rect x='" & Format(bLo, "0.0") & "' y='" & Format(yT, "0.0") & _
+                      "' width='" & Format(bHi - bLo, "0.0") & "' height='" & Format(yB - yT, "0.0") & _
+                      "' fill='var(--xsweep)' fill-opacity='0.45'/>"
+            End If
 
-    LogCH "  yaw_min=" & Format(yawMin, "0.0") & " points=" & n & " svg_len=" & Len(svg)
+            ' firing arrows (raster: row 0 cols 0..C-1, then row 1, ...) + cell dots.
+            Dim rr As Long, ccx As Long
+            Dim prevx As Double, prevy As Double, first As Boolean
+            first = True
+            Dim dotsvg As String: dotsvg = ""
+            For rr = 0 To pRows - 1
+                For ccx = 0 To pCols - 1
+                    Dim cyaw As Double, cpit As Double, cx As Double, cy As Double
+                    cyaw = pgStartY(g) + pOff(ccx)
+                    cpit = pgPitch(g) + CDbl(rr) * pRowstep
+                    cx = XOf(cyaw, yawMin): cy = YOf(cpit)
+                    If Not first Then
+                        svg = svg & "<line x1='" & Format(prevx, "0.0") & "' y1='" & Format(prevy, "0.0") & _
+                              "' x2='" & Format(cx, "0.0") & "' y2='" & Format(cy, "0.0") & _
+                              "' stroke='var(--xtext-mute)' stroke-width='0.8' marker-end='url(#pfa)'/>"
+                    End If
+                    dotsvg = dotsvg & "<circle cx='" & Format(cx, "0.0") & "' cy='" & Format(cy, "0.0") & _
+                             "' r='2' fill='var(--xtext)'/>"
+                    prevx = cx: prevy = cy: first = False
+                Next ccx
+            Next rr
+            svg = svg & dotsvg
+        Next g
+    End If
+
+    LogCH "  yaw_min=" & Format(yawMin, "0.0") & " movepts=" & n & " panoGPs=" & pgN & " svg_len=" & Len(svg)
 
     If ReadDryRunFlag() Then
         LogCH "  DRY RUN svg: " & svg
         LogCH "--- PushChartToCart end (DRY RUN, not sent) ---"
-        MsgBox "Dry run: chart SVG built (" & Len(svg) & " chars, " & n & " points)." & vbCrLf & _
+        MsgBox "Dry run: chart SVG built (" & Len(svg) & " chars, " & n & " move pts, " & pgN & " pano GP(s))." & vbCrLf & _
                "See Log. Set dataPlanPushDryRun = FALSE to push.", vbInformation, "PushChartToCart"
         Exit Sub
     End If
@@ -248,12 +372,49 @@ NextRow:
 
     If okAll Then
         LogCH "--- PushChartToCart end (REAL PUSH, " & idx & " chunk(s)) ---"
-        MsgBox "Chart pushed (" & idx & " chunk(s), " & n & " points)." & vbCrLf & _
-               "Open the Execution screen to view.", vbInformation, "PushChartToCart"
+        ' MsgBox "Chart pushed (" & idx & " chunk(s), " & n & " move pts, " & pgN & " pano GP(s))." & vbCrLf & _   ' real-push success popup removed: silent on success, detail in Log; DRY RUN + errors kept
+               ' "Open the Execution screen to view.", vbInformation, "PushChartToCart"
     Else
         MsgBox "Chart push failed mid-way. See Log.", vbExclamation, "PushChartToCart"
     End If
 End Sub
+
+' Read the PANO sheet portrait block (the SAME named ranges PanoConfigPush sends):
+'   panoP_shots  -> yaw column count (cols)
+'   panoP_offsets-> yaw offsets (first cols used)
+'   panoP_rows   -> pitch rows (default 1)
+'   panoP_rowstep-> pitch step deg (default 0)
+' Returns False (graceful: caller treats as no overlay) if the block is missing.
+Private Function ReadPanoPortrait(ByRef cols As Long, ByRef rows As Long, _
+                                  ByRef rowstep As Double, ByRef off() As Double) As Boolean
+    On Error GoTo fail
+    cols = CLng(ThisWorkbook.names("panoP_shots").RefersToRange.value)
+    If cols < 1 Then cols = 1
+    If cols > PANO_MAXCELL Then cols = PANO_MAXCELL
+
+    rows = 1: rowstep = 0
+    On Error Resume Next
+    rows = CLng(ThisWorkbook.names("panoP_rows").RefersToRange.value)
+    rowstep = CDbl(ThisWorkbook.names("panoP_rowstep").RefersToRange.value)
+    On Error GoTo fail
+    If rows < 1 Then rows = 1
+    If rows > PANO_MAXCELL Then rows = PANO_MAXCELL
+
+    Dim offRng As Range: Set offRng = ThisWorkbook.names("panoP_offsets").RefersToRange
+    Dim c As Range, k As Long: k = 0
+    For Each c In offRng
+        If k >= cols Then Exit For
+        If IsNumeric(c.value) And Trim(CStr(c.value)) <> "" Then off(k) = CDbl(c.value) Else off(k) = 0
+        k = k + 1
+    Next c
+    Do While k < cols
+        off(k) = 0: k = k + 1
+    Loop
+    ReadPanoPortrait = True
+    Exit Function
+fail:
+    ReadPanoPortrait = False
+End Function
 
 ' ---- coordinate mapping (the contract) ----
 Private Function XOf(ByVal yaw As Double, ByVal yawMin As Double) As Double

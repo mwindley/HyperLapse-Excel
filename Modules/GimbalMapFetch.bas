@@ -100,10 +100,10 @@ Public Sub FetchGimbalMap()
     st.SaveToFile outPng, 2    ' adSaveCreateOverWrite
     st.Close
 
-    MsgBox "Map saved (" & SPAN_KM & " km, " & PX & "x" & PX & "):" & vbCrLf & _
-           outPng & vbCrLf & vbCrLf & _
-           "Set MAP_PATH in GimbalPlanViewButton to this path, then Render.", _
-           vbInformation, "Fetch Gimbal Map"
+    ' MsgBox "Map saved (" & SPAN_KM & " km, " & PX & "x" & PX & "):" & vbCrLf & _   ' popup removed: success now silent, detail is in Log; pops only on error
+    '        outPng & vbCrLf & vbCrLf & _
+    '        "Set MAP_PATH in GimbalPlanViewButton to this path, then Render.", _
+    '        vbInformation, "Fetch Gimbal Map"
     Exit Sub
 
 Fail:

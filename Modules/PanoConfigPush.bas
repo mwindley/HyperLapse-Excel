@@ -6,8 +6,9 @@ Attribute VB_Name = "PanoConfigPush"
 ' cart holds BOTH resident. Whatever triggers a pano on the cart selects which
 ' (manual/landscape = PanoCentre; arch track = PanoCycle/portrait).
 '
-' What crosses to the cart: shot count, mode (0=Centre out-and-back,
-' 1=Cycle walk-through), and the offset list. Cadence is NOT pushed - the sketch
+' What crosses to the cart: yaw-column count (n), mode (0=Centre out-and-back,
+' 1=Cycle walk-through), the two-row grid (rows + rowstep, deg), and the yaw
+' offset list. Cadence is NOT pushed - the sketch
 ' runs the pano flat-out at its slew/settle limits and the real cadence emerges;
 ' the PANO sheet's cadence is an operator-side estimate only.
 '
@@ -45,18 +46,33 @@ Private Sub PushOne(ByVal arduinoIP As String, ByVal cfgLetter As String, _
     Dim n As Long, modeVal As Long
     On Error GoTo fail
 
-    n = CLng(ThisWorkbook.Names(shotsName).RefersToRange.value)
+    n = CLng(ThisWorkbook.names(shotsName).RefersToRange.value)
     If n < 1 Then n = 1
     If n > 8 Then n = 8
 
     ' mode: landscape -> Centre (0), portrait -> Cycle (1)
     modeVal = IIf(cfgLetter = "P", 1, 0)
 
+    ' rows + rowstep (the two-row grid): PanoCycle pushes rows=2 + the pitch step
+    ' (deg) so the cart fans the yaw columns over two pitch rows; PanoCentre rows=1.
+    ' Read from the same block by prefix; default to single-row if the cells predate
+    ' a sheet rebuild (graceful - no crash, cart just runs one row).
+    Dim nmPfx As String: nmPfx = "pano" & cfgLetter & "_"
+    Dim rowsVal As Long: rowsVal = 1
+    Dim rowstepVal As Long: rowstepVal = 0
+    On Error Resume Next
+    rowsVal = CLng(ThisWorkbook.names(nmPfx & "rows").RefersToRange.value)
+    rowstepVal = CLng(Round(CDbl(ThisWorkbook.names(nmPfx & "rowstep").RefersToRange.value), 0))
+    On Error GoTo fail
+    If rowsVal < 1 Then rowsVal = 1
+    If rowsVal > 8 Then rowsVal = 8
+
     Dim qs As String
-    qs = "?cfg=" & cfgLetter & "&n=" & n & "&mode=" & modeVal
+    qs = "?cfg=" & cfgLetter & "&n=" & n & "&mode=" & modeVal & _
+         "&rows=" & rowsVal & "&rowstep=" & rowstepVal
 
     ' offsets: read the 8-cell named row, round to whole deg, send the first n.
-    Dim offRng As Range: Set offRng = ThisWorkbook.Names(offsetsName).RefersToRange
+    Dim offRng As Range: Set offRng = ThisWorkbook.names(offsetsName).RefersToRange
     Dim i As Long, c As Range, k As Long
     k = 0
     For Each c In offRng

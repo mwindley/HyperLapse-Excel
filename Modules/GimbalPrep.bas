@@ -28,9 +28,30 @@ Attribute VB_Name = "GimbalPrep"
 
 Option Explicit
 
+' #watchonce: arm the laptop alarm watcher at most ONCE per Excel session.
+' Repeated Prep Cart runs were each relaunching it (the Python pidfile dedup
+' is not holding), stacking watcher windows + extra /exec/feed pollers that
+' add :80 load to the very runs being measured. Module-level = persists for
+' the life of the project. Manual Start Watcher button is NOT affected.
+Private m_watcherArmed As Boolean
+
 ' ---- behaviour toggles ----
 Private Const STOP_ON_CART_FAIL As Boolean = False   ' True = abort if a cart push fails
 Private Const REFRESH_MAP As Boolean = False         ' True = always re-fetch the map tile
+' #pace: inter-step delay (ms) between cart pushes in PushToCart. The push
+' steps used to be separated by the per-step MsgBoxes; suppressing those
+' removed the recovery gaps the cart's :80 relied on, letting ~20 GETs fire
+' back-to-back and tipping the cable-strip chunk handler into a multi-second
+' stall. This restores a controlled gap. EXPERIMENT KNOB: 0 = back-to-back
+' (reproduce the stall); raise until the stall vanishes. Local-only PrepSession
+' and BuildPlan are NOT paced - only the cart pushes below.
+' LIVE KNOB: the pace (ms) is read at run time from Control!E23 (the cell to
+' the right of the Prep Cart button) so 300 <-> 0 A/B testing needs no module
+' re-import - just type the value in that cell. If E23 is blank or non-numeric,
+' PACE_DEFAULT_MS below is used. 0 = back-to-back (reproduce the stall);
+' raise until the stall vanishes.
+Private Const PACE_DEFAULT_MS As Long = 300           ' fallback when Control!E23 is blank/non-numeric
+Private Const PACE_CELL       As String = "E23"       ' live pace knob, beside the Prep Cart button
 ' ---------------------------
 
 ' ============================================================
@@ -68,7 +89,7 @@ Public Sub PrepSession()
 
 done:
     LogEvent "PREP", "--- PrepSession end ---"
-    MsgBox rpt, vbInformation, "Prep Session"
+    ' MsgBox rpt, vbInformation, "Prep Session"   ' popup removed: success now silent, detail is in Log; pops only on error
 End Sub
 
 ' --- Phase 2: render the day's plan for review. Iterate. No cart. ---
@@ -97,7 +118,7 @@ Public Sub BuildPlan()
 
 done:
     LogEvent "PREP", "--- BuildPlan end ---"
-    MsgBox rpt, vbInformation, "Build Plan"
+    ' MsgBox rpt, vbInformation, "Build Plan"   ' popup removed: success now silent, detail is in Log; pops only on error
 End Sub
 
 ' --- Phase 3: push artifacts to the cart. Once, maybe twice. ---
@@ -120,35 +141,88 @@ Public Sub PushToCart()
     ' UTC realtime anchor first (cubic + anchor share one clock).
     ok = RunStep("AstroPush.SetRealtimeAnchor", "Set Realtime Anchor", rpt)
     If Not ok And STOP_ON_CART_FAIL Then GoTo done
+    Pace
 
     ok = RunStep("PushCartPlan", "Push Cart Plan", rpt)
     If Not ok And STOP_ON_CART_FAIL Then GoTo done
+    Pace
     ' Exposure ramp (sunset->sunrise Tv/ISO crossovers + ceilings -> /exposure/load).
     ' The cart's LUM walk ramps from these overnight; was a separate button, so a
     ' plan pushed without it ran the camera off the bare baseline with no planned
     ' night ramp. Folded in here so one Push To Cart sends everything.
     ok = RunStep("PushFormulaToCart", "Push Exposure Formula", rpt)
     If Not ok And STOP_ON_CART_FAIL Then GoTo done
+    Pace
     ' Astro keyframe positions (sun/moon/MW rise/set/mid -> /settings/astropos).
     ' These populate the cart's keyframe slots (Show astro, snapvar). They were
     ' NOT in the push chain, so the slots read empty after every reboot.
     ok = RunStep("AstroPush.PushAstroToCart", "Push Astro Positions", rpt)
     If Not ok And STOP_ON_CART_FAIL Then GoTo done
+    Pace
+    ' #49 Cart battery low-V threshold (Settings!dataCartBattLow -> /settings/battlow).
+    ' Echoed in /exec/feed as "battlow"; the laptop watcher reads it and compares.
+    ok = RunStep("AstroPush.PushBattLowToCart", "Push Cart Batt Low", rpt)
+    If Not ok And STOP_ON_CART_FAIL Then GoTo done
+    Pace
     ok = RunStep("PushTrackPlanToCart", "Push Track Plan", rpt)
     If Not ok And STOP_ON_CART_FAIL Then GoTo done
+    Pace
     ok = RunStep("PushTrackPathsToCart", "Push Track Paths", rpt)
     If Not ok And STOP_ON_CART_FAIL Then GoTo done
+    Pace
     ' Pano configs (landscape + portrait) - cart holds both; trigger picks which.
     ok = RunStep("PanoConfigPush.PushPanoConfigs", "Push Pano Configs", rpt)
     If Not ok And STOP_ON_CART_FAIL Then GoTo done
+    Pace
     ok = RunStep("PushChartToCart", "Push Chart", rpt)
     If Not ok And STOP_ON_CART_FAIL Then GoTo done
+    Pace
     ok = RunStep("PushCableStripToCart", "Push Cable Strip", rpt)
     If Not ok And STOP_ON_CART_FAIL Then GoTo done
+    Pace
 
 done:
+    ' #49/#watchonce Arm the laptop alarm watcher with the prep, but only the
+    ' FIRST Prep Cart of the session - later runs skip it so windows/pollers
+    ' don't stack. Guarded so a launch hiccup never blocks the prep report.
+    ' (If you killed the watcher mid-session, relaunch it with the Start
+    ' Watcher button.)
+    If Not m_watcherArmed Then
+        On Error Resume Next
+        StartWatcherAuto
+        m_watcherArmed = True
+        On Error GoTo 0
+    End If
     LogEvent "PREP", "--- PushToCart end ---"
-    MsgBox rpt, vbInformation, "Push To Cart"
+    ' MsgBox rpt, vbInformation, "Push To Cart"   ' popup removed: success now silent, detail is in Log; pops only on error
+End Sub
+
+' #pace: effective pace in ms. Live override from Control!PACE_CELL when it
+' holds a number >= 0; otherwise PACE_DEFAULT_MS. Any read error -> default.
+Private Function PaceMs() As Long
+    On Error GoTo fallback
+    Dim v As Variant
+    v = ThisWorkbook.Sheets("Control").Range(PACE_CELL).value
+    If IsNumeric(v) Then
+        If v >= 0 Then PaceMs = CLng(v): Exit Function
+    End If
+fallback:
+    PaceMs = PACE_DEFAULT_MS
+End Function
+
+' #pace: yield-friendly inter-step gap between cart pushes. Timer-based (sub-
+' second), DoEvents keeps Excel responsive, no API declare (locked-down laptop
+' safe). Guards the midnight Timer rollover. No-op when the pace is <= 0.
+Private Sub Pace()
+    Dim ms As Long
+    ms = PaceMs()
+    If ms <= 0 Then Exit Sub
+    Dim t0 As Double
+    t0 = Timer
+    Do
+        DoEvents
+        If Timer < t0 Then Exit Do          ' crossed midnight - bail rather than wait ~24h
+    Loop While (Timer - t0) * 1000# < ms
 End Sub
 
 ' Run one macro by name, log + append a report line, return success.

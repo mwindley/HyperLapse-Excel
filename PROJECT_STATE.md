@@ -1,10 +1,195 @@
 # HyperLapse Cart - PROJECT_STATE
 
-_Last updated: 16 Jun 2026 (Day 34) - current firmware **soak-v152**._
+_Last updated: 22 Jun 2026 (Day 35) - current firmware **soak-v188**._
 _The detailed body below is the **Day-31 / soak-v101-v102 checkpoint** and is kept
 as the build record. For the freshest state read **SOON_LIST.md** (status review at
-top); for open work read **WORKFRONTS.md**. The Day-32/33/34 deltas since the v101
+top); for open work read **WORKFRONTS.md**. The Day-32/33/34/35 deltas since the v101
 headline are summarised immediately below._
+
+## Day-35 deltas (v163-v184), 17-21 Jun
+
+WiFi resilience, CCAPI block fix, the laptop alarm watcher, D7 manual shutter
+bring-up, and a Move-plan photo-cadence fix. All firmware on-rig unless noted.
+
+- **WiFi cold-start + runtime reconnect (#47, v174-v179b).** Boot join tuned
+  (drop 3s settle, bail on CONN_FAILED; worst ~14.7s vs ~21.5s). Runtime
+  reconnect via free WiFi.status() poll; re-begin only from dead-time slots
+  (plan fire-boundary, pano return-slew, idle), scan-gated so a down AP costs
+  only a ~410ms scan, NOT the ~15s begins block. On-rig verified idle + live
+  pano (3-cycle pano shoot WiFi-down, D7 carried 40 photos). #47a (live non-pano
+  plan) still to test.
+- **cam field deg->nok (v180).** /exec/feed `cam` now reports `nok` (not `deg`)
+  when the CCAPI link is lost/degraded; `ok` when NORMAL. For the watcher + ribbon.
+- **CCAPI 30s connect-block fix (#50, v181-v183).** A blind CCAPI connect blocked
+  ~30s on a dead camera (set_timeout AND non-blocking both proven not to bound
+  mbed connect). FINAL: a `camera_reachable` flag, read free at the
+  ccapiRequestRawSocket chokepoint - bail instantly if false. The existing #36d
+  recovery probe is the SINGLE ping source (every-3rd-photo PROBING, 1s/60s
+  TABLE) that clears the flag on recovery. On-rig: D7 carried a full outage at
+  clean 2s cadence, no repeat blocks. OPEN: first connect after a drop still
+  pays one ~18s block; a one-frame 503 flag-lag on recovery.
+- **Laptop alarm watcher (#49).** Standalone Python/Windows (hyperlapse_watcher.py)
+  polling /exec/feed every 5s, ack-to-silence pop-up + log, single-instance lock;
+  Watcher.bas Start/Stop + auto-launch. Link-down alarm confirmed live. Non-link
+  conditions + CART_BATT_LOW_V tune still to do.
+- **D7 manual shutter (hardware).** 4N25 optocoupler on D7 confirmed firing the
+  camera with WiFi off (datasheet pinout 1=anode 2=cathode 4=emitter 5=collector
+  6=base; ~150-330R LED resistor). D7_Shutter_Pulse_Demo.ino bench-proves a 200ms
+  pulse every 5s. The cart's firePhoto falls to D7 (backupShutter) whenever CCAPI
+  is not NORMAL or a fire fails - proven carrying a full shoot.
+- **Move releases photo cadence (v184).** GTM_MOVE returned early in trackPlanTick,
+  before the first-acquire-hold release, so track_first_acquire_hold (set by
+  /track/start) was never cleared on a Move: a Move-only plan took ZERO photos.
+  Now the move reaching its endpoint clears the hold - photos fire for the hold
+  duration. Verified on-rig (a GP01 Move-only plan: move complete -> cadence -> PIN7).
+- **Cart battlow threshold push (v186, #49).** /settings/battlow?v=NN.N sets
+  cart_batt_low_v from Excel dataCartBattLow (pushed in Prep Cart via
+  AstroPush.PushBattLowToCart); echoed in /exec/feed as "battlow" so the laptop
+  watcher reads the operator's threshold (single source). Confirmed on-rig
+  ("[settings] battlow -> 22.3V").
+- **Diagnostic trace stripped (v187).** Removed the v185 httpx accept-error trace
+  (UI-return proved client-side, not the cart), the boot-scan comparison block,
+  and the verbose reconnect scan/per-begin prints; kept the load-bearing scan +
+  ap_visible gate and the reconnected/failed lines.
+- **Soak log round-robin (v188).** soakPickFilename fills SOAK_001..999 then wraps
+  round-robin via SOAK_IDX.TXT, recycling the oldest slot - card holds at most 999
+  logs and never fills. Replaces the old append-forever SOAK_OVR.CSV.
+
+## Day-35 deltas (v153 + Excel PanoSheet/PanoConfigPush), 17 Jun
+
+PanoCycle reshaped from a portrait 5-shot single-row sweep to a LANDSCAPE 2x4
+grid (4 yaw columns x 2 pitch rows, 8 cells). Driver: the RS4 Pro vertical
+(portrait) mount won't balance the large Canon R3, so the body stays landscape
+and the second framing dimension is gained with a pitch ROW instead. All
+bench/rig-serial verified on a live arch GP; NOT yet flown overnight as a real
+shoot.
+
+Firmware (soak-v153):
+- **PanoConfig gains `rows` + `rowstep`.** `n` now means YAW COLUMNS; total
+  cells = cols x rows. panoStart reads them into pano_cols/pano_rows/pano_rowstep
+  and sets pano_n = cols*rows (capped at PANO_MAX_PHOTOS=8, so 4x2=8 fits exactly).
+- **Per-cell target via panoCellTargetYaw/Pitch(cell):** column = cell%cols
+  (yaw = pano_yaw0 + offsets[col]); row = cell/cols (pitch = pano_pitch0 +
+  row*rowstep). Single source for every slew + arrival test; replaced the four
+  old yaw-only `pano_yaw0 + offsets[idx]` / frozen `pano_pitch0` sites.
+- **Row 0 pitch = the centre pitch.** PanoCycle's pano_pitch0 = the live arch Rp
+  (panoArchCentreYaw -> iv.offP); PanoCentre's = the trigger pose. Row 1 =
+  centre + rowstep.
+- **Firing order = raster:** bottom row L->R (cells 1-4) then top row L->R (5-8);
+  the cell 4->5 leg is a normal slew (bottom-right -> top-left).
+- **Cable-unwind RETURN targets cell 0** (drops pitch back to row 0 AND swings
+  yaw to the first column); then re-centres on the live arch and loops.
+- **PanoCentre unchanged:** rows=1, pose-pitched, operator out-and-back.
+- **/settings/panocfg parses + echoes `rows` + `rowstep`** (portrait default
+  4col x 2row, step 41).
+
+Excel:
+- **PanoSheet.bas:** both blocks now `orient = landscape` (yaw FOV = long edge,
+  vertical FOV = short edge); block titles decoupled from orientation ->
+  PanoCentre / PanoCycle; portrait block = 4 yaw columns x 2 rows. Added inputs
+  `panoL_rows`=1, `panoP_rows`=2; derived `*_vfov` (perpendicular edge / focal)
+  and `*_rowstep` = vfov/2 (50% vertical overlap). `shots` relabelled "Yaw columns".
+- **PanoConfigPush.bas:** reads `*_rows` + `*_rowstep` per block and appends
+  `&rows=&rowstep=` to /settings/panocfg (graceful single-row default if the
+  cells predate a sheet rebuild).
+
+Contract (cart-dumb): the lower-row pitch is the arch GP's Rp, live on the cart
+via offP - NOT pushed by panocfg. Excel pushes only the geometry the cart can't
+know: rows + rowstep (vfov/2). For 14mm: vfov ~81 deg -> rowstep ~41 deg
+(whole-degree on the wire, so vertical overlap is ~49% not exactly 50% - negligible).
+
+AUTHORING GOTCHA (trace-found, not a code bug): the arch GP must be authored as
+**Action = "Track-yaw"** (mode Y -> reads Rp as the fixed pitch), NOT "Track"
+(mode F -> reads the Dpitch column, ignores Rp). With "Track" the push sent
+offp=0.00 and PanoCycle's lower row sat at 0. Track-yaw -> offp=Rp=20.
+(PlanAuthoring already documents Track-yaw as the arch's intended mode.)
+
+ON-RIG VERIFIED 17 Jun:
+- panocfg echo: cfg=P n=4 mode=1 rows=2 rowstep=41.
+- trackplan: obj=A mode=Y offp=20.00 (after the Track-yaw authoring fix).
+- live pano run: START centre pitch=20.0 n=8 (4col x 2row, step=41); cells 1-4
+  fired at pitch ~20, cells 5-8 at pitch ~61; RETURN unwound cell 8 (yaw -140,
+  pitch 61) -> cell 1 (yaw 63, pitch 20); re-centred on the live arch (140.9) and
+  looped; 9/9 fires CCAPI st=200.
+- Cadence: 193.7 s/cycle (8 photos), ~24.5 s/photo, exposure-dominated
+  (Tv=20s = 83% of the cycle). Old 5-shot single-row PanoCycle was ~124 s; the
+  rise is the 3 extra exposures + one added long leg (the row return).
+
+STILL OPEN / flags (none block the build):
+- RETURN rate logger prints spikes (173/87 dps > the 40 dps cap) - a LOGGING
+  artefact from the +-180 wrap in the logger's g_yaw delta as the pose crosses
+  the seam, not real motion (commanded slew is a single 40 dps move). Confirm
+  smooth by eye on the 60fps footage.
+- 2-min idle auto-de-energise can fire mid-pano (harmless when the cart is
+  parked through the arch; watch on a Move-then-arch night with a long pano).
+- pano_planner.py still labels the 2nd block "Portrait" and draws it as a 4-shot
+  single-row landscape strip - it does not show the 2 rows. Cosmetic design-aid
+  follow-up.
+- On-sky overnight run is still the real proof; bench + rig-serial are green.
+
+## Day-35 continued (v154 -> v162: manual pano buttons, field network, headless boot, WiFi retry), 17 Jun
+
+GIMBAL-UI MANUAL PANO (v154-v157): the Gimbal Recon screen got two buttons -
+Pano Center and Pano Cycle - both firing at the CURRENT gimbal pose for manual
+framing. New endpoints /gimbal/panocentre (landscape, rows=1) and
+/gimbal/panocycle (portrait 2x4, one-shot), ordered BEFORE the /gimbal/pano
+prefix so they aren't swallowed. Anchored on the live pose via
+panoStart(force_pose=true). Refused while a plan/track/shutter runs
+(plan_state==RUNNING || track_exec_on || shutter_mode==3) - manual-framing only;
+the buttons also grey out when the exec feed reports RUNNING. panoStart gained
+force_pose + oneshot params; pano_oneshot now means "standalone manual: cycle
+single-pass no loop / centre no rejoin". The arch auto-PanoCycle and the Exec
+deferred /gimbal/pano are untouched.
+
+Three fixes found by on-rig tracing (v155-v157), all manual-pano only:
+- **v155 Tv from camera (NO default).** First cut reused the
+  tvStringToSeconds(current_tv) ... else 800ms idiom - the v144 fault resurfacing:
+  outside a shoot current_tv is never metered, so the gimbal moved on after ~800ms
+  while the body exposed 2s. Fix: read the body's LIVE Tv via ccapiGetCurrentTv()
+  at press; if the read fails, REFUSE to start (no default hold, ever).
+  [REINTRODUCED-class fault - copied an old idiom without its precondition.]
+- **v156 Center no rejoin.** Manual PanoCentre was firing the v148 rejoin frame (a
+  5th centre shot, meaningful only when handing a running track back its frame) -
+  spurious standalone. Now manual Center returns to centre and IDLEs WITHOUT
+  firing. Fires exactly N.
+- **v157 one-shot Cycle returns to CENTRE.** It was unwinding to cell 0 (~78deg off
+  centre), so a repeated manual Cycle re-anchored at the corner and marched 78deg
+  left each press. Now the one-shot RETURN targets the captured centre
+  (pano_yaw0/pano_pitch0); repeats stay put, cable nets ~zero. The looping arch
+  Cycle still returns to cell 0 (unchanged).
+  All three verified on-rig: 4 shots -> "manual: NO rejoin -> IDLE"; 8 shots ->
+  return-to-centre -> "one-shot cycle complete -> IDLE"; Tv echoed as 2".
+
+FIELD-TEST NETWORK (v158): moved off "Rosedale" 192.168.1.x to the Wavlink AX6000
+"RosedaleVan" 192.168.20.x. Cart static 192.168.20.97 (gw/dns .20.1); WiFi-build
+CCAPI_HOST -> camera 192.168.20.99 (same subnet so the camera stays reachable);
+password unchanged. Excel dataArduinoIP MUST be set to 192.168.20.97. (Router:
+broadcast RosedaleVan on 2.4GHz + WPA2 - the Giga is 2.4GHz/WPA2-only; reserve
+.20.99 for the camera and keep .20.97 out of the DHCP pool.)
+
+GATED SERIAL LOGGING (v159, #serialgate): cart powered with the USB lead unplugged
+stalled in setup at the boot banner (USB-CDC Serial.write blocks with no host
+draining) BEFORE WiFi.begin, so the UI never came up. All output now routes
+through a GatedLog Print subclass (#define Serial LOG, placed after all includes)
+that writes to USB only while a host is connected and drops otherwise - boots +
+serves headless. CAVEAT: a PHYSICAL unplug does NOT drop DTR, so (bool)Serial
+stays true and a mid-run Serial.write can still block the loop (observed: pano
+halted between photo 1 and 2 on unplug, resumed on replug). The robust fix
+(quarantine Serial writes to a dedicated logging thread + lossy ring buffer) is
+DEFERRED - see WORKFRONTS.
+
+WIFI JOIN RELIABILITY (v160-v162). Symptom: join failed when USB was plugged at
+power-cycle. Traced: the Serial grace `while(!Serial && millis()<3000)` exits
+EARLY when a USB host opens the port, so the plugged path called WiFi.begin
+seconds sooner. Added a deterministic >=3s pre-begin settle (v160 A/B) - but the
+bench then showed the settle is NOT the fix: attempt 1 began at t=3006ms and
+still FAILED, attempt 2 connected. The first WiFi.begin after a cold power-on is
+simply unreliable. REAL FIX (v162): WiFi.begin RETRY - config once, then up to 5
+begin attempts (each ~13s, since WiFi.status blocks during a failing join) before
+AP fallback. 3s settle kept (harmless, not the mechanism). millis() on the connect
+line. VERIFIED end-to-end: VIN-only from the Tic, NO serial lead, joins RosedaleVan
+in ~30s (attempt 1 fail -> attempt 2 connect), reachable at .20.97, RSSI ~-38dBm.
+The headless field-test network path is proven.
 
 ## Day-34 deltas (v143 -> v152 + renderers + Excel), 16 Jun
 

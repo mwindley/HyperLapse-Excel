@@ -101,8 +101,10 @@ Public Sub InitShoot()
     ' 3. Generate astro table for planning
     GenerateGCTable
     
-    ' 4. Initialise camera
-    InitCamera
+    ' 4. Initialise camera - REMOVED: Excel no longer pushes M/f1.8/ISO100/1/5000
+    '    to the camera. The camera is set by the operator on the body; Prep Session
+    '    now does astro/time setup only and does not touch the camera.
+    ' InitCamera
     
     ' 5. Populate Tv lookup from camera's actual ability list.
     '    Must come AFTER InitCamera (needs HTTP working). Used by the
@@ -115,10 +117,10 @@ Public Sub InitShoot()
     LogEvent "SEQ", "InitShoot complete. Sunset: " & _
              Format(Sheets("Settings").Range("dataSunsetTime").value, "HH:nn:ss")
     
-    MsgBox "Shoot initialised." & Chr(10) & _
-           "Sunset: " & Format(Sheets("Settings").Range("dataSunsetTime").value, "HH:nn:ss") & Chr(10) & _
-           "Sunrise: " & Format(Sheets("Settings").Range("dataSunriseTime").value, "HH:nn:ss") & Chr(10) & Chr(10) & _
-           "Run StartSequence at 4:00pm.", vbInformation
+    ' MsgBox "Shoot initialised." & Chr(10) & _   ' popup removed: success now silent, detail is in Log; pops only on error
+    '        "Sunset: " & Format(Sheets("Settings").Range("dataSunsetTime").value, "HH:nn:ss") & Chr(10) & _
+    '        "Sunrise: " & Format(Sheets("Settings").Range("dataSunriseTime").value, "HH:nn:ss") & Chr(10) & Chr(10) & _
+    '        "Run StartSequence at 4:00pm.", vbInformation
 End Sub
 
 ' ============================================================

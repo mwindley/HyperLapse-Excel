@@ -335,7 +335,7 @@ NextRow:
     End If
     If n = 0 Then
         LogTP "No Track intervals in plan (nothing to push)."
-        MsgBox "No Track GPs found in the gimbal plan.", vbInformation, "PushTrackPlanToCart"
+        ' MsgBox "No Track GPs found in the gimbal plan.", vbInformation, "PushTrackPlanToCart"   ' real-push success popup removed: silent on success, detail in Log; DRY RUN + errors kept
         Exit Sub
     End If
 
@@ -399,9 +399,9 @@ NextRow:
 
     If okAll Then
         LogTP "--- PushTrackPlanToCart end (REAL PUSH, " & n & " intervals) ---"
-        MsgBox n & " TrackInterval(s) pushed to cart." & vbCrLf & vbCrLf & _
-               "Push cubics (AstroPush) too, then /track/start.", _
-               vbInformation, "PushTrackPlanToCart"
+        ' MsgBox n & " TrackInterval(s) pushed to cart." & vbCrLf & vbCrLf & _   ' real-push success popup removed: silent on success, detail in Log; DRY RUN + errors kept
+               ' "Push cubics (AstroPush) too, then /track/start.", _
+               ' vbInformation, "PushTrackPlanToCart"
     Else
         MsgBox "Push failed mid-way. See Log.", vbExclamation, "PushTrackPlanToCart"
     End If

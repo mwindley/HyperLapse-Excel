@@ -327,9 +327,9 @@ NextRow:
 
     If okAll Then
         LogEvent LOG_CATEGORY, "--- end (REAL PUSH, " & idx & " chunk(s)) ---"
-        MsgBox "Cable strip pushed (" & idx & " chunk(s), " & n & " GPs)." & vbCrLf & _
-               "used " & Format(used, "0") & " deg, headroom " & Format(headroom, "0") & " deg." & vbCrLf & _
-               "Open the Cable screen to view.", vbInformation, "PushCableStripToCart"
+        ' MsgBox "Cable strip pushed (" & idx & " chunk(s), " & n & " GPs)." & vbCrLf & _   ' real-push success popup removed: silent on success, detail in Log; DRY RUN + errors kept
+               ' "used " & Format(used, "0") & " deg, headroom " & Format(headroom, "0") & " deg." & vbCrLf & _
+               ' "Open the Cable screen to view.", vbInformation, "PushCableStripToCart"
     Else
         MsgBox "Cable strip push failed mid-way. See Log.", vbExclamation, "PushCableStripToCart"
     End If

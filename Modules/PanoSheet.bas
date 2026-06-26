@@ -18,8 +18,8 @@ Attribute VB_Name = "PanoSheet"
 '
 ' Named ranges (the contract):
 '   panoL_*  landscape block   panoP_*  portrait block
-'   *_lens *_focal *_orient *_shots *_span *_edge *_tv *_slew *_settle (inputs)
-'   *_fov *_step *_overlap *_overlapPct *_coverage *_cadence            (outputs)
+'   *_lens *_focal *_orient *_shots *_rows *_span *_edge *_tv *_slew *_settle (inputs)
+'   *_fov *_vfov *_rowstep *_step *_overlap *_overlapPct *_coverage *_cadence  (outputs)
 '   *_offsets (the 8-cell offset row)
 '
 ' Run BuildPanoSheet once (or after changing the layout). The renderer button
@@ -58,8 +58,8 @@ Public Sub BuildPanoSheet()
     ' value column, so the blocks must be >=10 columns apart or landscape's
     ' offsets (C..J) collide with portrait. Landscape value=C (offsets C..J);
     ' portrait value=M (offsets M..T) - clear gap.
-    BuildBlock ws, "L", "landscape", 4, "B", "C"
-    BuildBlock ws, "P", "portrait", 6, "L", "M"
+    BuildBlock ws, "L", "PanoCentre", "landscape", 4, 1, "B", "C"
+    BuildBlock ws, "P", "PanoCycle", "landscape", 4, 2, "L", "M"
 
     ' Shared planner inputs (final-video cost) - read by the renderer, not part
     ' of the per-block contract. Placed below the blocks.
@@ -86,13 +86,14 @@ End Sub
 
 ' Build one config block. pfx = "L"/"P" (name prefix), orientDefault label,
 ' shotsDefault, lblCol = label column letter, valCol = value column letter.
-Private Sub BuildBlock(ws As Worksheet, ByVal pfx As String, ByVal orientDefault As String, _
-                       ByVal shotsDefault As Long, ByVal lblCol As String, ByVal valCol As String)
+Private Sub BuildBlock(ws As Worksheet, ByVal pfx As String, ByVal blockTitle As String, _
+                       ByVal orientDefault As String, ByVal shotsDefault As Long, _
+                       ByVal rowsDefault As Long, ByVal lblCol As String, ByVal valCol As String)
     Dim r As Long: r = 4
     Dim nm As String: nm = "pano" & pfx & "_"
     Dim vc As String: vc = valCol
 
-    ws.Range(lblCol & r).value = UCase(Left(orientDefault, 1)) & Mid(orientDefault, 2) & " pano config"
+    ws.Range(lblCol & r).value = blockTitle & " pano config"
     ws.Range(lblCol & r).Font.Bold = True
     r = r + 1
 
@@ -100,7 +101,8 @@ Private Sub BuildBlock(ws As Worksheet, ByVal pfx As String, ByVal orientDefault
     r = WriteInput(ws, r, lblCol, vc, "Lens label", IIf(pfx = "L", "Sigma 14mm", "Sigma 14mm"), nm & "lens", True)
     r = WriteInput(ws, r, lblCol, vc, "Orientation", orientDefault, nm & "orient", True)
     r = WriteInput(ws, r, lblCol, vc, "Focal length (mm)", "14", nm & "focal", False)
-    r = WriteInput(ws, r, lblCol, vc, "Number of shots", CStr(shotsDefault), nm & "shots", False)
+    r = WriteInput(ws, r, lblCol, vc, "Yaw columns (shots)", CStr(shotsDefault), nm & "shots", False)
+    r = WriteInput(ws, r, lblCol, vc, "Pitch rows (1=Centre, 2=Cycle)", CStr(rowsDefault), nm & "rows", False)
     r = WriteInput(ws, r, lblCol, vc, "Subject span (deg)", "180", nm & "span", False)
     r = WriteInput(ws, r, lblCol, vc, "Edge framing / side (deg)", "40", nm & "edge", False)
     r = WriteInput(ws, r, lblCol, vc, "Exposure Tv (s)", "20", nm & "tv", False)
@@ -126,8 +128,19 @@ Private Sub BuildBlock(ws As Worksheet, ByVal pfx As String, ByVal orientDefault
     ' yaw FOV uses long edge in landscape, short edge in portrait.
     Dim fovF As String
     fovF = "=DEGREES(2*ATAN(IF(LOWER(" & cOrient & ")=""landscape""," & FF_LONG & "," & FF_SHORT & ")/(2*" & cFocal & ")))"
-    r = WriteFormula(ws, r, lblCol, vc, "FOV (deg)", fovF, nm & "fov")
+    r = WriteFormula(ws, r, lblCol, vc, "FOV yaw (deg)", fovF, nm & "fov")
     Dim cFov As String: cFov = vc & RowOfName(ws, nm & "fov")
+
+    ' Vertical FOV: the PERPENDICULAR edge to the yaw FOV. Landscape yaw uses the
+    ' long edge, so vertical uses the short edge (and vice versa) - dims swapped.
+    Dim vfovF As String
+    vfovF = "=DEGREES(2*ATAN(IF(LOWER(" & cOrient & ")=""landscape""," & FF_SHORT & "," & FF_LONG & ")/(2*" & cFocal & ")))"
+    r = WriteFormula(ws, r, lblCol, vc, "FOV vertical (deg)", vfovF, nm & "vfov")
+    Dim cVfov As String: cVfov = vc & RowOfName(ws, nm & "vfov")
+
+    ' Row step = vertical FOV / 2 -> 50% vertical overlap between the two pitch
+    ' rows (PanoCycle). On the cart, row 1 pitch = centre + rowstep. rows=1 ignores it.
+    r = WriteFormula(ws, r, lblCol, vc, "Row step (deg)", "=" & cVfov & "/2", nm & "rowstep")
 
     ' coverage needed = span + 2*edge
     r = WriteFormula(ws, r, lblCol, vc, "Coverage needed (deg)", "=" & cSpan & "+2*" & cEdge, nm & "need")
@@ -161,7 +174,7 @@ Private Sub BuildBlock(ws As Worksheet, ByVal pfx As String, ByVal orientDefault
     Dim offFirst As String, offLast As String
     offFirst = ws.Cells(offRow, ws.Range(vc & "1").Column).Address(True, True)
     offLast = ws.Cells(offRow, ws.Range(vc & "1").Column + MAX_SHOTS - 1).Address(True, True)
-    ThisWorkbook.Names.Add Name:=nm & "offsets", RefersTo:="=" & SHEET_NAME & "!" & offFirst & ":" & offLast
+    ThisWorkbook.names.Add Name:=nm & "offsets", refersTo:="=" & SHEET_NAME & "!" & offFirst & ":" & offLast
     r = offRow + 1
 
     ' ---- cadence (s): photo + non-photo, mirrors firmware ----
@@ -206,11 +219,11 @@ Private Function WriteInput(ws As Worksheet, ByVal r As Long, ByVal lblCol As St
         ws.Range(vc & r).NumberFormat = "@"
         ws.Range(vc & r).value = dflt
     Else
-        ws.Range(vc & r).value = Val(dflt)
+        ws.Range(vc & r).value = val(dflt)
     End If
     ws.Range(vc & r).Font.Color = RGB(0, 0, 255)
     ws.Range(vc & r).Interior.Color = RGB(255, 255, 204)
-    ThisWorkbook.Names.Add Name:=nm, RefersTo:="=" & SHEET_NAME & "!" & ws.Range(vc & r).Address(True, True)
+    ThisWorkbook.names.Add Name:=nm, refersTo:="=" & SHEET_NAME & "!" & ws.Range(vc & r).Address(True, True)
     WriteInput = r + 1
 End Function
 
@@ -220,21 +233,21 @@ Private Function WriteFormula(ws As Worksheet, ByVal r As Long, ByVal lblCol As 
                               ByVal nm As String) As Long
     ws.Range(lblCol & r).value = label
     ws.Range(vc & r).Formula = f
-    ThisWorkbook.Names.Add Name:=nm, RefersTo:="=" & SHEET_NAME & "!" & ws.Range(vc & r).Address(True, True)
+    ThisWorkbook.names.Add Name:=nm, refersTo:="=" & SHEET_NAME & "!" & ws.Range(vc & r).Address(True, True)
     WriteFormula = r + 1
 End Function
 
 ' Find the row a named single-cell range sits on (for building dependent formulas).
 Private Function RowOfName(ws As Worksheet, ByVal nm As String) As Long
     On Error Resume Next
-    RowOfName = ThisWorkbook.Names(nm).RefersToRange.Row
+    RowOfName = ThisWorkbook.names(nm).RefersToRange.row
     On Error GoTo 0
 End Function
 
 ' Remove all pano* names so a rebuild is clean.
 Private Sub ClearPanoNames()
     Dim n As Name
-    For Each n In ThisWorkbook.Names
+    For Each n In ThisWorkbook.names
         If Left(n.Name, 5) = "panoL" Or Left(n.Name, 5) = "panoP" _
            Or Left(n.Name, 5) = "pano_" Then n.Delete
     Next n

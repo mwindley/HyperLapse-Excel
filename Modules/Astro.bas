@@ -292,7 +292,7 @@ Public Sub GenerateGCTable()
     ws.Columns("A:I").AutoFit
 
     LogEvent "ASTRO", "GC table generated -- " & (row - 2) & " rows"
-    MsgBox "Astro table generated on AstroTable sheet.", vbInformation
+    ' MsgBox "Astro table generated on AstroTable sheet.", vbInformation   ' popup removed: success now silent, detail is in Log; pops only on error
 End Sub
 ' ============================================================
 ' Sun position calculation
@@ -1073,8 +1073,8 @@ Public Sub UpdateGCTimes()
     setSheet.Range("dataGCSetTime").value = gcSet
     LogEvent "ASTRO", "GC times: rise=" & Format(gcRise, "yyyy-mm-dd HH:nn") & _
              " transit=" & Format(gcTransit, "HH:nn") & " set=" & Format(gcSet, "yyyy-mm-dd HH:nn")
-    MsgBox "GC times updated:" & vbCrLf & _
-           "Rise:    " & Format(gcRise, "ddd HH:nn") & vbCrLf & _
-           "Transit: " & Format(gcTransit, "ddd HH:nn") & vbCrLf & _
-           "Set:     " & Format(gcSet, "ddd HH:nn"), vbInformation, "UpdateGCTimes"
+    ' MsgBox "GC times updated:" & vbCrLf & _   ' popup removed: success now silent, detail is in Log; pops only on error
+    '        "Rise:    " & Format(gcRise, "ddd HH:nn") & vbCrLf & _
+    '        "Transit: " & Format(gcTransit, "ddd HH:nn") & vbCrLf & _
+    '        "Set:     " & Format(gcSet, "ddd HH:nn"), vbInformation, "UpdateGCTimes"
 End Sub

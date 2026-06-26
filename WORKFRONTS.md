@@ -1,9 +1,86 @@
 # HyperLapse Cart — Open Workfronts
 
-**As of:** Day 34, 16 Jun 2026 (firmware soak-v152). For the freshest
-status read **SOON_LIST.md** (status review at top); this file keeps the
-workfront catalog. The Day-31 block + numbered catalog below are kept as the
-standing record.
+**As of:** Day 35, 22 Jun 2026 (firmware soak-v188). This file is the
+workfront catalog + standing record. The Day-31 block below is kept as a
+historical checkpoint (labelled as such). Numbered entries marked
+RETIRED/CLOSED are done; the rest are open.
+
+## Closed Day-35 (17 Jun) — PanoCycle 2-row grid (landscape 2x4)
+
+- **PanoCycle reshaped to a landscape 2x4 grid** (4 yaw columns x 2 pitch rows,
+  8 cells). Driver: the RS4 Pro portrait mount won't balance the Canon R3, so the
+  body stays landscape and the second framing dimension is a pitch ROW. Firmware
+  soak-v153 + Excel PanoSheet.bas + PanoConfigPush.bas. ON-RIG VERIFIED on a live
+  arch GP (NOT yet flown overnight).
+- **Cart contract = dumb:** PanoConfig gains `rows` + `rowstep`; the cart fans the
+  yaw columns over `rows` pitch rows (row r pitch = centre + r*rowstep). Lower row
+  = the arch GP Rp (live via offP, not pushed); upper = Rp + rowstep. Per-cell via
+  panoCellTargetYaw/Pitch. Firing raster (bottom L->R then top L->R); cable-unwind
+  RETURN targets cell 0.
+- **rowstep from the PANO sheet** = vfov/2 (50% vertical overlap); vfov uses the
+  short edge for landscape. 14mm -> ~41 deg (whole-degree on the wire).
+- **PanoCentre unchanged:** rows=1, pose-pitched, operator out-and-back.
+- **Authoring fix (trace-found, no code change):** the arch GP must be Action =
+  "Track-yaw" (mode Y, reads Rp), NOT "Track" (mode F, reads Dpitch). With "Track"
+  the push sent offp=0 and the lower row sat at 0; Track-yaw -> offp=Rp.
+- **Cadence:** 2x4 = 193.7 s/cycle (8 photos), ~24.5 s/photo, Tv-dominated (Tv=20s
+  = 83%); was ~124 s at the old 5-shot single row.
+
+Standing (Day-35 flags, not bugs): the RETURN rate-log spikes (173/87 dps) are a
++-180 logger-wrap artefact, not real whip (commanded slew is a single 40 dps move)
+- confirm on footage. 2-min idle auto-de-energise can fire mid-pano (harmless when
+parked through the arch). pano_planner.py still labels the 2nd block "Portrait" +
+draws it single-row - cosmetic, doesn't show the grid. On-sky overnight is the real
+proof.
+
+## Closed Day-35 continued (17 Jun) — manual pano buttons, field network, headless boot, WiFi retry
+
+- **Gimbal-UI manual pano (v154-v157).** Pano Center + Pano Cycle buttons on the
+  Gimbal Recon screen, both firing at the CURRENT gimbal pose. Endpoints
+  /gimbal/panocentre + /gimbal/panocycle (ordered before the /gimbal/pano prefix),
+  panoStart(force_pose,oneshot), refused while a plan/track/shutter runs
+  (manual-framing only; buttons grey out on exec RUNNING). All on-rig verified.
+- **Three manual-pano fixes (v155-v157):** v155 read live camera Tv via
+  ccapiGetCurrentTv(), NO 800ms default - refuse if unreadable (this was the v144
+  fault reintroduced by copying an old idiom); v156 manual Center skips the rejoin
+  fire (no 5th frame standalone); v157 one-shot Cycle returns to the captured
+  CENTRE not cell 0 (was drifting 78deg/press on repeat).
+- **Field-test network (v158).** Wavlink AX6000 "RosedaleVan" 192.168.20.x; cart
+  static .20.97, camera CCAPI .20.99, gw/dns .20.1. Excel dataArduinoIP -> .20.97.
+  Router must broadcast 2.4GHz + WPA2 (Giga is 2.4/WPA2-only).
+- **Gated serial logging (v159).** GatedLog drops USB writes when no host -> boots +
+  serves headless. (Insufficient for mid-run physical unplug - see open item below.)
+- **WiFi join retry (v160-v162) = the real fix.** Cold-start first WiFi.begin is
+  unreliable (bench: attempt 1 FAIL even with a 3s settle, attempt 2 connect). Now
+  config once + up to 5 begin attempts before AP fallback. VERIFIED end-to-end on
+  VIN-only, no serial lead: joins RosedaleVan in ~30s, reachable at .20.97. The 3s
+  settle is kept but is NOT the mechanism.
+
+OPEN (Day-35, carried):
+- **Serial-write quarantine (DEFERRED, robust fix).** A physical USB unplug doesn't
+  drop DTR, so (bool)Serial stays true and a mid-run Serial.write can still block
+  the loop (observed: pano halted between photo 1 and 2 on unplug, resumed on
+  replug). availableForWrite is unreliable on this core, so gating on connection
+  state can't be made safe. Fix: route all logging through a lossy ring buffer
+  drained by ONE dedicated logging thread (the only caller of Serial.write); the
+  loop/pano/HTTP never block. Not yet built.
+- **Manual pano endpoints print from the HTTP thread** (against the stash-to-volatiles
+  pattern; harmless while unplugged via the gate, small interleave risk plugged).
+- **On-sky 2x4 PanoCycle overnight** still the real proof (bench + rig-serial green).
+- **Runtime WiFi auto-reconnect (SUPERSEDED -> see #47 RETIRED Day 35: BUILT + verified).**
+  [The note below was the original FUTURE framing; the reconnect has since been
+  built, on-rig verified under idle/pano/track, and retired - see the #47 entry.]
+  Traced 17 Jun: WiFi connect +
+  retry runs ONCE in setup() only; the sole loop-side WiFi code is soakLinkWatch(),
+  which just logs LINKDOWN/LINKUP to the SD CSV - it never calls WiFi.begin. So if
+  RosedaleVan drops and returns mid-run, a loaded plan keeps executing cart-side
+  (RAM), but Excel/UI/CCAPI-over-WiFi stay unreachable until a power-cycle (driver-
+  level silent re-associate is unverified - assume none). For an overnight rig this
+  is a real gap. Fix: have loop() watch WiFi.status() (the LINKDOWN edge is already
+  detected) and, once down for a few seconds, re-run WiFi.config + WiFi.begin to
+  re-join - NON-blocking and throttled (retry every ~10-15s, skipped while STA up)
+  so it never stalls the photo loop. Mirrors the boot retry. Confirm throttle/approach
+  before building.
 
 ## Closed Day-34 (16 Jun) — pano + cable wind
 
@@ -350,6 +427,32 @@ Not yet built (and acceptable for production):
   `last_table_tv`, `last_table_iso`, `findTableRowForTv`,
   `/debug/match`). Rebuilt from scratch in v2 if/when needed.
 
+  **v2 ENABLER (recorded Day 35): the manual backup ladder CAN run
+  over the W5500 wired link.** The "logically impossible" reasoning
+  only holds when ALL cart->camera comms ride WiFi. The Giga has a
+  W5500 Ethernet path to the camera that is independent of the WiFi
+  AP. So the failure mode that triggers TABLE (WiFi/AP drop, or
+  Excel<->cart link loss) does NOT necessarily take down cart->camera
+  CCAPI if that runs over the W5500 hardwire. In that case the cart
+  CAN still PUT Tv/ISO. The v2 build is therefore:
+    1. On LIVE->TABLE, capture the millis->sunset offset (t_rel at the
+       moment of the drop) and find the current rung on the pushed
+       Tv/ISO ladder (the retired `findTableRowForTv` math) so the
+       table resumes from where the live LUM walk had progressed - no
+       jump.
+    2. Each cycle in TABLE, evaluate formulaTv/formulaIso at the live
+       getCurrentTrel() and PUT over the W5500 link, continuing the
+       Tv/ISO walk toward sunset/sunrise on the time curve.
+    3. Verify findability against current verified state: the pushed
+       table blocks (exp_sstv/ssiso/srtv/sriso) ARE received + stored
+       and the anchor (t0ss/t0sr/cross) drives getCurrentTrel() off
+       the local clock - both already present; only the seed + the
+       per-cycle PUT-over-W5500 are missing.
+  Status as of Day 35: NOT in the sketch (grep confirms no
+  findTableRowForTv / last_table_tv / delta_trel; formulaTv/Iso are
+  reachable only via `/debug/formula`). TABLE currently just freezes
+  Tv/ISO and fires the pin until a recovery probe restores LIVE.
+
 **#36d cleanup (CLOSED Day 15 part 6).** Traced through the
 original "dead state vars" list. Verified status of each:
 - `FETCH_FAIL_BACKOFF_CYCLES` — dead, removed Day 15 part 5.
@@ -451,7 +554,7 @@ Ethernet, different stack, much more SRAM). Whether to restore
 the polite DELETE on /stop in v2 is a decision for that build —
 measure first if the crash mechanism still surfaces.
 
-**#47 Production v2 — wired Ethernet to camera (FUTURE,
+**#47b Production v2 — wired Ethernet to camera (FUTURE,
 not blocking).** v1 (current all-WiFi via external AP) is
 sufficient. v2 reduces comms risk fundamentally by moving
 the camera link to a wired Ethernet point-to-point.
@@ -987,6 +1090,334 @@ operator-in-the-loop absolute reference vs IMU-driven.
 streams pose updates to gimbal via CAN. Sizing study: how often
 is fast enough for smooth motion? Defer until first prototype
 running.
+
+**#49 Laptop-side background alarm watcher (RETIRED Day 35 - built + delivered).**
+DELIVERED: standalone hyperlapse_watcher.py polls /exec/feed every 5s,
+ack-to-silence always-on-top Tk pop-up + one log line per event,
+single-instance pidfile lock. 8 conditions: heading window, link-down
+(watcher-side, the whole point), cbatt low, paused, plan ended, cart
+batt < threshold, cam=nok / can=err, photos stalled. Threshold is the
+cart-served "battlow" (Excel dataCartBattLow -> /settings/battlow, v186)
+so watcher + cart agree. Watcher.bas Start/Stop; StartWatcherAuto fires
+from GimbalPrep.PushToCart (Prep Cart) with a single-instance guard;
+Stop confirmed on the Windows build. The remaining live-test of the
+non-link conditions (cam/can/plan-end/photos-stalled/heading) is left to
+normal field use - the mechanism is in and the link-down alarm is
+confirmed live. NOT pursued further unless a condition misfires.
+
+ORIGINAL NOTE:
+The Exec-page audio
+alarm (camera batt low, comms lost, plan end/fault) only sounds
+while the Exec tab is OPEN, FOREGROUND, and the device AWAKE -
+the beep is the page's JS poll loop + Web Audio, which the browser
+suspends when the tab is backgrounded or the screen locks (noted
+in the #36/Exec alarm work). For an unattended overnight rig that
+is exactly when it is needed and absent. Workfront: a background
+process on the operator laptop (Excel/VBA on a timer, or a small
+Python service) that polls the cart's /exec/feed (or /status) on a
+fixed cadence INDEPENDENT of any browser tab, edge-detects the
+alarm conditions itself, and raises an OS-level alert (sound +
+notification) that does not depend on a focused page. Must keep
+working when the cart link drops (the alarm IS the link-loss) -
+so a missed poll / connection refused is itself an alert state,
+not silence. Scope notes: poll target + fields (cbatt, comms,
+plan state); cadence; which conditions alert; dedup/re-alert
+cadence; how it coexists with the W5500 vs WiFi transport (the
+UI/Excel link rides WiFi either way). Independent of firmware -
+this is a laptop-side watcher consuming endpoints the cart
+already serves.
+
+DETECT LIST (agreed Day 35, source of truth = the 5 edge-triggered
+UI beeps in the Exec page xRender, ~line 9841). MIRROR these 5 so
+the watcher fully replaces the browser beep:
+  1. Heading window open - any earth-frame GP row in its red/alert
+     window (operator must set a compass heading). UI: 880Hz double.
+     Feed: f.rows[].alert && f.rows[].earth.
+  2. Connection lost - feed stale > 10s. UI: 300Hz triple. Feed:
+     xAge() > 10. NOTE the watcher gets this FOR FREE and stronger:
+     its own poll failing (refused/timeout) IS this alarm, and it
+     fires even when the browser tab could not (the whole point).
+  3. Camera batt low - f.cbatt == 'low'. UI: 1200Hz triple.
+  4. Pause reached - plan frozen at a pause. f.paused. UI: 600Hz single.
+  5. Plan ended - f.state == 'DONE'. UI: descending double.
+PLUS 3 NEW (not in the UI beep set, agreed to add):
+  6. Cart batt low - f.batt < threshold (UI shows it, never beeped).
+  7. Plan fault - fault/error flag.
+  8. Photos stalled - frame count not rising while RUNNING.
+All 8 read from /exec/feed. Edge-triggered (alert on false->true) with
+a re-alert cadence so a persistent condition re-nags (the UI's
+once-only edge is a known weakness; the watcher should periodically
+re-sound while still true). Still to design: poll cadence, stale
+threshold, re-alert interval, host (Python service vs Excel timer),
+alert surface (sound + OS notification + log).
+
+BUILD SPEC (LOCKED Day 35):
+- HOST: standalone Python process, Windows. Independent of Excel so it
+  survives an Excel hang (the watchdog must outlive the thing it
+  watches). winsound for the alarm tone, Tkinter always-on-top window
+  for the ack pop-up (both ship with Python - no installs).
+- POLL: GET http://192.168.20.97/exec/feed every 5s. >15s with no good
+  reply (3 missed polls) = LINK-DOWN alarm. The poll FAILING is itself
+  the link-down detector - works precisely when the cart is
+  unreachable, which the browser beep cannot.
+- FEED FIELD MAP (read from execFeedJSON, ~line 5405; exact keys):
+    1 heading window : rows[].st=='now'/alert AND row is earth-frame
+                       (mirror UI hdgOpen = rows.some(alert && earth))
+    2 link down      : poll fail / no reply >15s (watcher-side)
+    3 camera batt low: cbatt == "low"
+    4 pause reached  : paused == true
+    5 plan ended     : state == "DONE"
+    6 cart batt low  : batt < THRESHOLD volts (batt = Tic Vin; set the
+                       low-volt threshold from the pack - TBD value)
+    7a camera link   : cam == "nok" (CCAPI lost/degraded: PROBING/table).
+    7b gimbal CAN     : can == "err" (CAN tx errors = gimbal comms lost).
+                       (Two DISTINCT alarms, not one generic "fault", so the
+                        pop-up names which hardware - camera vs gimbal.)
+    8 photos stalled : photos not rising while state == "RUNNING"
+                       (watch photos across polls; flat for >1 interval)
+  Other useful keys present: state (IDLE/LOADED/RUNNING/DONE), cur, n,
+  pano (0 idle..6 done), health (green/orange). rssi is in the feed but
+  NOT used (operator rule: signal is off-limits as a factor).
+- ARMING: poll always runs. Conditions 4/5/7/8 (plan-related) arm only
+  when state==RUNNING; 2/3/6 (reachability + power) arm whenever the
+  cart should be up; 1 (heading) when a plan is LOADED/RUNNING.
+- ALERT: on a false->true edge, sound loops + an always-on-top pop-up
+  shows until the operator clicks ACK. Ack silences THAT condition; it
+  stays silent until the condition clears and re-occurs (clean edge
+  re-arm, replaces a timed re-nag). Multiple conditions = stacked/
+  queued pop-ups. One LOG LINE per event (timestamp, condition, value)
+  appended to a file.
+- CONTROL (start two ways, single-instance lock so they never double):
+    AUTO  - the Excel START button's existing push chain also Shells
+            "pythonw watcher.py"; plan-stop / E-STOP stops it.
+    MANUAL- a Start Watcher / Stop Watcher button pair in HyperLapse.xlsm
+            (run early during idle/recon to catch link/batt pre-shoot).
+    LOCK  - watcher writes a pidfile / named mutex on start; a second
+            launch sees it and no-ops, so AUTO is harmless if MANUAL
+            already started one.
+- TARGET IP: WiFi build 192.168.20.97. On a future W5500 build the
+  UI/Excel link still rides WiFi, so the same IP/endpoint holds.
+Status Day 35: spec locked, NOT yet built. Open value: cart-batt low
+threshold (#6), and cart-batt low threshold (#6). Fault split FINAL: 7a cam=="nok" (camera link), 7b can=="err" (gimbal CAN) - both alarm, named distinctly. cbatt=="low" alarms directly (no critical tier).
+
+**#47 WiFi runtime reconnect + cold-start cost (RETIRED Day 35 - built + verified).**
+DELIVERED + on-rig verified: cold-start tuned (v174; worst ~14.7s vs
+~21.5s), free WiFi.status() drop-detect, and a runtime reconnect that
+re-begins only in dead-time slots (plan fire-boundary, pano return-slew,
+idle), scan-gated so a down AP costs only a ~410ms scan (no ~15s begins
+block). Verified reconnect under idle, live pano, and live GC track -
+D7 carries the outage, gate bails free, link + CCAPI recover. The bound
+:80 socket re-serves after reconnect (UI-return slow case proved
+client-side, #uihealth). Diagnostic trace stripped (v187). ACCEPTED
+residual: a rare cold boot still burns all 5 join attempts (module
+coin-flip) and that window fails - not chased further; the cart simply
+retries and the field net has been reliable. NOT pursued unless it bites.
+
+ORIGINAL NOTE:
+Two parts, one
+session of bench tracing (Day 35, spare Giga, sketch
+WiFi_BeginTiming_Giga_Bench.ino, module fw 1.94.0, AP RosedaleVan
+-71..-74 dBm).
+
+MEASURED FACTS (cold-boot bench, repeated):
+- `WiFi.status()` costs ~0.1 us (cached read), down AND up. So the
+  reconnect detector / link poll is FREE - poll it anywhere, no
+  budget, no window gating. Closes the only open cost question.
+- `WiFi.setTimeout()` is NOT honoured: with setTimeout(2000) the
+  failing begin still blocked ~7.9-9.4s. Dead lever (matches the
+  PREFERENCES note on connect-timeout).
+- The FIRST `WiFi.begin` after power-on is a NON-DETERMINISTIC
+  coin-flip: ~1 in 4 connects first try, the rest block ~9.4s then
+  return CONN_FAILED. Independent of settle (0 or 3s), prime
+  (disconnect / end), timeout, or pre-scan - none changed it. AP is
+  VISIBLE in scanNetworks on the failing attempts (-71 dBm), so it
+  is ASSOCIATION, not discovery. Intrinsic to the module/fw.
+- Attempt 2 from status_before=CONN_FAILED connects RELIABLY in
+  ~3.5s, every run.
+- The 3s boot settle (#wifisettle) buys nothing and may worsen it
+  (the 3s-settle runs blocked longer). Removable.
+
+CONCLUSION - do NOT fight attempt 1; design to expect it to fail
+and reach attempt 2 fast. Two cheap firmware wins (boot join):
+  1. DROP the 3s settle (no benefit).
+  2. BAIL re-begin the instant status==WL_CONNECT_FAILED instead of
+     sitting the poll cap (~5s saved, measured 21.5s -> 16.4s ->
+     14.7s stable). The ~9.4s failed-begin block itself is the
+     module's, not ours - unavoidable.
+Result envelope: best ~5.7s (attempt 1 hits), worst ~14.7s
+(attempt 1 misses, attempt 2 carries) vs old ~21.5s.
+
+RUNTIME RECONNECT design (from the detect/retry table, Day 35):
+- Detect "maybe down" is FREE off the existing CCAPI/meter fail on
+  the WiFi build (CCAPI rides the AP). On the W5500 build CCAPI is
+  on the cable and blind to the AP, so there the detector is a
+  WiFi.status() poll (free) on a 60s cadence - the UI/Excel link
+  still rides WiFi even in a W5500 build ("CCAPI to camera only").
+- Confirm + retry: WiFi.status() to disambiguate AP-vs-camera, then
+  re-begin in an allowed-block window (60s cycle task slot for a
+  plan, pano return slew for a pano). Retry MUST tolerate attempt 1
+  failing - a reconnect may take two begins (first throwaway,
+  second carries), same as boot.
+- comms_mode PROBING is NOT reused as the universal flag (it can't
+  see an AP drop on the W5500 build); kept out of this design.
+
+IMPLEMENTED + ON-RIG VERIFIED (Day 35, v174-v179):
+- BOOT (v174): 3s settle dropped, join poll BAILS on WL_CONNECT_FAILED.
+  Three cold boots ~14.4-14.7s (attempt-1 miss path), best ~5.7s, vs
+  old ~21.5s. The ~9.4-12s attempt-1 block is module-intrinsic and
+  one-time at boot - accepted (unfixable + cheap). Boot does NOT gate
+  on scan (begin connects even when scan says NOT visible).
+- DETECT (v175): free WiFi.status() poll, identical WiFi/W5500 rule.
+  The CCAPI hint is IGNORED for WiFi-reconnect (status is free, so no
+  need to piggyback); CCAPI-camera-reachability stays CCAPI's own job.
+- RECONNECT placement (v179): wifiReconnectTick() is called ONLY from
+  dead-time slots so the begins never delay a frame: the PLAN
+  fire-boundary (beside batt-poll/TABLE-probe/LUM), the PANO return
+  slew (beside the LUM walk), and the main loop ONLY when fully idle
+  (shutter_mode 0 + pano IDLE/DONE). Internal phase/fire gates removed
+  - the caller guarantees the slot; kept the 15s rate-limit.
+- RECONNECT body: NO disconnect()/end() (measured v176c: after
+  disconnect() the scan goes blind; not disconnecting keeps the
+  NetworkInterface + bound :80 socket so httpThreadFn's accept() loop
+  resumes serving on its own). SCAN-GATED (v178): scan first, run the
+  blocking begins ONLY if RosedaleVan is VISIBLE - so a down AP costs
+  only the ~410ms scan per 15s window, never the ~15s begins block.
+  Up to WIFI_RC_BEGINS=4 begins in-window (each CONN_FAILED-bail +
+  300ms gap) to mirror boot's attempt1-fail -> attempt2-connect.
+- ON-RIG result: AP down -> scan NOT visible -> no begins, just cheap
+  scans. AP back -> scan VISIBLE same window -> begins run, connects,
+  IP restored. The begins window measured ~15.5s (LOOP-LONG) but lands
+  in idle/dead time so harmless. UI re-serve after reconnect: bound
+  :80 socket survived (accept loop resumed) - the v175 BENCH-CHECK is
+  thus effectively confirmed in the reconnect path.
+OPEN: fast-cadence plans (interval < the begins block) have no gap big
+enough; reconnect there waits for an idle/boundary slot. Not hit in
+practice (astro is long-interval). Boot all-fail-fast path (rare slow
+boot) still un-hardened. Per-begin + scan trace lines left in for now.
+
+**#47a Reconnect test under a LIVE plan and a LIVE pano (CLOSED Day 35).**
+VERIFIED on-rig: reconnect now tested under idle, a live pano (3-cycle
+shoot, D7 carried), AND a live GC Track-yaw plan (v185 run). In every
+case D7 carried the outage at clean 2s cadence, the gate bailed free
+while down, and the link + CCAPI recovered (probe -> LIVE). The ~15s
+reconnect begins block lands in dead time (harmless). Remaining costs
+are the #50 items (18s first-hit, recovery 503 flag-lag), not reconnect
+itself.
+
+ORIGINAL NOTE (FUTURE):
+The Day-35 on-rig reconnect verification was done with the cart IDLE
+(no plan, no pano) - the begins blocked ~15.5s in dead time, harmless.
+NOT yet tested is reconnect firing from its in-plan / in-pano slots:
+(1) start a real timelapse plan, drop the AP mid-run, confirm reconnect
+runs at the PLAN fire-boundary, pin-7 keeps firing (one frame may nudge
+~the begins-duration but none dropped), and the link restores; (2) run
+a looping arch PanoCycle, drop the AP, confirm reconnect runs in the
+PANO return slew without disturbing the cells or the cable unwind.
+Watch: the ~15s begins block landing at a boundary vs the actual
+inter-frame gap - if the plan interval is shorter than the block, the
+fire IS delayed (expected, accepted for long-interval astro; the
+fast-cadence OPEN item above). Capture LOOP-LONG + the photo cadence
+around the reconnect window to quantify the real nudge.
+
+**#50 CCAPI connect 30s loop-block + reachability gate (CLOSED/RETIRED Day 35, v181-v183).**
+[PROBLEM] On a WiFi/camera outage a CCAPI fire blocked ~30s on the
+main loop (serial: connect=30117ms FAILED nsapi=-3004,
+max_loop_us=30420618), freezing the loop, breaking cadence (a gap
+hit 65s), and keeping D7 firing far longer than it should. D7 stops
+the instant comms_mode returns NORMAL and a CCAPI fire succeeds -
+no latch, re-evaluated every frame (firePhoto).
+
+[MEASURED - CCAPI_Connect_Timing_Bench.ino, on rig]
+- Camera ALIVE: connect ~1-400ms, fine.
+- Camera DEAD: sock.connect() blocks ~25-30s then nsapi=-3004.
+- set_timeout(2000) does NOT bound connect (measured ~30s anyway).
+- set_blocking(false) + own millis() deadline ALSO does not bound it
+  (~30s) - mbed connect() is fully synchronous at the lwIP level on
+  this Murata stack. So connect CANNOT be made fast-fail from the
+  socket side, by either lever.
+- PING-GATE (method 2): WiFi.ping(camera, 255, 1000) FIRST - dead
+  camera fails the ping in ~999ms (rtt=-1); only call the blocking
+  connect if the ping succeeds. Camera back: ping 108ms -> connect
+  1ms. PROVEN: the 30s block is never entered when the camera is dead.
+
+[DESIGN - ping-gate at the chokepoint, settled, NOT yet coded]
+- Gate ONE place: inside ccapiRequestRawSocket (before sock.connect),
+  so ALL CCAPI callers are protected by one guard - sweep confirmed
+  firePhoto, meterAndAdjustLive, and the exposure PUTs ALL share the
+  blind-connect risk, not just firePhoto. #36d already IS the
+  cheap-check pattern but only runs in TABLE mode on 60s.
+- COST MANAGEMENT (do NOT ping every fire all night):
+  * Healthy CCAPI -> NO pings. A successful CCAPI fire proves the
+    camera reachable for free; the next fire needs no ping.
+  * First failure after a drop pays the 30s once (flag flips to
+    unreachable). The gate prevents the 2nd..Nth each costing 30s.
+  * While unreachable -> ping on the slow recover cadence (the
+    existing 60s), D7 carrying the shoot meanwhile. Ping success ->
+    NORMAL, stop pinging. = the existing #36d ping-only-when-degraded.
+- PING MUST NOT DELAY D7: fire D7 FIRST (~0.2s), then ping in the
+  leftover cadence slack (~1.8s of a 2s interval) - the fire-boundary
+  slot already used by batt poll + TABLE probe. Works because
+  ping(1s) < post-fire slack; astro cadences >=2s always have room.
+  (A cadence < ~1.2s would not fit - not used in practice.)
+- CAMERA-IDLE CONSTRAINT: the camera responds poorly while TAKING the
+  photo or SAVING to card. The ping must land in the camera-IDLE
+  window (after save completes, before the next fire), NOT mid-
+  exposure / mid-save - the same rule the existing fire-boundary
+  CCAPI traffic already follows. So the ping goes in the LATE part of
+  the post-fire slack, not immediately after the trigger.
+
+[ALSO] D7 currently stops on the first CCAPI HTTP-200 after recovery,
+not on camera-confirmed-ready (200 = camera reached + endpoint
+accepted, NOT photo-confirmed). Deeper cause of "D7 ran too long" is
+the 30s loop-freeze above, not the latch; fixing the block fixes the
+symptom. Whether D7 should LATCH until the camera is confirmed
+properly back (not just first 200) is a separate decision.
+
+IMPLEMENTED (v181-v183, on-rig verified):
+- v181 put a per-fire ping in ccapiRequestRawSocket. v182 fixed the
+  ping to the 3-arg WiFi.ping(ip,255,1000) form (the 1-arg form
+  returned -1 in 0ms when WiFi was down - no real timeout). v183 then
+  REMOVED the per-fire ping entirely: it DUPLICATED the existing #36d
+  recovery probe, which already pings on an economical cadence
+  (every-3rd-photo in PROBING, then 1s/60s in TABLE) and was taxing
+  every degraded fire ~1.2s on the loop.
+- FINAL design (v183): the gate at ccapiRequestRawSocket just READS
+  camera_reachable (free) and bails instantly if false - no ping in the
+  hot path. The #36d probe is the SINGLE ping source and sets
+  camera_reachable=true on success; connect-fail/non-200 sets it false;
+  a 200 sets it true. While down, every fire = free flag read + D7.
+- ON-RIG RESULT: D7 carried a full outage at clean 2s cadence (~232ms
+  loops), gate bailed free once flagged down (no repeat 30s blocks),
+  recovery clean (probe -> LIVE -> CCAPI resumes).
+OPEN (minor, both observed, neither breaks anything):
+- FIRST-HIT 18s: the first connect after a drop still blocks ~18s
+  because camera_reachable is true going in (nothing knew yet). The
+  gate stops the 2nd..Nth; only the first pays. To kill even the first,
+  the flag would need to start pessimistic or key off WiFi.status().
+- RECOVERY 503 flag-lag: on probe success the comms flip to NORMAL can
+  beat the camera_reachable=true update by one frame, so the liveview
+  restart hit "503 gate: camera unreachable (flag)" once, self-corrected
+  next frame. One-frame ordering gap between probe-says-up and flag-up.
+RETIRED Day 35: the gate is implemented and on-rig verified across idle,
+pano, and live track. The two residuals are ACCEPTED, not blockers:
+- first connect after a drop pays ~18s ONCE (flag true going in); gate
+  stops every one after. Live with it unless it bites in the field.
+- recovery 503 flag-lag self-corrects the next frame.
+Not done, folded into general hygiene: a sweep for other blocking
+chokepoints (CAN/SD/Tic) - none observed blocking in any soak run, so
+not pursued unless one surfaces.
+
+**#uihealth UI slow to return after reconnect (CLOSED Day 35 - client-side).**
+After a WiFi reconnect the UI sometimes came back slowly (iPhone worse
+than laptop). Suspected the cart's :80 server socket not resuming
+accept(). v185 added an accept-error trace (err code + count, rate-
+limited). RESULT: the socket throws a few -3004 accept errors only at
+BOOT and self-recovers in ~0.5s ("accept recovered after 4 errors"); at
+the mid-run reconnect there were ZERO accept errors and the UI returned
+quickly. So the cart socket re-serves fine - NO re-bind needed. The
+earlier slow return was CLIENT-SIDE (the iPhone holding a stale TCP
+connection longer than the laptop). The v185 trace can stay (cheap,
+boot-only) or be removed later. Conclusion: cart is not at fault.
 
 ---
 

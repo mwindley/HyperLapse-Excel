@@ -153,7 +153,7 @@ Public Sub PushGimbalPlan()
         doneMsg = doneMsg & vbCrLf & vbCrLf & "WARNING: exceeds cart's " & _
                   TRACK_PLAN_MAX & "-interval limit."
     End If
-    MsgBox doneMsg, vbInformation, "PushGimbalPlan"
+    ' MsgBox doneMsg, vbInformation, "PushGimbalPlan"   ' popup removed: success now silent, detail is in Log; pops only on error
 
     Exit Sub
 

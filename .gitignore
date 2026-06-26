@@ -1,8 +1,12 @@
-Python/*.txt
+Python/*.log
+Python/conn_probe.csv
+Python/watch_camera.csv
+__pycache__/
+*.log
 Python/out.png
 Python/out.svg
-~$*.xlsm
-__pycache__/
-*.exe
+Python/render_log.txt
+Python/cablestrip_log.txt
+cd
+exiftool.exe
 exiftool_files/
-ARCHIVE/putty.log

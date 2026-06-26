@@ -204,16 +204,16 @@ Public Sub PushAstroToCart()
             Format(moonSetAz, "0.0") & deg & " / " & Format(moonSetAlt, "0.0") & deg & vbCrLf
         If moonMsg = "" Then moonMsg = "Moon: no rise/set in tonight's window" & vbCrLf
 
-        MsgBox "Astro pushed to cart." & vbCrLf & vbCrLf & _
-               "Sun rise:  " & Format(sunRiseAz, "0.0") & deg & " / " & Format(sunRiseAlt, "0.0") & deg & vbCrLf & _
-               "Sun set:   " & Format(sunSetAz, "0.0") & deg & " / " & Format(sunSetAlt, "0.0") & deg & vbCrLf & _
-               IIf(mwOK, _
-                  "MW rise:   " & Format(mwRiseAz, "0.0") & deg & " / " & Format(mwRiseAlt, "0.0") & deg & vbCrLf & _
-                  "MW mid:    " & Format(mwMidAz, "0.0") & deg & " / " & Format(mwMidAlt, "0.0") & deg & vbCrLf & _
-                  "MW end:    " & Format(mwEndAz, "0.0") & deg & " / " & Format(mwEndAlt, "0.0") & deg & vbCrLf, _
-                  "MW: not above horizon in dark window" & vbCrLf) & _
-               moonMsg, _
-               vbInformation, "Push Astro to Cart"
+        ' MsgBox "Astro pushed to cart." & vbCrLf & vbCrLf & _   ' real-push success popup removed: silent on success, detail in Log; DRY RUN + errors kept
+               ' "Sun rise:  " & Format(sunRiseAz, "0.0") & deg & " / " & Format(sunRiseAlt, "0.0") & deg & vbCrLf & _
+               ' "Sun set:   " & Format(sunSetAz, "0.0") & deg & " / " & Format(sunSetAlt, "0.0") & deg & vbCrLf & _
+               ' IIf(mwOK, _
+                  ' "MW rise:   " & Format(mwRiseAz, "0.0") & deg & " / " & Format(mwRiseAlt, "0.0") & deg & vbCrLf & _
+                  ' "MW mid:    " & Format(mwMidAz, "0.0") & deg & " / " & Format(mwMidAlt, "0.0") & deg & vbCrLf & _
+                  ' "MW end:    " & Format(mwEndAz, "0.0") & deg & " / " & Format(mwEndAlt, "0.0") & deg & vbCrLf, _
+                  ' "MW: not above horizon in dark window" & vbCrLf) & _
+               ' moonMsg, _
+               ' vbInformation, "Push Astro to Cart"
     Else
         LogEvent "ASTROPUSH", "HTTP " & sc & " " & respText
         MsgBox "Push failed. HTTP " & sc & vbCrLf & respText, vbExclamation
@@ -409,7 +409,7 @@ AfterFits:
               "Moon: " & IIf(pw.Exists("moon"), IIf(moonOK, "pushed", "FAILED"), "skipped (not in plan)") & vbCrLf & _
               "Arch rise: " & IIf(pw.Exists("arch_rise"), IIf(archRiseOK, "pushed", "FAILED"), "skipped (not in plan)") & vbCrLf & _
               "Arch set:  " & IIf(pw.Exists("arch_set"), IIf(archSetOK, "pushed", "FAILED"), "skipped (not in plan)")
-    MsgBox summary, vbInformation, "Push Track Paths to Cart"
+    ' MsgBox summary, vbInformation, "Push Track Paths to Cart"   ' real-push success popup removed: silent on success, detail in Log; DRY RUN + errors kept
 End Sub
 
 ' Fit cubic + push for one object. Returns True if all segments pushed OK.
@@ -712,11 +712,11 @@ Private Function FitCubic(ByRef ti() As Double, _
     ' Compute sums
     Dim S0 As Double, S1 As Double, S2 As Double, S3 As Double
     Dim S4 As Double, S5 As Double, S6 As Double
-    Dim Sy As Double, Sty As Double, St2y As Double, St3y As Double
+    Dim sy As Double, Sty As Double, St2y As Double, St3y As Double
     Dim t As Double, y As Double, t2 As Double, t3 As Double
     Dim i As Long
     S0 = 0: S1 = 0: S2 = 0: S3 = 0: S4 = 0: S5 = 0: S6 = 0
-    Sy = 0: Sty = 0: St2y = 0: St3y = 0
+    sy = 0: Sty = 0: St2y = 0: St3y = 0
     For i = LBound(ti) To UBound(ti)
         t = ti(i)
         y = yi(i)
@@ -729,7 +729,7 @@ Private Function FitCubic(ByRef ti() As Double, _
         S4 = S4 + t2 * t2
         S5 = S5 + t3 * t2
         S6 = S6 + t3 * t3
-        Sy = Sy + y
+        sy = sy + y
         Sty = Sty + t * y
         St2y = St2y + t2 * y
         St3y = St3y + t3 * y
@@ -737,7 +737,7 @@ Private Function FitCubic(ByRef ti() As Double, _
 
     ' Assemble augmented 4x5 matrix [M | b]
     Dim m(0 To 3, 0 To 4) As Double
-    m(0, 0) = S0: m(0, 1) = S1: m(0, 2) = S2: m(0, 3) = S3: m(0, 4) = Sy
+    m(0, 0) = S0: m(0, 1) = S1: m(0, 2) = S2: m(0, 3) = S3: m(0, 4) = sy
     m(1, 0) = S1: m(1, 1) = S2: m(1, 2) = S3: m(1, 3) = S4: m(1, 4) = Sty
     m(2, 0) = S2: m(2, 1) = S3: m(2, 2) = S4: m(2, 3) = S5: m(2, 4) = St2y
     m(3, 0) = S3: m(3, 1) = S4: m(3, 2) = S5: m(3, 3) = S6: m(3, 4) = St3y
@@ -1306,4 +1306,62 @@ Public Sub SetRealtimeAnchor()
         MsgBox "SetRealtimeAnchor failed (HTTP " & sc & ").", vbExclamation
     End If
 End Sub
+
+' ============================================================
+' #49 Cart battery low-V threshold push.
+'   Reads Settings!dataCartBattLow and pushes it to /settings/battlow.
+'   The cart stores it in cart_batt_low_v and echoes "battlow" in
+'   /exec/feed; the laptop alarm watcher reads that field and does the
+'   compare. Single source (this cell), no drift. Mirrors the astropos
+'   push (WinHttp GET, fail-fast timeouts).
+'   Add to GimbalPrep.PushToCart:
+'     ok = RunStep("AstroPush.PushBattLowToCart", "Push Cart Batt Low", rpt)
+'     If Not ok And STOP_ON_CART_FAIL Then GoTo done
+' ============================================================
+Public Function PushBattLowToCart() As Boolean
+    Dim setSheet As Worksheet
+    Dim arduinoIP As String
+    Dim lowV As Double
+    Dim url As String
+    Dim http As Object
+    Dim sc As Long
+    Dim respText As String
+
+    PushBattLowToCart = False
+    Set setSheet = ThisWorkbook.Sheets("Settings")
+    arduinoIP = CStr(setSheet.Range("dataArduinoIP").value)
+
+    If Not IsNumeric(setSheet.Range("dataCartBattLow").value) Then
+        LogEvent "BATTLOW", "dataCartBattLow not numeric - skipped"
+        MsgBox "dataCartBattLow is blank or non-numeric - set the cart battery low-volt threshold.", _
+               vbExclamation, "Push Cart Batt Low"
+        Exit Function
+    End If
+    lowV = CDbl(setSheet.Range("dataCartBattLow").value)
+
+    url = arduinoIP & "/settings/battlow?v=" & Format(lowV, "0.0")
+
+    On Error GoTo httpFail
+    Set http = CreateObject("WinHttp.WinHttpRequest.5.1")
+    http.Open "GET", url, False
+    http.SetTimeouts 5000, 5000, 5000, 8000
+    http.Send
+    sc = http.Status
+    respText = CStr(http.responseText)
+    On Error GoTo 0
+
+    LogEvent "BATTLOW", "HTTP " & sc & " " & respText & " (v=" & Format(lowV, "0.0") & ")"
+    If sc = 200 Then
+        PushBattLowToCart = True
+    Else
+        MsgBox "Push battlow failed. HTTP " & sc & vbCrLf & respText, _
+               vbExclamation, "Push Cart Batt Low"
+    End If
+    Exit Function
+
+httpFail:
+    LogEvent "BATTLOW", "HTTP exception: " & Err.Description & " url=" & url
+    MsgBox "Push battlow failed (could not reach cart): " & Err.Description, _
+           vbExclamation, "Push Cart Batt Low"
+End Function
 

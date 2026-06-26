@@ -1,6 +1,6 @@
 Attribute VB_Name = "CartPlanPush"
 ' ============================================================
-' HyperLapse Cart — Cart Plan Push (Day 24)
+' HyperLapse Cart - Cart Plan Push (Day 24)
 '
 ' Reads the LEFT-zone Cart Plan (DRIVE/STOP waypoint rows) on the
 ' Plan sheet and pushes it to the cart as /plan/load segments.
@@ -10,7 +10,7 @@ Attribute VB_Name = "CartPlanPush"
 ' yet push-capable (no Stage 4, cubics deferred).
 '
 ' Public entry:
-'   PushCartPlan — validate + build segments + (dry-run or real) push
+'   PushCartPlan - validate + build segments + (dry-run or real) push
 '
 ' Cart segment CSV (from sketch planParseSegment):
 '   TYPE,VAL,STEER,SPEED,END
@@ -160,9 +160,9 @@ Public Sub PushCartPlan()
 
     If sc = 200 Then
         LogCP "OK " & respText
-        MsgBox "Cart plan pushed: " & nSeg & " segment(s)." & vbCrLf & vbCrLf & _
-               respText & vbCrLf & vbCrLf & _
-               "Start with /plan/start when ready.", vbInformation, "PushCartPlan"
+        ' MsgBox "Cart plan pushed: " & nSeg & " segment(s)." & vbCrLf & vbCrLf & _   ' popup removed: success now silent, detail is in Log; pops only on error
+               ' respText & vbCrLf & vbCrLf & _
+               ' "Start with /plan/start when ready.", vbInformation, "PushCartPlan"
     Else
         LogCP "HTTP " & sc & " " & respText
         MsgBox "Push failed. HTTP " & sc & vbCrLf & respText, vbExclamation, "PushCartPlan"
@@ -193,7 +193,7 @@ Private Function BuildSegment(ByVal ws As Worksheet, ByVal r As Long, _
         turn = ws.Cells(r, COL_TURN).value
 
         ' Seed / start-marker row: DRIVE with no distance or no speed
-        ' (e.g. WP01 at Dist Sigma 0). Not a real move — skip silently,
+        ' (e.g. WP01 at Dist Sigma 0). Not a real move - skip silently,
         ' as in the earlier working cart-plan test. Signalled by
         ' rowErr="" AND return "".
         If (Not IsNumeric(distM)) Or (Not IsNumeric(speed)) Then
@@ -231,7 +231,7 @@ End Function
 
 
 ' ============================================================
-' Helpers — mirror AstroPush.bas Settings reads and transport.
+' Helpers - mirror AstroPush.bas Settings reads and transport.
 ' ============================================================
 Private Function ReadDryRunFlag() As Boolean
     On Error GoTo Defaulting
