@@ -35,7 +35,7 @@ Public Const ASTROPUSH_VERSION As String = "ASTROPUSH_v2026-06-08-zenithband"
 '
 ' DARK WINDOW
 '   Start = dataAstroDusk (astronomical dusk, sky truly dark)
-'   End   = dataPhase4aStart (proxy for astronomical dawn until
+'   End   = dataAstroDawn (real astronomical dawn, #57)
 '           Workfront #56 lands).
 '   MW rise/mid/end are intersected with this window.
 ' ============================================================
@@ -65,7 +65,7 @@ Public Sub PushAstroToCart()
     sunriseTime = setSheet.Range("dataSunriseTime").value
     sunsetTime = setSheet.Range("dataSunsetTime").value
     astroDusk = setSheet.Range("dataAstroDusk").value
-    darkEnd = setSheet.Range("dataPhase4aStart").value
+    darkEnd = setSheet.Range("dataAstroDawn").value
     arduinoIP = CStr(setSheet.Range("dataArduinoIP").value)
 
     ' Workaround for #57 (shoot-date anchor not yet implemented).
@@ -314,7 +314,7 @@ Public Sub PushTrackPathsToCart()
     sunsetTime = setSheet.Range("dataSunsetTime").value
     sunriseTime = setSheet.Range("dataSunriseTime").value
     astroDusk = setSheet.Range("dataAstroDusk").value      ' moon window only
-    darkEnd = setSheet.Range("dataPhase4aStart").value
+    darkEnd = setSheet.Range("dataAstroDawn").value
     ' MW now tracks the FULL GC above-horizon arc. Run UpdateGCTimes first.
     gcRise = setSheet.Range("dataGCRiseTime").value
     gcSet = setSheet.Range("dataGCSetTime").value
@@ -555,14 +555,14 @@ Private Function FitAndPushTrackPath(ByVal objName As String, _
 
         If bandEase Then
             ' Fit from the global single-frame arrays (yaw already eased in band).
-            Dim segS As Double, segE As Double
-            segS = (segStart - t0) * 86400#
+            Dim segs As Double, segE As Double
+            segs = (segStart - t0) * 86400#
             segE = (segEnd - t0) * 86400#
             ' Count global samples in [segS, segE].
             Dim cnt As Long, gj As Long
             cnt = 0
             For gj = 0 To gN - 1
-                If gT(gj) >= segS - 0.001 And gT(gj) <= segE + 0.001 Then cnt = cnt + 1
+                If gT(gj) >= segs - 0.001 And gT(gj) <= segE + 0.001 Then cnt = cnt + 1
             Next gj
             If cnt < 6 Then
                 LogEvent "TRACKPUSH", objName & " seg " & segIdx & " too few samples"
@@ -575,7 +575,7 @@ Private Function FitAndPushTrackPath(ByVal objName As String, _
             Dim ci As Long
             ci = 0
             For gj = 0 To gN - 1
-                If gT(gj) >= segS - 0.001 And gT(gj) <= segE + 0.001 Then
+                If gT(gj) >= segs - 0.001 And gT(gj) <= segE + 0.001 Then
                     ti(ci) = gT(gj)
                     yi(ci) = gYaw(gj)
                     PI(ci) = gAlt(gj)
@@ -878,7 +878,7 @@ Public Sub CheckTrackFitResiduals(ByVal objName As String)
     sunsetTime = setSheet.Range("dataSunsetTime").value
     sunriseTime = setSheet.Range("dataSunriseTime").value
     astroDusk = setSheet.Range("dataAstroDusk").value
-    darkEnd = setSheet.Range("dataPhase4aStart").value
+    darkEnd = setSheet.Range("dataAstroDawn").value
 
     If sunriseTime < sunsetTime Then sunriseTime = sunriseTime + 1#
     If darkEnd < astroDusk Then darkEnd = darkEnd + 1#
@@ -1012,7 +1012,7 @@ Public Sub CheckTrackYawRate(ByVal objName As String)
     sunsetTime = setSheet.Range("dataSunsetTime").value
     sunriseTime = setSheet.Range("dataSunriseTime").value
     astroDusk = setSheet.Range("dataAstroDusk").value
-    darkEnd = setSheet.Range("dataPhase4aStart").value
+    darkEnd = setSheet.Range("dataAstroDawn").value
     If sunriseTime < sunsetTime Then sunriseTime = sunriseTime + 1#
     If darkEnd < astroDusk Then darkEnd = darkEnd + 1#
 
@@ -1090,7 +1090,7 @@ Public Sub CheckTrackFreezeFit(ByVal objName As String, _
     sunsetTime = setSheet.Range("dataSunsetTime").value
     sunriseTime = setSheet.Range("dataSunriseTime").value
     astroDusk = setSheet.Range("dataAstroDusk").value
-    darkEnd = setSheet.Range("dataPhase4aStart").value
+    darkEnd = setSheet.Range("dataAstroDawn").value
     If sunriseTime < sunsetTime Then sunriseTime = sunriseTime + 1#
     If darkEnd < astroDusk Then darkEnd = darkEnd + 1#
 
@@ -1242,27 +1242,27 @@ End Sub
 ' hardcoded timezone.
 ' ============================================================
 Private Function LocalUtcOffsetMs() As Double
-    On Error GoTo Fallback
+    On Error GoTo fallback
     Dim wmi As Object, os As Object, lct As String
     Set wmi = GetObject("winmgmts:\\.\root\cimv2")
     For Each os In wmi.ExecQuery("SELECT LocalDateTime FROM Win32_OperatingSystem")
         lct = CStr(os.LocalDateTime)
         Exit For
     Next
-    If Len(lct) = 0 Then GoTo Fallback
+    If Len(lct) = 0 Then GoTo fallback
     Dim i As Long, pidx As Long, ch As String
     pidx = 0
     For i = Len(lct) To 1 Step -1
         ch = mid(lct, i, 1)
         If ch = "+" Or ch = "-" Then pidx = i: Exit For
     Next i
-    If pidx = 0 Then GoTo Fallback
+    If pidx = 0 Then GoTo fallback
     Dim mins As Double
     mins = CDbl(mid(lct, pidx + 1))
     If mid(lct, pidx, 1) = "-" Then mins = -mins
     LocalUtcOffsetMs = mins * 60000#
     Exit Function
-Fallback:
+fallback:
     LocalUtcOffsetMs = 0#
 End Function
 

@@ -1,9 +1,81 @@
 # HyperLapse Cart — Open Workfronts
 
-**As of:** Day 35, 22 Jun 2026 (firmware soak-v188). This file is the
+**As of:** Day 36+, 27 Jun 2026 (firmware soak-v234). This file is the
 workfront catalog + standing record. The Day-31 block below is kept as a
 historical checkpoint (labelled as such). Numbered entries marked
 RETIRED/CLOSED are done; the rest are open.
+
+## Closed Day-36 (22-27 Jun) — SOCKET LEAK ROOT CAUSE (#sockleakfix, v234)
+
+THE keystone fix. The multi-day -3005 / UI-drop / "needs a reboot" saga is
+root-caused, fixed, and PROVEN by the same test that caused it.
+
+- **Symptom:** under UI polling and/or an RSSI dip, :80 died with accept `-3005`
+  forever - `served` frozen, `streak` climbing into the thousands - and UI +
+  Excel + CCAPI-telemetry all unreachable until a power cycle. Half-fixed
+  repeatedly (v203/v204/v205/v206) and kept returning.
+- **CAUSED IT (serial-connected):** forced an RSSI dip; `[httpxmon]` showed
+  `served` freeze at exactly **4** (= mbed TCPSocket pool size), `streak` past
+  3000, and **UI dead at RSSI -62 with STRONG signal recovered** - proving it is
+  NOT an RSSI bug but a pool leak the dip triggers.
+- **ROOT CAUSE (read from code, not guessed):** `RawClient::stop()` closed the
+  accepted socket only `if (_open && _sock)`. `_open` flips FALSE the instant a
+  `send()` fails, and a send fails when the client RSSI dips MID-RESPONSE. So a
+  send-failed request reached `client.stop()` with `_open` already false, `close()`
+  was SKIPPED, the socket was never deallocated, and its pool slot LEAKED. Four
+  leaks exhaust pool=4 -> :80 dead.
+- **Confirmed against mbed `TCPSocket.h`:** accept() returns a socket that
+  `close()` deallocates COMPLETELY (slot included) - NO separate delete (v203's
+  delete-after-close was use-after-free -> hard fault; v204 removed it but left
+  close() gated on `_open`).
+- **FIX:** `stop()` closes whenever `_sock != nullptr`, regardless of `_open`
+  (idempotent - `_sock` nulled after). One condition changed.
+- **PROVEN:** v234 trace - `served` climbed through the dip (4 -> 13 -> 22 -> 37
+  -> 43 -> 50 -> 53), a transient `-3004 streak=17` at -86 dBm SELF-CLEARED, UI
+  recovered without reboot.
+- **Timeline:** the leak is OLD/latent (since the raw-socket server was built),
+  NOT introduced ~24 Jun. What changed then was the v192 watchdog adding a SECOND
+  pool-drain (rebind leak, killed by v206). Two drains, same symptom, different
+  ages - why the chase kept half-fixing it.
+
+### BACKED OUT this stretch: WiFi half-open / RSSI-floor detector (v231/v232 -> v233)
+- An RSSI-floor `WiFi.disconnect()` "half-open" recovery was built then BACKED OUT
+  after reading `wifiReconnectTick` (which should have been read first): it only
+  acts on status != CONNECTED and deliberately avoids disconnect(); the forced
+  disconnect fought that design and thrashed at marginal RSSI. It was chasing the
+  socket-leak symptom. LESSON re-learned: read the function that owns the
+  behaviour before touching it; "if you can't cause it you haven't solved it."
+
+### Also closed/done Day-36
+- **W5500 wired CCAPI live (v221).** Camera on .20.x wire (Giga .20.98, cam
+  .20.99); WiFi/UI/Excel on "Rosedale" .1.x. Wired path clean at 2s+5s (Test9d).
+  CCAPI = best-effort telemetry; D7 = sacred fire. (AX6000 "RosedaleVan" NOT
+  recommissioned - all recent WiFi work is on Rosedale .1.x.)
+- **#36d probe uses CCAPI not WiFi-ping (v227).** Probe was pinging the camera
+  over WiFi but it's on the .20.x wire; now GET /ccapi/ over the wired transport.
+- **/camera/check + START camera guard (v228/v229).** START refuses to arm (popup)
+  if the camera is not reachable on the wire - no more gimbal-moving-with-no-camera.
+- **LUM bidirectional + deadband 6 (v222/v223).** mode decided per-meter (lum vs
+  target), phase-independent.
+- **SOAK summary header fix (v230).** /soak/summary?file= read the right file but
+  printed the current filename; now prints target.
+- **Both repos committed + pushed 27 Jun:** firmware (v221->v234 + bench archive),
+  Excel (all .bas, .xlsm, Watcher.bas, conn_probe.py, hyperlapse_watcher.py,
+  findings docs, renders; .gitignore added for logs/CSV/pycache/scratch).
+
+OPEN (Day-36, carried):
+- **SOAK `/soak/list` undercounts** - `total=268` but named reads reach 462+. Low
+  priority (named access works). Likely SD openNextFile() capping; not yet read.
+- **Deep-dip transient -3004** (RSSI <= ~-86) still bursts briefly but now
+  SELF-CLEARS - correct contention behaviour, not the leak. Watch only.
+- **Pose-freshness safety gate** (carried) - executor must not acquire from a
+  stale/false g_yaw regardless of operator sequence (the CAN-TX-off -> false start
+  pose -> ~180deg swing incident).
+- **Boot scaffolding cleanup** - v202 boot servo sweep + v211 /luminance diag log
+  still in; remove after the servo/steering test.
+- **Excel pace A/B** (Control!E23 = 300 vs 0) - carried.
+- **Bench (scheduled, not bugs):** servo/steering (v202 sweep makes D5 observable),
+  then AX6700 WiFi bench tests.
 
 ## Closed Day-35 (17 Jun) — PanoCycle 2-row grid (landscape 2x4)
 

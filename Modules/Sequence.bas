@@ -95,9 +95,6 @@ Public Sub InitShoot()
     Dim sunriseTime As Date
     sunriseTime = GetSunriseTime()
     
-    ' 2. Calculate phase start times
-    CalculatePhaseTimes
-    
     ' 3. Generate astro table for planning
     GenerateGCTable
     
@@ -314,6 +311,44 @@ End Sub
 ' Session B note: this is now the ONLY use of phase numbers in the loop.
 ' Exposure control is in RunShot, driven by luminance feedback and a
 ' two-mode rule (brighten before astro_dusk+30min, darken after).
+' #57: GetCurrentPhase + PhaseLabel moved here from Utils (legacy shoot-loop
+' only - the three-button prep/build/push design does not use phases). Reads
+' dataPhase1-5 which are no longer written, so these are effectively dead;
+' kept compilable with the legacy loop pending its full removal.
+Private Function GetCurrentPhase() As Integer
+    Dim ws As Worksheet
+    Set ws = Sheets("Settings")
+    Dim t As Date
+    t = Now()
+    If t >= ws.Range("dataPhase5Start").value Then
+        GetCurrentPhase = 5
+    ElseIf t >= ws.Range("dataPhase4bStart").value Then
+        GetCurrentPhase = 4
+    ElseIf t >= ws.Range("dataPhase4aStart").value Then
+        GetCurrentPhase = 4
+    ElseIf t >= ws.Range("dataPhase3Start").value Then
+        GetCurrentPhase = 3
+    ElseIf t >= ws.Range("dataPhase2bStart").value Then
+        GetCurrentPhase = 23
+    ElseIf t >= ws.Range("dataPhase2aStart").value Then
+        GetCurrentPhase = 22
+    Else
+        GetCurrentPhase = 1
+    End If
+End Function
+
+Private Function PhaseLabel(ByVal phase As Integer) As String
+    Select Case phase
+        Case 1:  PhaseLabel = "Phase 1  -  Daytime"
+        Case 22: PhaseLabel = "Phase 2a  -  Shutter transition"
+        Case 23: PhaseLabel = "Phase 2b  -  ISO ramp"
+        Case 3:  PhaseLabel = "Phase 3  -  Full night"
+        Case 4:  PhaseLabel = "Phase 4  -  Pre-sunrise"
+        Case 5:  PhaseLabel = "Phase 5  -  Daytime"
+        Case Else: PhaseLabel = "Unknown"
+    End Select
+End Function
+
 Private Sub OnPhaseEnter(ByVal newPhase As Integer)
     LogEvent "SEQ", "=== Entering " & PhaseLabel(newPhase) & " ==="
     Select Case newPhase
@@ -428,9 +463,9 @@ End Sub
 Public Function GetLumMode() As Integer
     Const SWITCH_OFFSET_MINUTES As Double = 30#
     Dim astroDusk As Date
-    On Error GoTo Fallback
+    On Error GoTo fallback
     astroDusk = Sheets("Settings").Range("dataAstroDusk").value
-    If astroDusk = 0 Then GoTo Fallback
+    If astroDusk = 0 Then GoTo fallback
     
     If Now() < astroDusk + (SWITCH_OFFSET_MINUTES / 1440#) Then
         GetLumMode = LUM_MODE_BRIGHTEN
@@ -438,7 +473,7 @@ Public Function GetLumMode() As Integer
         GetLumMode = LUM_MODE_DARKEN
     End If
     Exit Function
-Fallback:
+fallback:
     ' dataAstroDusk missing or zero - fall back to time-of-day heuristic.
     ' Afternoon/evening: brighten. Past midnight or morning: darken.
     If Hour(Now()) >= 12 Then

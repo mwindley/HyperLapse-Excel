@@ -1,10 +1,117 @@
 # HyperLapse Cart - PROJECT_STATE
 
-_Last updated: 22 Jun 2026 (Day 35) - current firmware **soak-v188**._
+_Last updated: 27 Jun 2026 (Day 36+) - current firmware **soak-v234**._
 _The detailed body below is the **Day-31 / soak-v101-v102 checkpoint** and is kept
 as the build record. For the freshest state read **SOON_LIST.md** (status review at
-top); for open work read **WORKFRONTS.md**. The Day-32/33/34/35 deltas since the v101
+top); for open work read **WORKFRONTS.md**. The Day-32/33/34/35/36 deltas since the v101
 headline are summarised immediately below._
+
+## Day-36 deltas (v189-v234), 22-27 Jun - SUMMARY
+
+Two big threads this stretch: (1) the **socket-leak root cause** behind the
+multi-day -3005 / UI-drop / "needs a reboot" saga was finally CAUSED + MEASURED +
+FIXED (v234); (2) the **W5500 wired CCAPI** build went live (v221) and the
+exposure walk was made bidirectional + deadbanded.
+
+### v234 - SOCKET LEAK ROOT CAUSE (the keystone fix, #sockleakfix)
+- **Symptom (3 days):** under UI polling and/or an RSSI dip, :80 died with accept
+  `-3005` forever (served frozen, streak climbing into the thousands), UI + Excel
+  + CCAPI-telemetry all unreachable until a power cycle. Repeatedly half-fixed
+  (v203/v204/v205/v206) and kept coming back.
+- **CAUSED IT (serial-connected, v233 baseline):** parked the cart and forced an
+  RSSI dip - `[httpxmon]` showed `served` freeze at exactly **4** (= the mbed
+  TCPSocket pool size), `streak` climb past 3000, and **UI stayed dead at RSSI
+  -62 with STRONG signal recovered**. That last fact proved it is NOT an RSSI bug
+  - it is a pool leak triggered by the dip.
+- **ROOT CAUSE (read, not guessed):** `RawClient::stop()` closed the accepted
+  socket only `if (_open && _sock)`. But `_open` flips FALSE the instant a
+  `send()` fails - and a send fails when the client RSSI dips MID-RESPONSE. So a
+  request whose response send failed reached `client.stop()` with `_open` already
+  false, `close()` was SKIPPED, the accepted socket was never deallocated, and its
+  pool slot LEAKED. Four such leaks exhaust pool=4 -> :80 dead -> reboot.
+- **Confirmed against the mbed source:** read `TCPSocket.h` accept() doc - the
+  returned socket is freed by `close()` which deallocates COMPLETELY (slot
+  included); there is NO separate delete (v203's delete-after-close was
+  use-after-free -> hard fault; v204 correctly removed it but left close() gated
+  on `_open` - the real bug).
+- **FIX:** `stop()` now closes whenever `_sock != nullptr`, regardless of `_open`,
+  so a send-failed socket is still deallocated exactly once (idempotent - `_sock`
+  set null after). ONE condition changed.
+- **PROVEN by the same test that caused it:** v234 trace - `served` climbed
+  straight through the dip (4 -> 13 -> 22 -> 37 -> 43 -> 50 -> 53), a transient
+  `-3004 streak=17` at -86 dBm **self-cleared** (next line streak=0, served
+  resumed), UI recovered without reboot. "If you can't cause it you haven't solved
+  it" - caused AND solved.
+- **TIMELINE finding:** the leak is OLD and latent (stop() has gated close on
+  `_open` since the raw-socket server was built) - NOT introduced 5 days ago. What
+  changed ~24 Jun was the v192 watchdog adding a SECOND, different pool-drain
+  (rebind leak), which is why it "all broke loose" on a specific day. v206 killed
+  that one; the old latent leak only surfaced now because field RSSI dips finally
+  generated enough mid-response send-failures. Two drains, same -3005 symptom,
+  different ages - which is why the chase kept half-fixing it.
+
+### The WiFi half-open / RSSI-floor detour (v231/v232, BACKED OUT v233)
+- Built an RSSI-floor "half-open" detector that forced `WiFi.disconnect()` when
+  RSSI sat below a floor - on the theory that a low-RSSI link stays ASSOCIATED
+  (status=CONNECTED) so the existing `wifiReconnectTick` never fires.
+- **Backed out** after reading `wifiReconnectTick` (which should have been read
+  FIRST): it only acts when status != CONNECTED and DELIBERATELY does not call
+  disconnect(); the forced-disconnect fought that design and THRASHED at marginal
+  RSSI (kick -> reconnect into still-bad signal -> kick). It was chasing a
+  symptom; the real bug was the socket leak (v234). LESSON re-learned: read the
+  function that owns the behaviour before writing anything that touches it.
+- A runtime-tunable floor + `/debug/halfopen?floor=NN` route were added (v232) to
+  test the mechanism on demand, then removed with the rest at v233.
+
+### Other v189-v230 work (all on-rig unless noted)
+- **W5500 WIRED CCAPI live (v221, #wired).** CCAPI moved to the W5500 wired link
+  (camera 192.168.20.99 on its own subnet, Giga .20.98); WiFi/Excel/UI stay on
+  .1.x ("Rosedale"). Wired path proven clean at 2s+5s cadence (Test9d: every
+  connect 0-1ms, zero failures). CCAPI demoted to best-effort telemetry; D7 stays
+  the sacred fire path. NOTE: AX6000 "RosedaleVan" is NOT recommissioned - all
+  recent WiFi work is on "Rosedale" .1.x.
+- **LUM walk bidirectional + deadband (v222/v223).** lum_mode decided per-meter by
+  lum vs target (BRIGHTEN if below, DARKEN if above) - phase-independent, no longer
+  fights the target at the wrong phase. Deadband 5 -> 6 counts.
+- **#36d probe uses CCAPI not WiFi-ping (v227, #36dccapi).** The recovery probe
+  pinged the camera over WiFi, but on the wired build the camera is on the .20.x
+  wire - ICMP always returned -1 while every fire CCAPI succeeded. Now does GET
+  /ccapi/ over the SAME wired transport the fire path uses.
+- **/camera/check route + START camera guard (v228/v229).** New GET /camera/check
+  runs a live wired-reachability test; the Exec START button checks it FIRST and
+  refuses to arm (popup "CAMERA NOT ON WIRED LINK") if the camera is not reachable
+  - a plan can no longer start the gimbal moving with no camera.
+- **SOAK summary header fix (v230, #soaksumfile).** /soak/summary?file= read the
+  RIGHT file all along but printed the CURRENT filename in its header, so prior-file
+  summaries mislabelled themselves. Now prints the target. (This is what made the
+  -88 drop run SOAK_462 look like it was always reading the current file.)
+- **Diagnostics that paid off:** httpxmon (v226, RAM-tally leak-vs-wedge monitor
+  that survives :80 death), observe-only watchdog (v225, no rebind), SOAK file
+  list + named read (v190). The httpxmon `served`/`streak`/`wifi`/`rssi` line is
+  what made the leak diagnosable.
+- **CAN TX on + TX-err gated (v217), cadence re-anchor after stall (v219),
+  cam=nok debounce (v218), exposure-init retry (v193), battery-poll freeze guard
+  (v195)** - see banner history in the firmware for detail.
+
+### Excel / VBA / Python (companion, pushed 27 Jun)
+- New **Watcher.bas** (alarm-watcher Start/Stop) + **hyperlapse_watcher.py**
+  (laptop alarm watcher polling /exec/feed) + **conn_probe.py** (WiFi/camera drop
+  probe). Findings docs **CCAPI_shutterbutton_findings.md** and
+  **Cadence_socket_investigation.md** committed. .gitignore added for regenerating
+  logs/CSVs/pycache/scratch renders.
+- Both repos committed + pushed 27 Jun: firmware `DJI-Ronin-RS4-Arduino`
+  (v221->v234 + bench-sketch archive), Excel `HyperLapse-Excel` (all .bas modules,
+  .xlsm, watcher tooling, findings, renders).
+
+### Open / next (see WORKFRONTS for detail)
+- SOAK `/soak/list` undercounts (total=268 but named reads reach 462+) - low
+  priority, named access works.
+- At a DEEP sustained dip (RSSI <= ~-86) a brief `-3004` accept-fail burst still
+  occurs but now SELF-CLEARS (correct contention behaviour, not the leak).
+- Carried: pose-freshness safety gate; boot scaffolding cleanup (v202 servo sweep,
+  v211 /luminance diag log); Excel pace A/B (Control!E23).
+- Bench (scheduled, separate from bugs): servo/steering (v202 boot sweep still in),
+  then AX6700 WiFi bench tests (those units' usable condition).
 
 ## Day-35 deltas (v163-v184), 17-21 Jun
 

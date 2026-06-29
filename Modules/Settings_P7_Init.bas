@@ -51,9 +51,14 @@ Public Sub InitSettingsP7()
     ws.Cells(r, 2).value = "Plan authoring (Session E)"
     ws.Cells(r, 2).Font.Bold = True
     r = r + 1
-    If AddNamedTime(ws, r, "dataShootStart", "Shoot start anchor", _
-                    TimeSerial(15, 42, 0), _
-                    "Wall-clock cart start (Way01); Plan times computed from here", _
+    ' #57/exposure-phase-rework: dataShootStart is now a FULL DATE-TIME (the
+    ' single source of truth for the shoot). The operator enters the shoot
+    ' START as date+time; GetSunsetTime derives the night from its date. Seed
+    ' with tonight 19:42 as a sensible default the operator overwrites.
+    If AddNamedDateTime(ws, r, "dataShootStart", "Shoot start (date + time)", _
+                    CDbl(Int(Now())) + TimeSerial(19, 42, 0), _
+                    "FULL date+time. Operator enters the shoot START here. The night " & _
+                    "(dusk/dawn) and plan times are all computed from this. Not in the past.", _
                     added, skipped, report) Then r = r + 1
 
     ' --- Section 2: Milky Way times ------------------------------------
@@ -202,6 +207,33 @@ Private Function AddNamedTime(ByVal ws As Worksheet, ByVal r As Long, _
         report = report & "  - " & nm & ": added at C" & r & vbCrLf
     End If
     AddNamedTime = True
+End Function
+
+' #57/exposure-phase-rework: sibling of AddNamedTime that seeds + formats a
+' FULL DATE-TIME (not time-only). Used for dataShootStart so the operator
+' enters the shoot start as date+time, the single source of truth for the night.
+Private Function AddNamedDateTime(ByVal ws As Worksheet, ByVal r As Long, _
+                              ByVal nm As String, ByVal label As String, _
+                              ByVal seedVal As Double, ByVal comment As String, _
+                              ByRef added As Long, ByRef skipped As Long, _
+                              ByRef report As String) As Boolean
+    If NameExists(nm) Then
+        ws.Cells(r, 2).value = label & "  (already defined)"
+        ws.Cells(r, 2).Font.Color = RGB(128, 128, 128)
+        ws.Cells(r, 4).value = "skipped - name already exists"
+        ws.Cells(r, 4).Font.Color = RGB(128, 128, 128)
+        skipped = skipped + 1
+        report = report & "  - " & nm & ": SKIPPED" & vbCrLf
+    Else
+        ws.Cells(r, 2).value = label
+        ws.Cells(r, 3).value = seedVal
+        ws.Cells(r, 3).NumberFormat = "yyyy-mm-dd hh:mm"
+        ws.Cells(r, 4).value = comment
+        ThisWorkbook.names.Add Name:=nm, refersTo:="=Settings!$C$" & r
+        added = added + 1
+        report = report & "  - " & nm & ": added at C" & r & vbCrLf
+    End If
+    AddNamedDateTime = True
 End Function
 
 

@@ -8,10 +8,7 @@ Attribute VB_Name = "Utils"
 '   ASTRONOMICAL TIMING
 '     GetSunsetTime / GetSunriseTime  -  fetch from sunrise-sunset.org
 '       and populate Settings named ranges (sunset, sunrise, civil dusk,
-'       nautical dusk, astronomical dusk). One API call populates all.
-'     CalculatePhaseTimes  -  convert sunset/sunrise into the 7 phase
-'       boundary timestamps used by SequenceLoop.
-'     GetCurrentPhase / PhaseLabel  -  runtime "what phase are we in?"
+'       nautical dusk, astronomical dusk, astronomical dawn). One pass populates all.
 '
 '   SHUTTER MATH
 '     TvToSeconds / SecondsToTv  -  convert between CCAPI shutter strings
@@ -112,10 +109,40 @@ Public Function GetSunsetTime() As Date
     Dim ws As Worksheet
     Set ws = Sheets("Settings")
 
-    ' Anchor date for the shoot. Future workfront #57 will read
-    ' dataShootDate; for now default to today.
+    ' Anchor date for the shoot (#57 / exposure-phase-rework, 28Jun).
+    ' SINGLE SOURCE OF TRUTH: the operator enters the shoot START as a full
+    ' date-time in dataShootStart. shootDate = the DATE of that start (the
+    ' evening the night begins). All sun events are computed for that night,
+    ' so dusk/dawn and the plan start are guaranteed the same night - no more
+    ' Int(Now()) guess (which fetched the wrong night for a small-hours start).
+    Dim startAnchor As Date
+    On Error Resume Next
+    startAnchor = CDate(ws.Range("dataShootStart").value)
+    On Error GoTo ErrHandler
+    If startAnchor = 0 Then
+        MsgBox "Shoot start not set. Enter the shoot START as a full date+time " & _
+               "in Settings dataShootStart (e.g. 2026-06-28 19:49), then retry.", _
+               vbExclamation, "Shoot start required"
+        LogEvent "UTILS", "GetSunsetTime: dataShootStart not set - aborting"
+        GetSunsetTime = 0
+        Exit Function
+    End If
+    ' Validate: the shoot must not be already over. A start whose following
+    ' astro dawn is already in the past has nothing left to shoot. (A start
+    ' slightly in the past with dawn still ahead - the 3am case - is VALID.)
     Dim shootDate As Date
-    shootDate = CDate(Int(Now()))    ' midnight today, local
+    shootDate = CDate(Int(CDbl(startAnchor)))    ' midnight of the start's date, local
+    Dim dawnCheck As Date
+    dawnCheck = FindSunCrossing(shootDate + 1#, -18#, 1)   ' astro dawn next morning
+    If dawnCheck < Now() Then
+        MsgBox "That shoot is already over (its dawn " & Format(dawnCheck, "yyyy-mm-dd HH:nn") & _
+               " has passed). Enter a current/future shoot start in dataShootStart.", _
+               vbExclamation, "Shoot already past"
+        LogEvent "UTILS", "GetSunsetTime: dataShootStart in past (dawn " & _
+                 Format(dawnCheck, "yyyy-mm-dd HH:nn") & ") - aborting"
+        GetSunsetTime = 0
+        Exit Function
+    End If
 
     ' -"--"--"- Sun events  -  local computation -"--"--"--"--"--"--"--"--"--"--"--"--"--"--"--"--"--"--"--"--"--"-
     ' Standard altitudes:
@@ -155,11 +182,24 @@ Public Function GetSunsetTime() As Date
     ws.Range("dataCivilDusk").value = civilDusk
     ws.Range("dataNauticalDusk").value = nauticalDusk
     ws.Range("dataAstroDusk").value = astroDusk
+    ' #57/exposure-phase-rework: astroDawn was computed then thrown away. Persist
+    ' it - the cart needs BOTH astro boundaries (dusk + dawn) to pick the live LUM
+    ' phase target. The astro names live in Settings col F (dusk=F22); put dawn at
+    ' F23. Self-create the name if it does not exist yet (the other astro names
+    ' were added manually via Name Manager), so no hand-setup is required.
+    If Not NameExists("dataAstroDawn") Then
+        ws.Range("F23").value = astroDawn
+        ws.Range("F23").NumberFormat = "yyyy-mm-dd hh:mm"
+        ThisWorkbook.names.Add Name:="dataAstroDawn", refersTo:="=Settings!$F$23"
+    Else
+        ws.Range("dataAstroDawn").value = astroDawn
+    End If
 
     LogEvent "UTILS", "Sun (local): rise=" & Format(sunriseT, "HH:nn") & _
              " set=" & Format(sunsetT, "HH:nn") & _
              " civDusk=" & Format(civilDusk, "HH:nn") & _
-             " astroDusk=" & Format(astroDusk, "HH:nn")
+             " astroDusk=" & Format(astroDusk, "HH:nn") & _
+             " astroDawn=" & Format(astroDawn, "HH:nn")
 
     ' -"--"--"- Moon events  -  .io API (one or two calls) -"--"--"--"--"--"--"--"--"--"--"--"--"-
     FetchMoonTimesForNight shootDate
@@ -171,6 +211,17 @@ ErrHandler:
     LogEvent "UTILS", "GetSunsetTime error: " & Err.Description
     GetSunsetTime = 0
 End Function
+
+' #57: local copy so GetSunsetTime can self-create dataAstroDawn without a
+' cross-module dependency (NameExists is Private in Settings_P7_Init).
+Private Function NameExists(ByVal nm As String) As Boolean
+    Dim n As Name
+    On Error Resume Next
+    Set n = ThisWorkbook.names(nm)
+    On Error GoTo 0
+    NameExists = Not (n Is Nothing)
+End Function
+
 
 ' ============================================================
 ' FetchMoonTimesForNight  (Day 18, fully local  -  no internet)
@@ -198,26 +249,26 @@ End Function
 Private Sub EnsureMoonTrueNames(ByVal ws As Worksheet)
     On Error Resume Next
     Dim haveRise As Boolean, haveSet As Boolean
-    haveRise = Not (ThisWorkbook.Names("dataMoonriseTrue") Is Nothing)
-    haveSet = Not (ThisWorkbook.Names("dataMoonsetTrue") Is Nothing)
+    haveRise = Not (ThisWorkbook.names("dataMoonriseTrue") Is Nothing)
+    haveSet = Not (ThisWorkbook.names("dataMoonsetTrue") Is Nothing)
     On Error GoTo 0
     If haveRise And haveSet Then Exit Sub
 
     ' Anchor to the existing clamped cells, place true values one column right.
     Dim riseCell As Range, setCell As Range
     On Error Resume Next
-    Set riseCell = ThisWorkbook.Names("dataMoonriseTime").RefersToRange
-    Set setCell = ThisWorkbook.Names("dataMoonsetTime").RefersToRange
+    Set riseCell = ThisWorkbook.names("dataMoonriseTime").RefersToRange
+    Set setCell = ThisWorkbook.names("dataMoonsetTime").RefersToRange
     On Error GoTo 0
     If riseCell Is Nothing Or setCell Is Nothing Then Exit Sub
 
     If Not haveRise Then
-        ThisWorkbook.Names.Add Name:="dataMoonriseTrue", _
-            RefersTo:="=" & ws.Name & "!" & riseCell.Offset(0, 1).Address(True, True)
+        ThisWorkbook.names.Add Name:="dataMoonriseTrue", _
+            refersTo:="=" & ws.Name & "!" & riseCell.offset(0, 1).Address(True, True)
     End If
     If Not haveSet Then
-        ThisWorkbook.Names.Add Name:="dataMoonsetTrue", _
-            RefersTo:="=" & ws.Name & "!" & setCell.Offset(0, 1).Address(True, True)
+        ThisWorkbook.names.Add Name:="dataMoonsetTrue", _
+            refersTo:="=" & ws.Name & "!" & setCell.offset(0, 1).Address(True, True)
     End If
 End Sub
 
@@ -346,19 +397,19 @@ End Function
 ' before any photo is taken. Falls back to a hard-coded list if the
 ' camera is unreachable, so the workbook still opens cleanly offline.
 Public Sub InitTvLookup()
-    On Error GoTo Fallback
+    On Error GoTo fallback
     
     Dim resp As String
     resp = CameraGet("/ccapi/ver100/shooting/settings/tv")
-    If LenB(resp) = 0 Then GoTo Fallback
+    If LenB(resp) = 0 Then GoTo fallback
     
     ' Find the ability array: ..."ability":[ ... ]
     Dim openPos As Long, closePos As Long
     openPos = InStr(resp, """ability"":[")
-    If openPos = 0 Then GoTo Fallback
+    If openPos = 0 Then GoTo fallback
     openPos = openPos + Len("""ability"":[")
     closePos = InStr(openPos, resp, "]")
-    If closePos = 0 Then GoTo Fallback
+    If closePos = 0 Then GoTo fallback
     
     Dim arr As String
     arr = mid$(resp, openPos, closePos - openPos)
@@ -399,7 +450,7 @@ Public Sub InitTvLookup()
         End If
     Next i
     
-    If n = 0 Then GoTo Fallback
+    If n = 0 Then GoTo fallback
     
     g_tvCount = n
     ReDim Preserve g_tvStrings(0 To n - 1)
@@ -409,7 +460,7 @@ Public Sub InitTvLookup()
     LogEvent "UTILS", "Tv lookup populated from camera: " & n & " values"
     Exit Sub
     
-Fallback:
+fallback:
     ' Camera unreachable or unparseable response  -  fall back to the
     ' hard-coded R3 list verified May 2026.
     BuildTvLookupFallback
@@ -614,67 +665,7 @@ End Function
 
 ' Calculate phase start/end times from sunset time
 ' Offsets in minutes relative to sunset (negative = before sunset)
-Public Sub CalculatePhaseTimes()
-    Dim sunsetTime As Date
-    sunsetTime = Sheets("Settings").Range("dataSunsetTime").value
-    
-    If sunsetTime = 0 Then
-        MsgBox "Sunset time not set - run GetSunsetTime() first", vbExclamation
-        Exit Sub
-    End If
-    
-    Dim ws As Worksheet
-    Set ws = Sheets("Settings")
-    
-    ' Phase 1 start  -  fixed at 16:00
-    ws.Range("dataPhase1Start").value = CDate(Int(Now()) + TimeValue("16:00:00"))
-    
-    ' Phase 2a  -  sunset minus 45 minutes (shutter starts slowing)
-    ws.Range("dataPhase2aStart").value = sunsetTime - (45 / 1440)
-    
-    ' Phase 2b  -  sunset plus 20 minutes (ISO starts climbing)
-    ws.Range("dataPhase2bStart").value = sunsetTime + (20 / 1440)
-    
-    ' Phase 3  -  sunset plus 60 minutes (full night settings)
-    ws.Range("dataPhase3Start").value = sunsetTime + (60 / 1440)
-    
-    ' Phase 4a  -  get tomorrow's sunrise minus 90 minutes
-    Dim sunriseTime As Date
-    sunriseTime = Sheets("Settings").Range("dataSunriseTime").value
-    ws.Range("dataPhase4aStart").value = sunriseTime - (90 / 1440)
-    
-    ' Phase 4b  -  sunrise minus 45 minutes
-    ws.Range("dataPhase4bStart").value = sunriseTime - (45 / 1440)
-    
-    ' Phase 5  -  sunrise time
-    ws.Range("dataPhase5Start").value = sunriseTime
-    
-    LogEvent "UTILS", "Phase times calculated from sunset " & Format(sunsetTime, "HH:nn:ss")
-End Sub
 
-' Get current phase number (1-5) based on current time
-Public Function GetCurrentPhase() As Integer
-    Dim ws As Worksheet
-    Set ws = Sheets("Settings")
-    Dim t As Date
-    t = Now()
-    
-    If t >= ws.Range("dataPhase5Start").value Then
-        GetCurrentPhase = 5
-    ElseIf t >= ws.Range("dataPhase4bStart").value Then
-        GetCurrentPhase = 4   ' 4b
-    ElseIf t >= ws.Range("dataPhase4aStart").value Then
-        GetCurrentPhase = 4   ' 4a
-    ElseIf t >= ws.Range("dataPhase3Start").value Then
-        GetCurrentPhase = 3
-    ElseIf t >= ws.Range("dataPhase2bStart").value Then
-        GetCurrentPhase = 23  ' 2b (23 = phase 2, sub b)
-    ElseIf t >= ws.Range("dataPhase2aStart").value Then
-        GetCurrentPhase = 22  ' 2a (22 = phase 2, sub a)
-    Else
-        GetCurrentPhase = 1
-    End If
-End Function
 
 ' ============================================================
 ' Monitor sheet update
@@ -686,9 +677,8 @@ Public Sub UpdateMonitor()
     Dim ws As Worksheet
     Set ws = Sheets("Monitor")
     
-    ' Current time and phase
+    ' Current time
     ws.Range("monTime").value = Format(Now(), "HH:nn:ss")
-    ws.Range("monPhase").value = PhaseLabel(GetCurrentPhase())
     
     ' Camera settings
     'ws.Range("monTv").value = Sheets("Settings").Range("dataCurrentTv").value
@@ -716,17 +706,6 @@ Public Sub UpdateMonitor()
 End Sub
 
 ' Return human-readable phase label
-Public Function PhaseLabel(ByVal phase As Integer) As String
-    Select Case phase
-        Case 1:  PhaseLabel = "Phase 1  -  Daytime"
-        Case 22: PhaseLabel = "Phase 2a  -  Shutter transition"
-        Case 23: PhaseLabel = "Phase 2b  -  ISO ramp"
-        Case 3:  PhaseLabel = "Phase 3  -  Full night"
-        Case 4:  PhaseLabel = "Phase 4  -  Pre-sunrise"
-        Case 5:  PhaseLabel = "Phase 5  -  Daytime"
-        Case Else: PhaseLabel = "Unknown"
-    End Select
-End Function
 
 ' ============================================================
 ' Arduino cart control helpers

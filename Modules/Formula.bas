@@ -513,140 +513,110 @@ End Function
 ' Push to cart
 ' ============================================================
 
-' POST current active branch's parameters to cart /exposure/load.
+' PushFormulaToCart - push the night's LUM facts to the cart.
 ' Wired for double-click via Buttons.RunButton - bind to a button
-' cell on Control sheet named btnPushFormula.
+' cell on Control sheet named btnPushFormula. Called by PushToCart
+' (Prep Cart) in the three-button flow.
 '
-' Wire format (UPDATED Day 12 - GET query string, was JSON POST):
-'   /exposure/load?br=<name>&tvc=<sec>&isoc=<int>&isob=<int>
-'                  &t0ss=<sunset-seconds>&t0sr=<sunrise-seconds>
-'                  &cross=<sunset-trel-at-astro-sunset>
-'                  &sstv=t1:tv1,t2:tv2,...
-'                  &ssiso=t1:iso1,t2:iso2,...
-'                  &srtv=t1:tv1,t2:tv2,...
-'                  &sriso=t1:iso1,t2:iso2,...
+' #item2 (28Jun) NEW CONTRACT - the cart owns the phase decision:
+'   /exposure/epochs?dusk=<epoch_ms>&dawn=<epoch_ms>  (absolute UTC ms)
+'   /exposure/target?ss=<60>&sr=<40>                  (the two style targets)
+' The cart (firmware v255 lumPhaseSelect) compares its OWN clock to the
+' two epochs and picks the active target: now<dusk -> sunset(ss),
+' else -> sunrise(sr). Flip is at TRUE DARK (astro dusk/dawn) where the
+' walk is pinned at the night rail, so it is consequence-free. One push
+' covers the whole shoot; operator never re-pushes mid-shoot.
 '
-' Time anchor: t0ss + t0sr together with millis-at-receipt let the
-' cart compute current t_rel for both events simultaneously. The
-' "cross" parameter is the sunset-trel value AT astronomical sunset.
-' When the cart's computed sunset-trel passes that threshold, it
-' switches from sunset formula frame to sunrise formula frame.
-' Single push covers a full sunset-through-sunrise shoot; operator
-' never re-pushes mid-shoot. Excel reads cached sunset/sunrise/astro
-' times from Settings (populated by GetSunsetTime).
+' SUPERSEDES the old /exposure/load TABLE-fallback push (the four cubic
+' ladders sstv/ssiso/srtv/sriso + relative t0ss/t0sr/cross). That fed the
+' cart TABLE walk removed in firmware v253/254 - all dead now.
 '
-' Switched from JSON POST to GET query string per cart-side
-' constraints: avoids POST body handling + JSON parser on Uno R4
-' (memory tight), matches /plan/load precedent. URL length is well
-' under the WiFiS3 1.5KB envelope verified Day 12 via /debug/urlsize.
-'
-' Tv format note: Excel stores Tv as "1/500" / "0.5" / "20" (dot
-' decimals). Cart firmware will translate to Canon's seconds-symbol
-' format ("0\"5" etc.) when applying to camera - that's #36d's job.
-' This sub sends Excel's native format unmodified.
-'
-' Firmware endpoint /exposure/load implemented Day 12 in #36b.
+' Reads dataAstroDusk + dataAstroDawn (populated by GetSunsetTime for the
+' shoot night) and dataLumTargetSunset/Sunrise (style targets, 60/40).
+' Local Excel date-serials are converted to absolute UTC epoch-ms via
+' ExcelLocalToEpochMs (UTC+9.5 Adelaide, or dataUTCOffset, Settings C10).
 Public Sub PushFormulaToCart()
-    Dim ws As Worksheet
-    Set ws = ThisWorkbook.Sheets(SHEET_NAME)
-
-    Dim branch As String
-    branch = CStr(ThisWorkbook.Sheets("Settings").Range("dataActiveBranch").value)
-
-    Dim branchCol As Long
-    branchCol = FindBranchColumn(branch)
-    If branchCol = 0 Then
-        LogEvent "FORMULA", "PushFormulaToCart: unknown branch '" & branch & "'"
-        MsgBox "Unknown branch: " & branch, vbExclamation
-        Exit Sub
-    End If
-
-    ' Read cached event times from Settings (populated by GetSunsetTime
-    ' API call - operator should refresh before pushing if stale).
-    Dim sunsetTime As Date, sunriseTime As Date, astroDusk As Date
+    ' #item2 (28Jun): REWRITTEN. The cart now owns the LUM phase decision - it
+    ' compares its OWN clock to two absolute astro epochs (dusk, dawn) and picks
+    ' the sunset/sunrise target itself (firmware v255 lumPhaseSelect). Excel's job
+    ' is only to PROVIDE the night's facts:
+    '   /exposure/epochs?dusk=<epoch_ms>&dawn=<epoch_ms>   (absolute UTC ms)
+    '   /exposure/target?ss=<60>&sr=<40>                   (the two style targets)
+    ' The old push (TABLE fallback) is GONE: the four cubic ladders sstv/ssiso/
+    ' srtv/sriso, the relative t0ss/t0sr/cross seconds, and the /exposure/load GET
+    ' all fed the removed cart TABLE walk (firmware v253/254) - dead weight.
     Dim setSheet As Worksheet
     Set setSheet = ThisWorkbook.Sheets("Settings")
-    sunsetTime = setSheet.Range("dataSunsetTime").value
-    sunriseTime = setSheet.Range("dataSunriseTime").value
-    astroDusk = setSheet.Range("dataAstroDusk").value
 
-    If sunsetTime = 0 Or sunriseTime = 0 Or astroDusk = 0 Then
-        LogEvent "FORMULA", "PushFormulaToCart: event times missing - run Get Sunset Time first"
-        MsgBox "Sunset/sunrise/astro times not set. Click 'Get Sunset Time' first.", vbExclamation
+    ' Astro boundaries computed by GetSunsetTime for the shoot night. Item 2 flips
+    ' at TRUE DARK (astro dusk / astro dawn), not civil sun events - the walk is
+    ' pinned at the night rail there so the target flip is consequence-free.
+    Dim astroDusk As Date, astroDawn As Date
+    astroDusk = setSheet.Range("dataAstroDusk").value
+    On Error Resume Next
+    astroDawn = setSheet.Range("dataAstroDawn").value
+    On Error GoTo 0
+
+    If astroDusk = 0 Or astroDawn = 0 Then
+        LogEvent "FORMULA", "PushFormulaToCart: astro dusk/dawn not set - run Prep Session (Get Sunset Time) first"
+        MsgBox "Astro dusk/dawn not set. Run Prep Session (Get Sunset Time) first.", vbExclamation
         Exit Sub
     End If
 
-    ' Compute anchors. t0ss/t0sr are seconds from now to the respective
-    ' event (negative = event still in future). cross_trel is the time
-    ' gap between civil sunset and astronomical sunset (where the cart
-    ' should swap from sunset to sunrise frame).
-    Dim t0ss As Long, t0sr As Long, crossTrel As Long
-    t0ss = CLng((Now() - sunsetTime) * 86400)
-    t0sr = CLng((Now() - sunriseTime) * 86400)
-    crossTrel = CLng((astroDusk - sunsetTime) * 86400)
+    ' Convert the local Excel date-serials to absolute UTC epoch-ms. The shoot
+    ' location's UTC offset is dataUTCOffset (Settings C10, e.g. 9.5 for Adelaide).
+    Dim utcOffHours As Double
+    utcOffHours = 9.5
+    Dim vOff As Variant
+    On Error Resume Next
+    vOff = setSheet.Range("dataUTCOffset").value
+    On Error GoTo 0
+    If IsNumeric(vOff) Then utcOffHours = CDbl(vOff)
 
-    ' Build query string in pieces
-    Dim qs As String
-    qs = "?br=" & branch & _
-         "&tvc=" & ws.Cells(ROW_TV_CEILING, branchCol).value & _
-         "&isoc=" & ws.Cells(ROW_ISO_CEILING, branchCol).value & _
-         "&isob=" & ws.Cells(ROW_ISO_BASE, branchCol).value & _
-         "&t0ss=" & t0ss & _
-         "&t0sr=" & t0sr & _
-         "&cross=" & crossTrel
+    Dim duskMs As Double, dawnMs As Double
+    duskMs = ExcelLocalToEpochMs(astroDusk, utcOffHours)
+    dawnMs = ExcelLocalToEpochMs(astroDawn, utcOffHours)
 
-    ' Sunset Tv crossovers
-    qs = qs & "&sstv=" & BuildTvBlock(ws, ROW_SS_TV_FIRST, ROW_SS_TV_LAST, branchCol)
-    ' Sunset ISO ramp
-    qs = qs & "&ssiso=" & BuildIsoBlock(ws, ROW_SS_ISO_FIRST, ROW_SS_ISO_LAST, branchCol)
-    ' Sunrise Tv crossovers
-    qs = qs & "&srtv=" & BuildTvBlock(ws, ROW_SR_TV_FIRST, ROW_SR_TV_LAST, branchCol)
-    ' Sunrise ISO ramp
-    qs = qs & "&sriso=" & BuildIsoBlock(ws, ROW_SR_ISO_FIRST, ROW_SR_ISO_LAST, branchCol)
+    Dim arduinoIP As String
+    arduinoIP = CStr(setSheet.Range("dataArduinoIP").value)
 
-    LogEvent "FORMULA", "GET /exposure/load branch=" & branch & " url_bytes=" & Len(qs)
-
-    ' Push to cart
     Dim http As Object
     Set http = CreateObject("WinHttp.WinHttpRequest.5.1")
-    Dim arduinoIP As String
-    arduinoIP = CStr(ThisWorkbook.Sheets("Settings").Range("dataArduinoIP").value)
 
+    ' --- Push the two astro epochs (absolute UTC ms) ---
+    Dim epUrl As String
+    epUrl = arduinoIP & "/exposure/epochs?dusk=" & Format(duskMs, "0") & _
+            "&dawn=" & Format(dawnMs, "0")
+    Dim esc As Long, eResp As String
     On Error Resume Next
-    http.Open "GET", arduinoIP & "/exposure/load" & qs, False
+    http.Open "GET", epUrl, False
     http.Send
-    Dim sc As Long
-    Dim respText As String
-    sc = http.Status
-    respText = CStr(http.responseText)
+    esc = http.Status
+    eResp = CStr(http.responseText)
     On Error GoTo 0
-
-    If sc = 200 Then
-        LogEvent "FORMULA", "GET /exposure/load OK " & respText
-    ElseIf sc = 404 Then
-        LogEvent "FORMULA", "GET /exposure/load 404 (firmware /exposure/load not present?)"
+    If esc = 200 Then
+        LogEvent "FORMULA", "GET /exposure/epochs dusk=" & Format(duskMs, "0") & _
+                 " dawn=" & Format(dawnMs, "0") & " OK " & eResp
     Else
-        LogEvent "FORMULA", "GET /exposure/load HTTP " & sc & " " & respText
+        LogEvent "FORMULA", "GET /exposure/epochs HTTP " & esc & " " & eResp
     End If
 
-    ' Push the phase-aware luminance target pair. The cart owns the exposure
-    ' walk; without this it sits on the boot default (128). ss = sunset target
-    ' (BRIGHTEN phase), sr = sunrise target (DARKEN phase). The cart selects by
-    ' its own phase (isCurrentlySunrise), same as the Tv/ISO table.
+    ' --- Push the phase-aware luminance target pair. ss = sunset target, sr =
+    ' sunrise target; the cart selects the active one by clock vs the epochs. ---
     Dim ssT As Long, srT As Long
     ssT = 60: srT = 40
     Dim vss As Variant, vsr As Variant
-    vss = ThisWorkbook.Sheets("Settings").Range("dataLumTargetSunset").value
-    vsr = ThisWorkbook.Sheets("Settings").Range("dataLumTargetSunrise").value
+    vss = setSheet.Range("dataLumTargetSunset").value
+    vsr = setSheet.Range("dataLumTargetSunrise").value
     If IsNumeric(vss) Then ssT = CLng(vss)
     If IsNumeric(vsr) Then srT = CLng(vsr)
 
     Dim tgtUrl As String
     tgtUrl = arduinoIP & "/exposure/target?ss=" & ssT & "&sr=" & srT
+    Dim tsc As Long, tResp As String
     On Error Resume Next
     http.Open "GET", tgtUrl, False
     http.Send
-    Dim tsc As Long, tResp As String
     tsc = http.Status
     tResp = CStr(http.responseText)
     On Error GoTo 0
@@ -656,6 +626,14 @@ Public Sub PushFormulaToCart()
         LogEvent "FORMULA", "GET /exposure/target ss=" & ssT & " sr=" & srT & " HTTP " & tsc
     End If
 End Sub
+
+' #item2: convert a LOCAL Excel date-serial to absolute UTC epoch-milliseconds.
+' Excel serial 25569 = 1970-01-01. Subtract the UTC offset to get UTC, then to ms.
+Private Function ExcelLocalToEpochMs(ByVal localSerial As Double, ByVal utcOffHours As Double) As Double
+    Dim utcSerial As Double
+    utcSerial = localSerial - (utcOffHours / 24#)
+    ExcelLocalToEpochMs = (utcSerial - 25569#) * 86400000#
+End Function
 
 
 ' Build a Tv block string "t1:tv1,t2:tv2,..." from a row range.
