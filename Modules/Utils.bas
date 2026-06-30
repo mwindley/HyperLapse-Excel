@@ -135,11 +135,13 @@ Public Function GetSunsetTime() As Date
     Dim dawnCheck As Date
     dawnCheck = FindSunCrossing(shootDate + 1#, -18#, 1)   ' astro dawn next morning
     If dawnCheck < Now() Then
-        MsgBox "That shoot is already over (its dawn " & Format(dawnCheck, "yyyy-mm-dd HH:nn") & _
-               " has passed). Enter a current/future shoot start in dataShootStart.", _
-               vbExclamation, "Shoot already past"
+        ' Past-shoot is now WARNED at BuildPlan (Prep Plan, C22) where the operator
+        ' is actively building - not here in Prep Session. GetSunsetTime still
+        ' ABORTS (computing astro for a stale night gives wrong dusk/dawn), but it
+        ' does so silently, logging the reason. ShootAlreadyOver() (below) is the
+        ' shared check BuildPlan pops the popup from - one source of truth.
         LogEvent "UTILS", "GetSunsetTime: dataShootStart in past (dawn " & _
-                 Format(dawnCheck, "yyyy-mm-dd HH:nn") & ") - aborting"
+                 Format(dawnCheck, "yyyy-mm-dd HH:nn") & ") - aborting (warned at Prep Plan)"
         GetSunsetTime = 0
         Exit Function
     End If
@@ -210,6 +212,29 @@ ErrHandler:
     MsgBox "GetSunsetTime error: " & Err.Description
     LogEvent "UTILS", "GetSunsetTime error: " & Err.Description
     GetSunsetTime = 0
+End Function
+
+' Shared past-shoot test (single source of truth). Returns True if the shoot in
+' dataShootStart is already over - its following astronomical dawn is in the
+' past, so there is nothing left to shoot. A start slightly in the past whose
+' dawn is still ahead (the 3am case) is NOT over -> returns False. Returns the
+' computed dawn via outDawn for the caller's message. If dataShootStart is unset
+' or unreadable, returns False (the unset case is handled separately at compute).
+Public Function ShootAlreadyOver(ByRef outDawn As Date) As Boolean
+    Dim ws As Worksheet
+    Set ws = Sheets("Settings")
+    Dim startAnchor As Date
+    On Error Resume Next
+    startAnchor = CDate(ws.Range("dataShootStart").value)
+    On Error GoTo 0
+    If startAnchor = 0 Then
+        ShootAlreadyOver = False
+        Exit Function
+    End If
+    Dim shootDate As Date
+    shootDate = CDate(Int(CDbl(startAnchor)))
+    outDawn = FindSunCrossing(shootDate + 1#, -18#, 1)   ' astro dawn next morning
+    ShootAlreadyOver = (outDawn < Now())
 End Function
 
 ' #57: local copy so GetSunsetTime can self-create dataAstroDawn without a

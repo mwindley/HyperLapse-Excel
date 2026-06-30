@@ -70,7 +70,9 @@ Public Sub PrepSession()
     Dim rpt As String
     rpt = "Prep Session  " & Format(Now, "yyyy-mm-dd HH:nn") & vbCrLf & String(34, "-") & vbCrLf
     LogEvent "PREP", "--- PrepSession start ---"
-
+'
+    Call RenewLanLease
+    
     If Not RunStep("GetSunsetTime", "Get Sunset Time", rpt) Then GoTo done
     If Not RunStep("Astro.UpdateGCTimes", "Update GC Times", rpt) Then GoTo done
     If Not RunStep("InitShoot", "Init Shoot", rpt) Then GoTo done
@@ -97,6 +99,21 @@ Public Sub BuildPlan()
     Dim rpt As String
     rpt = "Build Plan  " & Format(Now, "yyyy-mm-dd HH:nn") & vbCrLf & String(34, "-") & vbCrLf
     LogEvent "PREP", "--- BuildPlan start ---"
+
+    ' Past-shoot warning (moved here from Prep Session / GetSunsetTime, 29Jun): the
+    ' operator is actively building the plan now, so this is where a stale shoot
+    ' date should be flagged. Non-blocking - warn and continue (the operator may be
+    ' intentionally rebuilding an old plan for inspection); the astro compute itself
+    ' aborts silently for a past night, and Prep Cart's own guards remain.
+    Dim pastDawn As Date
+    If Utils.ShootAlreadyOver(pastDawn) Then
+        MsgBox "That shoot is already over (its dawn " & Format(pastDawn, "yyyy-mm-dd HH:nn") & _
+               " has passed). Enter a current/future shoot start in Settings dataShootStart, " & _
+               "then re-run Prep Session before building.", _
+               vbExclamation, "Shoot already past"
+        LogEvent "PREP", "BuildPlan: shoot already over (dawn " & _
+                 Format(pastDawn, "yyyy-mm-dd HH:nn") & ") - warned"
+    End If
 
     ' Native gimbal-plan validation FIRST: it re-lays the GimbalViz sweep table
     ' plus the Fires-at / Actual / Pan Time / Dir formulas. Everything downstream

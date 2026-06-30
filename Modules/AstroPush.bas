@@ -280,6 +280,8 @@ Private Function PlanTrackWindows() As Object
                 Dim fT As Double, nT As Double
                 fT = CDbl(ws.Cells(rws(i), cFires).value)
                 nT = CDbl(ws.Cells(rws(i + 1), cFires).value)
+                Debug.Print "[PTW] cStep=" & cStep & " cFires=" & cFires & " cAction=" & cAction & " cTarget=" & cTarget
+                Debug.Print "[PTW] row=" & rws(i) & " tgt=" & tgt & " fT.raw=" & ws.Cells(rws(i), cFires).Value & " fT.dbl=" & fT & " fT.fmt=" & Format(fT, "dd/mm/yyyy hh:nn:ss") & " nT.dbl=" & nT
                 If nT < fT Then nT = nT + 1#         ' crosses midnight
                 ' store the widest window if an object is tracked by >1 GP
                 Dim ws0 As Double, we0 As Double
@@ -550,6 +552,7 @@ Private Function FitAndPushTrackPath(ByVal objName As String, _
         Dim segStart As Date, segEnd As Date
         segStart = winStart + segIdx * segSpanDays
         segEnd = winStart + (segIdx + 1) * segSpanDays
+        Debug.Print "[FIT] " & objName & " seg=" & segIdx & " winStart.dbl=" & CDbl(winStart) & " winStart.fmt=" & Format(winStart, "dd/mm/yyyy hh:nn:ss") & " t0.dbl=" & CDbl(t0) & " segStart.dbl=" & CDbl(segStart) & " ts=" & ((segStart - t0) * 86400#)
 
         Dim ay(0 To 3) As Double, ap(0 To 3) As Double
 
@@ -921,6 +924,7 @@ Public Sub CheckTrackFitResiduals(ByVal objName As String)
         Dim segStart As Date, segEnd As Date
         segStart = winStart + segIdx * segSpanDays
         segEnd = winStart + (segIdx + 1) * segSpanDays
+        Debug.Print "[FIT] " & objName & " seg=" & segIdx & " winStart.dbl=" & CDbl(winStart) & " winStart.fmt=" & Format(winStart, "dd/mm/yyyy hh:nn:ss") & " t0.dbl=" & CDbl(t0) & " segStart.dbl=" & CDbl(segStart) & " ts=" & ((segStart - t0) * 86400#)
 
         Dim nSamples As Long
         nSamples = 0
@@ -1365,3 +1369,4 @@ httpFail:
            vbExclamation, "Push Cart Batt Low"
 End Function
 
+-------------------------------------------------------------------------------

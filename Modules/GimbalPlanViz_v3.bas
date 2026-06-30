@@ -42,9 +42,9 @@ Public Sub BuildGimbalPlanViz()
     Dim wsP As Worksheet, wsV As Worksheet
     Dim stepCol As Long, n As Long, r As Long, hdrRow As Long, firstData As Long
     Dim cols As Object
-    Dim cV As String, cx As String, cM As String, cS As String
+    Dim cv As String, cx As String, cM As String, cs As String
 
-    On Error GoTo fail
+    On Error GoTo Fail
     Application.ScreenUpdating = False
 
     mStage = "open Plan sheet"
@@ -78,8 +78,8 @@ Public Sub BuildGimbalPlanViz()
     Set cols = PlanCols.ResolveMiddleCols(wsP)
     If cols Is Nothing Then Err.Raise 1002, , "MIDDLE header resolve failed (renamed/missing header)."
     cM = ColLetter(stepCol)
-    cS = ColLetter(cols("action"))
-    cV = ColLetter(cols("ry"))
+    cs = ColLetter(cols("action"))
+    cv = ColLetter(cols("ry"))
     cx = ColLetter(cols("dyaw"))
 
     ' 2) Count gimbal plan rows (Step column non-empty from firstData down).
@@ -144,7 +144,7 @@ Public Sub BuildGimbalPlanViz()
         pr = firstData + i           ' Plan data row
         vr = d0 + i                  ' Viz table row
         wsV.Cells(vr, 1).Formula = "=" & PLAN_SHEET & "!" & cM & pr           ' Step
-        wsV.Cells(vr, 2).Formula = "=" & PLAN_SHEET & "!" & cS & pr           ' Action
+        wsV.Cells(vr, 2).Formula = "=" & PLAN_SHEET & "!" & cs & pr           ' Action
         ' Astro base (truthful by construction): same EvalAstro + expected
         ' heading the push uses, written as VALUES to L/M. Blank for non-astro
         ' rows so the cum formula falls back to Ry/relative. Refreshes on
@@ -164,8 +164,8 @@ Public Sub BuildGimbalPlanViz()
         ' when neither is present -> a relative (Pan Follow) leg. Directed swing
         ' and the Shortest hint both read this.
         wsV.Cells(vr, 14).Formula = _
-            "=IF(OR(ISNUMBER(L" & vr & "),ISNUMBER(" & PLAN_SHEET & "!" & cV & pr & "))," _
-            & "IF(ISNUMBER(L" & vr & "),L" & vr & "," & PLAN_SHEET & "!" & cV & pr & ")+IFERROR(VALUE(" & PLAN_SHEET & "!" & cx & pr & "),0)," _
+            "=IF(OR(ISNUMBER(L" & vr & "),ISNUMBER(" & PLAN_SHEET & "!" & cv & pr & "))," _
+            & "IF(ISNUMBER(L" & vr & "),L" & vr & "," & PLAN_SHEET & "!" & cv & pr & ")+IFERROR(VALUE(" & PLAN_SHEET & "!" & cx & pr & "),0)," _
             & dq & dq & ")"
 
         ' Short (O): which Dir is the shortest path from the previous aim to this
@@ -304,7 +304,7 @@ NextDir:
     Application.ScreenUpdating = True
     wsP.Activate
     Exit Sub
-fail:
+Fail:
     Application.ScreenUpdating = True
     MsgBox "GimbalPlanViz error " & Err.Number & " at stage: [" & mStage & "]" & vbCrLf & _
            Err.Description, vbExclamation
@@ -376,7 +376,7 @@ Private Sub RebuildFiresAt(ByVal wsP As Worksheet, ByVal cols As Object, _
             "=IF(" & cAT & r & "=" & q & q & ",IF(ISNUMBER(" & cFA & (r - 1) & ")," & cFA & (r - 1) & _
             "+IFERROR(" & cFOR & (r - 1) & ",0)/1440," & q & q & "),IF(" & cAT & r & "=" & q & "WP" & q & _
             ",INDEX($J$6:$J$20,MATCH(" & cAR & r & ",$B$6:$B$20,0))+IFERROR(" & cOFF & r & ",0)/1440,IF(" & _
-            cAT & r & "=" & q & "TIME" & q & ",IF(ISNUMBER(" & cAR & r & "),MOD(" & cAR & r & ",1),IFERROR(TIMEVALUE(" & cAR & r & ")," & q & q & "))+IFERROR(" & _
+            cAT & r & "=" & q & "TIME" & q & ",IF(ISNUMBER(" & cAR & r & ")," & cAR & r & ",IFERROR(TIMEVALUE(" & cAR & r & ")," & q & q & "))+IFERROR(" & _
             cOFF & r & ",0)/1440,IF(" & cAT & r & "=" & q & "ASTRO" & q & ",IF(" & cAR & r & "=" & q & "sunset" & q & _
             ",dataSunsetTime,IF(" & cAR & r & "=" & q & "sunrise" & q & ",dataSunriseTime,IF(" & cAR & r & "=" & q & "moonrise" & q & _
             ",dataMoonriseTime,IF(" & cAR & r & "=" & q & "moonset" & q & ",dataMoonsetTime,IF(" & cAR & r & "=" & q & "gcrise" & q & _
@@ -444,3 +444,4 @@ Private Function CartHeadingAtTime(ByVal wsP As Worksheet, ByVal fireT As Double
         End If
     Next r
 End Function
+-------------------------------------------------------------------------------
